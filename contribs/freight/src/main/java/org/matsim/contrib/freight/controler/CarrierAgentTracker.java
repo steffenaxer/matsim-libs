@@ -8,33 +8,24 @@ import java.util.Map;
 
 import org.apache.log4j.Logger;
 import org.matsim.api.core.v01.Id;
-import org.matsim.api.core.v01.events.ActivityEndEvent;
-import org.matsim.api.core.v01.events.ActivityStartEvent;
-import org.matsim.api.core.v01.events.Event;
-import org.matsim.api.core.v01.events.LinkEnterEvent;
-import org.matsim.api.core.v01.events.PersonArrivalEvent;
-import org.matsim.api.core.v01.events.PersonDepartureEvent;
-import org.matsim.api.core.v01.events.VehicleLeavesTrafficEvent;
-import org.matsim.api.core.v01.events.VehicleEntersTrafficEvent;
-import org.matsim.api.core.v01.events.handler.ActivityEndEventHandler;
-import org.matsim.api.core.v01.events.handler.ActivityStartEventHandler;
-import org.matsim.api.core.v01.events.handler.LinkEnterEventHandler;
-import org.matsim.api.core.v01.events.handler.PersonArrivalEventHandler;
-import org.matsim.api.core.v01.events.handler.PersonDepartureEventHandler;
-import org.matsim.api.core.v01.events.handler.VehicleLeavesTrafficEventHandler;
+import org.matsim.api.core.v01.events.*;
+import org.matsim.api.core.v01.events.handler.*;
 import org.matsim.api.core.v01.network.Network;
-import org.matsim.api.core.v01.events.handler.VehicleEntersTrafficEventHandler;
+import org.matsim.api.core.v01.population.Activity;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Plan;
 import org.matsim.contrib.freight.carrier.Carrier;
 import org.matsim.contrib.freight.carrier.CarrierShipment;
 import org.matsim.contrib.freight.carrier.Carriers;
+import org.matsim.contrib.freight.carrier.ScheduledTour;
 import org.matsim.contrib.freight.events.ShipmentDeliveredEvent;
 import org.matsim.contrib.freight.events.ShipmentPickedUpEvent;
 import org.matsim.contrib.freight.controler.CarrierAgent.CarrierDriverAgent;
+import org.matsim.contrib.freight.events.eventsCreator.LSPEventCreator;
 import org.matsim.core.api.experimental.events.EventsManager;
 import org.matsim.core.events.EventsUtils;
 import org.matsim.core.events.algorithms.Vehicle2DriverEventHandler;
+import org.matsim.core.scenario.ScenarioUtils;
 import org.matsim.core.scoring.ScoringFunction;
 
 /**
@@ -43,18 +34,37 @@ import org.matsim.core.scoring.ScoringFunction;
  * @author mzilske, sschroeder
  *
  */
-class CarrierAgentTracker implements ActivityStartEventHandler, ActivityEndEventHandler, PersonDepartureEventHandler, PersonArrivalEventHandler,  LinkEnterEventHandler, VehicleEntersTrafficEventHandler, VehicleLeavesTrafficEventHandler {
+public class CarrierAgentTracker implements ActivityStartEventHandler, ActivityEndEventHandler, PersonDepartureEventHandler, PersonArrivalEventHandler,
+						     LinkEnterEventHandler, VehicleEntersTrafficEventHandler, VehicleLeavesTrafficEventHandler,
+						     LinkLeaveEventHandler, PersonEntersVehicleEventHandler, PersonLeavesVehicleEventHandler
+{
 	private static final Logger log = Logger.getLogger( CarrierAgentTracker.class ) ;
 
 	private final Carriers carriers;
 
 	private final EventsManager eventsManager;
-	
-	private Vehicle2DriverEventHandler delegate = new Vehicle2DriverEventHandler();
+	private final LSPFreightControlerListener listener ;
+
+	private final Vehicle2DriverEventHandler delegate = new Vehicle2DriverEventHandler();
 
 	private final Collection<CarrierAgent> carrierAgents = new ArrayList<CarrierAgent>();
 	
-	private Map<Id<Person>, CarrierAgent> driverAgentMap = new HashMap<Id<Person>, CarrierAgent>();
+	private final Map<Id<Person>, CarrierAgent> driverAgentMap = new HashMap<Id<Person>, CarrierAgent>();
+
+	private final Collection<LSPEventCreator> lspEventCreators;
+
+
+	public CarrierAgentTracker( Carriers carriers, Network network, LSPFreightControlerListener listener, Collection<LSPEventCreator> creators ) {
+		this.carriers = carriers;
+		this.lspEventCreators = creators;
+		createCarrierAgents(null);
+		this.listener = listener;
+
+		eventsManager = EventsUtils.createEventsManager();
+		// yyyy this is not using the central events manager; I have no idea why this might work.  kai, oct'19
+
+	}
+
 
 	public CarrierAgentTracker(Carriers carriers, Network network, CarrierScoringFunctionFactory carrierScoringFunctionFactory) {
 		log.warn( "calling ctor; carrierScoringFunctionFactory=" + carrierScoringFunctionFactory.getClass() );
@@ -63,13 +73,18 @@ class CarrierAgentTracker implements ActivityStartEventHandler, ActivityEndEvent
 
 		eventsManager = EventsUtils.createEventsManager();
 		// yyyy this is not using the central events manager; I have no idea why this might work.  kai, oct'19
+		listener = null;
+		lspEventCreators = null;
 	}
 
 	private void createCarrierAgents(CarrierScoringFunctionFactory carrierScoringFunctionFactory) {
 		for (Carrier carrier : carriers.getCarriers().values()) {
 			log.warn( "" );
 			log.warn( "about to create scoring function for carrierId=" + carrier.getId() );
-			ScoringFunction carrierScoringFunction = carrierScoringFunctionFactory.createScoringFunction(carrier);
+			ScoringFunction carrierScoringFunction = null ;
+			if ( carrierScoringFunctionFactory != null ){
+				carrierScoringFunction = carrierScoringFunctionFactory.createScoringFunction( carrier );
+			}
 			log.warn( "have now created scoring function for carrierId=" + carrier.getId() );
 			log.warn( "" );
 			CarrierAgent carrierAgent = new CarrierAgent(this, carrier, carrierScoringFunction, delegate);
@@ -87,7 +102,7 @@ class CarrierAgentTracker implements ActivityStartEventHandler, ActivityEndEvent
 	 * @return collection of plans
 	 * @see Plan, CarrierPlan
 	 */
-	Collection<Plan> createPlans() {
+	public Collection<Plan> createPlans() {
 		List<Plan> vehicleRoutes = new ArrayList<>();
 		for (CarrierAgent carrierAgent : carrierAgents) {
 			List<Plan> plansForCarrier = carrierAgent.createFreightDriverPlans();
@@ -125,13 +140,22 @@ class CarrierAgentTracker implements ActivityStartEventHandler, ActivityEndEvent
 	private void processEvent(Event event) {
 		eventsManager.processEvent(event);
 	}
+	public void notifyEventHappened( Event event, Carrier carrier, Activity activity, ScheduledTour scheduledTour, Id<Person> driverId, int activityCounter ) {
+		if ( lspEventCreators ==null ) return ;
+		for(LSPEventCreator LSPEventCreator : lspEventCreators ) {
+			Event customEvent = LSPEventCreator.createEvent(event, carrier, activity, scheduledTour, driverId, activityCounter);
+			if(customEvent != null) {
+				processEvent(customEvent);
+			}
+		}
+	}
 
 	/**
 	 * Informs the world that a shipment has been picked up.
-	 * 
+	 *
 	 * <p>Is called by carrierAgent in charge of picking up shipments. It throws an ShipmentPickedupEvent which can be listened to
 	 * with an ShipmentPickedUpListener.
-	 * 
+	 *
 	 * @param carrierId
 	 * @param driverId
 	 * @param shipment
@@ -204,10 +228,38 @@ class CarrierAgentTracker implements ActivityStartEventHandler, ActivityEndEvent
 	@Override
 	public void handleEvent(VehicleLeavesTrafficEvent event) {
 		delegate.handleEvent(event);
+		CarrierAgent carrierResourceAgent = getCarrierAgent(event.getPersonId() );
+		if(carrierResourceAgent == null) return;
+		carrierResourceAgent.handleEvent(event);
 	}
 
 	@Override
 	public void handleEvent(VehicleEntersTrafficEvent event) {
 		delegate.handleEvent(event);
+		CarrierAgent carrierResourceAgent = getCarrierAgent(event.getPersonId() );
+		if(carrierResourceAgent == null) return;
+		carrierResourceAgent.handleEvent(event);
 	}
+
+	@Override
+	public void handleEvent( LinkLeaveEvent event ) {
+		CarrierAgent carrierResourceAgent = getCarrierAgent(delegate.getDriverOfVehicle(event.getVehicleId() ) );
+		if(carrierResourceAgent == null) return;
+		carrierResourceAgent.handleEvent(event);
+	}
+
+	@Override
+	public void handleEvent(PersonEntersVehicleEvent event) {
+		CarrierAgent carrierResourceAgent = getCarrierAgent(event.getPersonId() );
+		if(carrierResourceAgent == null) return;
+		carrierResourceAgent.handleEvent(event);
+	}
+
+	@Override
+	public void handleEvent(PersonLeavesVehicleEvent event) {
+		CarrierAgent carrierResourceAgent = getCarrierAgent(event.getPersonId() );
+		if(carrierResourceAgent == null) return;
+		carrierResourceAgent.handleEvent(event);
+	}
+
 }
