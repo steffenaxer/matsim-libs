@@ -41,6 +41,7 @@ import org.matsim.contrib.drt.analysis.zonal.DrtZone;
 import org.matsim.contrib.drt.optimizer.rebalancing.RebalancingParams;
 import org.matsim.contrib.drt.optimizer.rebalancing.mincostflow.MinCostFlowRebalancingStrategyParams;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
+import org.matsim.contrib.drt.run.DrtConfigGroup.OperationalScheme;
 import org.matsim.contrib.drt.run.DrtControlerCreator;
 import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
@@ -263,6 +264,7 @@ public class ZonalDemandEstimatorWithServiceAreaTest {
 		drtCfg.setDrtSpeedUpMode(drtSpeedUpModeForRebalancingConfiguration);
 		drtCfg.setDrtServiceAreaShapeFile((IOUtils.extendUrl(ExamplesUtils.getTestScenarioURL("dvrp-grid"),
 				"shp/ServiceZoneTest.shp").toString()));
+		drtCfg.setOperationalScheme(OperationalScheme.serviceAreaBased);
 
 		MinCostFlowRebalancingStrategyParams rebalancingStrategyParams = new MinCostFlowRebalancingStrategyParams();
 		rebalancingStrategyParams.setTargetAlpha(1);
