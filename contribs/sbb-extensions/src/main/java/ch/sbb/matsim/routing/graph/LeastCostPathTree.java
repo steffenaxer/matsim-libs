@@ -1,13 +1,13 @@
 package ch.sbb.matsim.routing.graph;
 
-import java.util.Arrays;
-import java.util.NoSuchElementException;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
 import org.matsim.core.utils.misc.OptionalTime;
 import org.matsim.vehicles.Vehicle;
+
+import java.util.Arrays;
 
 /**
  * Implements a least-cost-path-tree upon a {@link Graph} datastructure. Besides using the more efficient Graph datastructure, it also makes use of a custom priority-queue implementation (NodeMinHeap)
@@ -35,7 +35,7 @@ public class LeastCostPathTree {
         this.td = td;
         this.data = new double[graph.nodeCount * 3];
         this.comingFrom = new int[graph.nodeCount];
-        this.pq = new NodeMinHeap();
+        this.pq = new NodeMinHeap(graph.nodeCount, this::getCost, this::setCost);
         this.outLI = graph.getOutLinkIterator();
         this.inLI = graph.getInLinkIterator();
     }
@@ -201,128 +201,6 @@ public class LeastCostPathTree {
         @Override
         public boolean stop(int nodeIndex, double arrivalTime, double travelCost, double distance, double departureTime) {
             return distance >= this.limit;
-        }
-    }
-
-    private class NodeMinHeap {
-
-        private final int[] heap;
-        private int size = 0;
-
-        NodeMinHeap() {
-            this.heap = new int[graph.nodeCount]; // worst case: every node is part of the heap
-        }
-
-        void insert(int node) {
-            int i = this.size;
-            heap[i] = node;
-            this.size++;
-
-            int parent = parent(i);
-
-            while (parent != i && getCost(heap[i]) < getCost(heap[parent])) {
-                swap(i, parent);
-                i = parent;
-                parent = parent(i);
-            }
-        }
-
-        void decreaseKey(int node, double cost) {
-            int i;
-            for (i = 0; i < size; i++) {
-                if (this.heap[i] == node) {
-                    break;
-                }
-            }
-            if (getCost(heap[i]) < cost) {
-                throw new IllegalArgumentException("existing cost is already smaller than new cost.");
-            }
-
-            setCost(node, cost);
-            int parent = parent(i);
-
-            // sift up
-            while (i > 0 && getCost(heap[parent]) > getCost(heap[i])) {
-                swap(i, parent);
-                i = parent;
-                parent = parent(parent);
-            }
-        }
-
-        int poll() {
-            if (this.size == 0) {
-                throw new NoSuchElementException("heap is empty");
-            }
-            if (this.size == 1) {
-                this.size--;
-                return this.heap[0];
-            }
-
-            int root = this.heap[0];
-
-            // remove the last item, set it as new root
-            int lastNode = this.heap[this.size - 1];
-            this.size--;
-            this.heap[0] = lastNode;
-
-            // sift down
-            minHeapify(0);
-
-            return root;
-        }
-
-        int peek() {
-            if (this.size == 0) {
-                throw new NoSuchElementException("heap is empty");
-            }
-            return this.heap[0];
-        }
-
-        int size() {
-            return this.size;
-        }
-
-        boolean isEmpty() {
-            return this.size == 0;
-        }
-
-        void clear() {
-            this.size = 0;
-        }
-
-        private void minHeapify(int i) {
-            int left = left(i);
-            int right = right(i);
-            int smallest = i;
-
-            if (left <= (size - 1) && getCost(heap[left]) < getCost(heap[i])) {
-                smallest = left;
-            }
-            if (right <= (size - 1) && getCost(heap[right]) < getCost(heap[smallest])) {
-                smallest = right;
-            }
-            if (smallest != i) {
-                swap(i, smallest);
-                minHeapify(smallest);
-            }
-        }
-
-        private int right(int i) {
-            return 2 * i + 2;
-        }
-
-        private int left(int i) {
-            return 2 * i + 1;
-        }
-
-        private int parent(int i) {
-            return (i - 1) / 2;
-        }
-
-        private void swap(int i, int parent) {
-            int tmp = this.heap[parent];
-            this.heap[parent] = this.heap[i];
-            this.heap[i] = tmp;
         }
     }
 
