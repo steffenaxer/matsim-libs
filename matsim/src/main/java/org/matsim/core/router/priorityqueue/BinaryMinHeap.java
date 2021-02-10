@@ -393,8 +393,8 @@ public class BinaryMinHeap<E extends HasIndex> implements MinHeap<E> {
 		int leftChildIndex = getLeftChildIndex(nodeIndex);
 		if (leftChildIndex >= heapSize) return;
 		
-		int minIndex = -1;
-		double minCosts = Double.POSITIVE_INFINITY;
+		int minIndex = nodeIndex;
+		double minCosts = costs[minIndex];
 		
 		int limitChildIndex = Math.min(leftChildIndex + fanout, heapSize + 1);
 		
@@ -412,7 +412,7 @@ public class BinaryMinHeap<E extends HasIndex> implements MinHeap<E> {
 			}
 		}
 		
-		if (minIndex >= 0) {
+		if (minIndex != nodeIndex) {
 			swapData(nodeIndex, minIndex);
 			siftDown(minIndex);				
 		}

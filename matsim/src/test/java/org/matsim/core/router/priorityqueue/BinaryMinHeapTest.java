@@ -20,14 +20,15 @@
 
 package org.matsim.core.router.priorityqueue;
 
+import org.apache.log4j.Logger;
+import org.junit.Assert;
+import org.junit.Test;
+
 import java.util.Collection;
 import java.util.ConcurrentModificationException;
 import java.util.Iterator;
 import java.util.LinkedList;
-
-import org.apache.log4j.Logger;
-import org.junit.Assert;
-import org.junit.Test;
+import java.util.Random;
 
 /**
  * @author cdobler
@@ -90,7 +91,43 @@ public class BinaryMinHeapTest {
 		testPoll(createWrappedMinHeap(true));
 		testPoll(createWrappedMinHeap(false));
 	}
-	
+
+	@Test
+	public void stresstest_classicalRemove() {
+		stresstest(true);
+	}
+
+	@Test
+	public void stresstest_nonClassicalRemove() {
+		stresstest(false);
+	}
+
+	private void stresstest(boolean classicalRemove) {
+		int cnt = 2000;
+		DummyHeapEntry[] entries = new DummyHeapEntry[cnt];
+		double[] cost = new double[cnt];
+		Random r = new Random(20190210L);
+		for (int i = 0; i < cnt; i++) {
+			cost[i] = (int) (r.nextDouble() * cnt * 100);
+			entries[i] = new DummyHeapEntry(i);
+		}
+
+		BinaryMinHeap<DummyHeapEntry> pq = new BinaryMinHeap<>(cnt, 6, classicalRemove);
+
+		for (int i = 0; i < cnt; i++) {
+			pq.add(entries[i], cost[i]);
+		}
+		double lastCost = -1;
+		int step = 0;
+		while (!pq.isEmpty()) {
+			step++;
+			DummyHeapEntry e = pq.poll();
+			double nodeCost = cost[e.index];
+			Assert.assertTrue(step + ": " + lastCost + " <= " + nodeCost, lastCost <= nodeCost);
+			lastCost = nodeCost;
+		}
+	}
+
 	private void testPoll(MinHeap<HasIndex> pq) {
 		DummyHeapEntry entry0 = new DummyHeapEntry(5);
 		DummyHeapEntry entry1 = new DummyHeapEntry(3);
