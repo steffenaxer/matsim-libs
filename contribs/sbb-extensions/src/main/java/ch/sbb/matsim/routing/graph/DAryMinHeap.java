@@ -56,8 +56,9 @@ class DAryMinHeap {
 
 	void decreaseKey(int node, double cost) {
 		int i = this.pos[node];
-		if (this.heap[i] != node) {
-			System.err.println("oops");
+		if (i < 0 || this.heap[i] != node) {
+			System.err.println("oops "  + node + "   " + i + "   " + (i < 0 ? "" : this.heap[i]));
+			throw new NoSuchElementException();
 		}
 		if (this.costGetter.getCost(this.heap[i]) < cost) {
 			throw new IllegalArgumentException("existing cost is already smaller than new cost.");
@@ -87,6 +88,7 @@ class DAryMinHeap {
 		}
 
 		int root = this.heap[0];
+		this.pos[root] = -1;
 
 		// remove the last item, set it as new root
 		this.size--;
@@ -104,6 +106,17 @@ class DAryMinHeap {
 			throw new NoSuchElementException("heap is empty");
 		}
 		return this.heap[0];
+	}
+
+	public boolean remove(int node) {
+		int i = this.pos[node];
+		if (i < 0) {
+			return false;
+		}
+
+		this.decreaseKey(node, Double.NEGATIVE_INFINITY); // move it to the top
+		this.poll(); // remove it
+		return true;
 	}
 
 	int size() {
@@ -163,7 +176,31 @@ class DAryMinHeap {
 		this.pos[this.heap[i]] = parent;
 		this.heap[i] = tmp;
 		this.pos[tmp] = i;
+	}
 
+	public IntIterator iterator() {
+		return new HeapIntIterator();
+	}
+
+	public interface IntIterator {
+		boolean hasNext();
+		int next();
+	}
+
+	private class HeapIntIterator implements IntIterator {
+		private int pos = 0;
+
+		@Override
+		public boolean hasNext() {
+			return this.pos > DAryMinHeap.this.size;
+		}
+
+		@Override
+		public int next() {
+			int node = DAryMinHeap.this.heap[this.pos];
+			this.pos++;
+			return node;
+		}
 	}
 
 	void printDebug() {
