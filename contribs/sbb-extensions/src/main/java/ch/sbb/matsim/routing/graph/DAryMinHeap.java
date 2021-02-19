@@ -11,6 +11,19 @@ import java.util.NoSuchElementException;
  * but slower poll operations. But in Dijkstra's algorithm, decrease-key is more common
  * than poll, so it should still be beneficial.
  *
+ * In most literature, the poll-operation is implemented by removing the top element and
+ * replacing it with the last entry in the heap, and then let this new root sift down again
+ * until the heap-conditions are all met. This requires multiple comparisons on each level (the
+ * value must be compared with each of its children).
+ *
+ * An alternative implementation tries to fix this in the following way: the "whole" at the root
+ * after removing the top is first sifted down by replacing it with the smaller of its children.
+ * This requires one less comparison, as only the children need to be compared against each other.
+ * Once there are no more children (the whole is at the bottom level), replace the whole with the
+ * last entry of the heap. Now, sift this entry up until the heap-conditions are all met.
+ *
+ * This implementation uses the alternative implementation for additional speedup.
+ *
  * @author mrieser / Simunto
  */
 class DAryMinHeap {
@@ -18,67 +31,66 @@ class DAryMinHeap {
 	private final int[] pos;
 	private int size = 0;
 	private final int d;
-	private final CostGetter costGetter;
-	private final CostSetter costSetter;
+	private final double[] cost;
 
-	public interface CostGetter {
-		double getCost(int index);
-	}
+	public long insertCount = 0;
+	public long decreaseCount = 0;
+	public long pollCount = 0;
 
-	public interface CostSetter {
-		void setCost(int index, double cost);
-	}
-
-	DAryMinHeap(int nodeCount, int d, CostGetter costGetter, CostSetter costSetter) {
+	DAryMinHeap(int nodeCount, int d) {
 		this.heap = new int[nodeCount]; // worst case: every node is part of the heap
 		this.pos = new int[nodeCount]; // worst case: every node is part of the heap
+		this.cost = new double[nodeCount];
 		this.d = d;
-		this.costGetter = costGetter;
-		this.costSetter = costSetter;
 	}
 
-	void insert(int node) {
+	void insert(int node, double cost) {
+		this.insertCount++;
 		int i = this.size;
 		this.size++;
 
-		double nodeCost = this.costGetter.getCost(node);
+		double nodeCost = cost;
 		// sift up
 		int parent = parent(i);
-		while (i > 0 && nodeCost < this.costGetter.getCost(this.heap[parent])) {
+		while (i > 0 && nodeCost < this.cost[parent]) {
 			this.heap[i] = this.heap[parent];
 			this.pos[this.heap[parent]] = i;
+			this.cost[i] = this.cost[parent];
 			i = parent;
 			parent = parent(parent);
 		}
 		this.heap[i] = node;
+		this.cost[i] = cost;
 		this.pos[node] = i;
 	}
 
 	void decreaseKey(int node, double cost) {
+		this.decreaseCount++;
 		int i = this.pos[node];
 		if (i < 0 || this.heap[i] != node) {
 			System.err.println("oops "  + node + "   " + i + "   " + (i < 0 ? "" : this.heap[i]));
 			throw new NoSuchElementException();
 		}
-		if (this.costGetter.getCost(this.heap[i]) < cost) {
+		if (this.cost[i] < cost) {
 			throw new IllegalArgumentException("existing cost is already smaller than new cost.");
 		}
 
-		this.costSetter.setCost(node, cost);
-
 		// sift up
 		int parent = parent(i);
-		while (i > 0 && cost < this.costGetter.getCost(this.heap[parent])) {
+		while (i > 0 && cost < this.cost[parent]) {
 			this.heap[i] = this.heap[parent];
+			this.cost[i] = this.cost[parent];
 			this.pos[this.heap[parent]] = i;
 			i = parent;
 			parent = parent(parent);
 		}
 		this.heap[i] = node;
+		this.cost[i] = cost;
 		this.pos[node] = i;
 	}
 
 	int poll() {
+		this.pollCount++;
 		if (this.size == 0) {
 			throw new NoSuchElementException("heap is empty");
 		}
@@ -90,14 +102,7 @@ class DAryMinHeap {
 		int root = this.heap[0];
 		this.pos[root] = -1;
 
-		// remove the last item, set it as new root
-		this.size--;
-		this.heap[0] = this.heap[this.size];
-		this.pos[this.heap[0]] = 0;
-
-		// sift down
-		minHeapify(0);
-
+		fixWhole(0);
 		return root;
 	}
 
@@ -114,8 +119,7 @@ class DAryMinHeap {
 			return false;
 		}
 
-		this.decreaseKey(node, Double.NEGATIVE_INFINITY); // move it to the top
-		this.poll(); // remove it
+		this.fixWhole(i);
 		return true;
 	}
 
@@ -131,30 +135,56 @@ class DAryMinHeap {
 		this.size = 0;
 	}
 
-	private void minHeapify(int i) {
-		int left = left(i);
-		int right = right(i);
+	private void fixWhole(int index) {
+		// move the whole down
+		while (true) {
+			int left = left(index);
+			if (left >= this.size) {
+				break;
+			}
+			int right = right(index);
+			if (right >= this.size) {
+				right = this.size - 1;
+			}
 
-		if (right > this.size) {
-			right = this.size;
-		}
-
-		int smallest = i;
-		double smallestCost = this.costGetter.getCost(this.heap[i]);
-		for (int child = left; child <= right; child++) {
-			double childCost = this.costGetter.getCost(this.heap[child]);
-			if (childCost <= smallestCost) {
-				// on equal cost, use node-index for deterministic order
-				if (childCost < smallestCost || this.heap[child] < this.heap[smallest]) {
-					smallest = child;
-					smallestCost = childCost;
+			int smallest = left;
+			double smallestCost = this.cost[left];
+			for (int child = left + 1; child <= right; child++) {
+				double childCost = this.cost[child];
+				if (childCost <= smallestCost) {
+					if (childCost < smallestCost || this.heap[child] < this.heap[smallest]) {
+						smallest = child;
+						smallestCost = childCost;
+					}
 				}
 			}
+
+			this.heap[index] = this.heap[smallest];
+			this.cost[index] = smallestCost;
+			this.pos[this.heap[index]] = index;
+
+			index = smallest;
 		}
 
-		if (smallest != i) {
-			swap(i, smallest);
-			minHeapify(smallest);
+		// move last entry to whole, unless the whole is already at the end
+		this.size--;
+		if (index < this.size) {
+			this.heap[index] = this.heap[this.size];
+			this.cost[index] = this.cost[this.size];
+			this.pos[this.heap[index]] = index;
+		}
+
+		// move entry up as far as needed
+		double nodeCost = this.cost[index];
+		while (index > 0) {
+			int parent = parent(index);
+			double parentCost = this.cost[parent];
+			if (nodeCost < parentCost) {
+				swap(index, parent);
+				index = parent;
+			} else {
+				break;
+			}
 		}
 	}
 
@@ -176,6 +206,10 @@ class DAryMinHeap {
 		this.pos[this.heap[i]] = parent;
 		this.heap[i] = tmp;
 		this.pos[tmp] = i;
+
+		double tmpC = this.cost[parent];
+		this.cost[parent] = this.cost[i];
+		this.cost[i] = tmpC;
 	}
 
 	public IntIterator iterator() {
@@ -204,6 +238,6 @@ class DAryMinHeap {
 	}
 
 	void printDebug() {
-		System.out.println(Arrays.toString(this.pos) + " - " + Arrays.toString(Arrays.copyOf(this.heap, this.size)));
+		System.out.println(Arrays.toString(this.pos) + " - " + Arrays.toString(Arrays.copyOf(this.heap, this.size)) + " - " + Arrays.toString(Arrays.copyOf(this.cost, this.size)));
 	}
 }

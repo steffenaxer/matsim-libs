@@ -126,6 +126,30 @@ public class BinaryMinHeapTest {
 			Assert.assertTrue(step + ": " + lastCost + " <= " + nodeCost, lastCost <= nodeCost);
 			lastCost = nodeCost;
 		}
+
+		// start again, but add some decreaseKey operations
+		for (int i = 0; i < cnt; i++) {
+			pq.add(entries[i], cost[i]);
+		}
+
+		for (int i = 0; i < cnt; i++) {
+			double newCost = (int) (r.nextDouble() * cnt * 100);
+			if (newCost < cost[i]) {
+				pq.decreaseKey(entries[i], newCost);
+				cost[i] = newCost;
+			}
+		}
+
+		lastCost = -1;
+		step = 0;
+		while (!pq.isEmpty()) {
+			step++;
+			DummyHeapEntry e = pq.poll();
+			double nodeCost = cost[e.index];
+			Assert.assertTrue(step + ": " + lastCost + " <= " + nodeCost, lastCost <= nodeCost);
+			lastCost = nodeCost;
+		}
+
 	}
 
 	private void testPoll(MinHeap<HasIndex> pq) {

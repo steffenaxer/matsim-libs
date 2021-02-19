@@ -24,7 +24,7 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 	private final GraphAStarLandmarksData astarData;
 	private final TravelTime tt;
 	private final TravelDisutility td;
-	private final double[] data; // 4 entries per node: cost to node, time, distance, estimated min cost to target
+	private final double[] data; // 3 entries per node: cost to node, time, distance
 	private final int[] comingFrom;
 	private final int[] usedLink;
 	private final Graph.LinkIterator outLI;
@@ -36,28 +36,24 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 		this.astarData = astarData;
 		this.tt = tt;
 		this.td = td;
-		this.data = new double[this.graph.nodeCount * 4];
+		this.data = new double[this.graph.nodeCount * 3];
 		this.comingFrom = new int[this.graph.nodeCount];
 		this.usedLink = new int[this.graph.nodeCount];
-		this.pq = new DAryMinHeap(this.graph.nodeCount, 6, this::getHeapCost, this::setHeapCost);
+		this.pq = new DAryMinHeap(this.graph.nodeCount, 6);
 		this.outLI = this.graph.getOutLinkIterator();
 //		this.activeLandmarks = new boolean[this.astarData.getLandmarksCount()];
 	}
 
 	public double getCost(int nodeIndex) {
-		return this.data[nodeIndex * 4];
-	}
-
-	public double getHeapCost(int nodeIndex) {
-		return this.data[nodeIndex * 4 + 3];
+		return this.data[nodeIndex * 3];
 	}
 
 	private double getTimeRaw(int nodeIndex) {
-		return this.data[nodeIndex * 4 + 1];
+		return this.data[nodeIndex * 3 + 1];
 	}
 
 	public OptionalTime getTime(int nodeIndex) {
-		double time = this.data[nodeIndex * 4 + 1];
+		double time = this.data[nodeIndex * 3 + 1];
 		if (Double.isInfinite(time)) {
 			return OptionalTime.undefined();
 		}
@@ -65,23 +61,18 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 	}
 
 	public double getDistance(int nodeIndex) {
-		return this.data[nodeIndex * 4 + 2];
+		return this.data[nodeIndex * 3 + 2];
 	}
 
 	private void setCost(int nodeIndex, double cost) {
-		this.data[nodeIndex * 4] = cost;
+		this.data[nodeIndex * 3] = cost;
 	}
 
-	private void setHeapCost(int nodeIndex, double cost) {
-		this.data[nodeIndex * 4 + 3] = cost;
-	}
-
-	private void setData(int nodeIndex, double cost, double time, double distance, double heapCost) {
-		int index = nodeIndex * 4;
+	private void setData(int nodeIndex, double cost, double time, double distance) {
+		int index = nodeIndex * 3;
 		this.data[index] = cost;
 		this.data[index + 1] = time;
 		this.data[index + 2] = distance;
-		this.data[index + 3] = heapCost;
 	}
 
 	@Override
@@ -100,11 +91,11 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 //		Arrays.fill(this.activeLandmarks, true);
 
 //		double estimate = initActiveLandmarks(startNodeIndex, endNodeIndex);
-		double estimate = estimateMinTravelcostToDestination(startNodeIndex, endNodeIndex, false);
+		double estimation = estimateMinTravelcostToDestination(startNodeIndex, endNodeIndex, endNode,false);
 
-		setData(startNodeIndex, 0, startTime, 0, estimate);
+		setData(startNodeIndex, 0, startTime, 0);
 		this.pq.clear();
-		this.pq.insert(startNodeIndex);
+		this.pq.insert(startNodeIndex, estimation);
 //		System.err.println("INSERT " + startNodeIndex + " (" + this.graph.getNode(startNodeIndex).getId() + ") cost = " + getCost(startNodeIndex) + "  pqCost = " + getHeapCost(startNodeIndex));
 		boolean foundEndNode = false;
 
@@ -150,19 +141,19 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 				double oldCost = getCost(toNode);
 				if (Double.isFinite(oldCost)) {
 					if (newCost < oldCost) {
-						double estimation = estimateMinTravelcostToDestination(toNode, endNodeIndex, resetLandmarks);
+						estimation = estimateMinTravelcostToDestination(toNode, endNodeIndex, endNode, resetLandmarks);
 //						double estimation = getHeapCost(toNode) - oldCost;
 //						System.err.println("DECREASE " + toNode + " (" + this.graph.getNode(toNode).getId() + ") cost = " + getCost(toNode) + "  pqCost = " + getHeapCost(toNode) + " TO cost " + newCost + "  pqCost = " + (newCost + estimation));
 						this.pq.decreaseKey(toNode, newCost + estimation);
-						setData(toNode, newCost, newTime, currDistance + link.getLength(), newCost + estimation);
+						setData(toNode, newCost, newTime, currDistance + link.getLength());
 						this.comingFrom[toNode] = nodeIdx;
 						this.usedLink[toNode] = linkIdx;
 					}
 				} else {
-					double estimation = estimateMinTravelcostToDestination(toNode, endNodeIndex, resetLandmarks);
-					setData(toNode, newCost, newTime, currDistance + link.getLength(), newCost + estimation);
+					estimation = estimateMinTravelcostToDestination(toNode, endNodeIndex, endNode, resetLandmarks);
+					setData(toNode, newCost, newTime, currDistance + link.getLength());
 //					System.err.println("INSERT " + toNode + " (" + this.graph.getNode(toNode).getId() + ") cost = " + getCost(toNode) + "  pqCost = " + getHeapCost(toNode));
-					this.pq.insert(toNode);
+					this.pq.insert(toNode, newCost + estimation);
 					this.comingFrom[toNode] = nodeIdx;
 					this.usedLink[toNode] = linkIdx;
 				}
@@ -209,7 +200,7 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 		return best;
 	}
 
-	private double estimateMinTravelcostToDestination(int nodeIdx, int destinationIdx, boolean improveLandmarks) {
+	private double estimateMinTravelcostToDestination(int nodeIdx, int destinationIdx, Node destinationNode, boolean improveLandmarks) {
 		/* The ALT algorithm uses two lower bounds for each Landmark:
 		 * given: source node S, target node T, landmark L
 		 * then, due to the triangle inequality:
@@ -219,7 +210,17 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 		 * as this gives the closest approximation for the minimal travel time required to
 		 * go from S to T.
 		 */
-		double best = Integer.MIN_VALUE;
+
+		// minCost = distance * factor
+		// minCost = sqrt(distance * distance) * factor
+
+
+
+//		Node node = this.graph.getNode(nodeIdx);
+//		double distance = CoordUtils.calcEuclideanDistance(node.getCoord(), destinationNode.getCoord());
+//		double distance = Math.abs(node.getCoord().getX() - destinationNode.getCoord().getX()) + Math.abs(node.getCoord().getY() - destinationNode.getCoord().getY());
+//		double best = distance * this.astarData.getMinTravelCostPerLength();
+		double best = 0;
 		for (int i = 0; i < this.astarData.getLandmarksCount(); i++) {
 //			if (this.activeLandmarks[i]) {
 				double estimate = estimateMinTravelcostToDestination(nodeIdx, destinationIdx, i);

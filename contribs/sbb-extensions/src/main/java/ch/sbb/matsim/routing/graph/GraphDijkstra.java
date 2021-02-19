@@ -36,7 +36,7 @@ public class GraphDijkstra implements LeastCostPathCalculator {
 		this.data = new double[graph.nodeCount * 3];
 		this.comingFrom = new int[graph.nodeCount];
 		this.usedLink = new int[graph.nodeCount];
-		this.pq = new DAryMinHeap(graph.nodeCount, 6, this::getCost, this::setCost);
+		this.pq = new DAryMinHeap(graph.nodeCount, 6);
 		this.outLI = graph.getOutLinkIterator();
 		this.inLI = graph.getInLinkIterator();
 	}
@@ -82,11 +82,11 @@ public class GraphDijkstra implements LeastCostPathCalculator {
 
 		setData(startNodeIndex, 0, startTime, 0);
 		this.pq.clear();
-		this.pq.insert(startNodeIndex);
+		this.pq.insert(startNodeIndex, 0);
 		boolean foundEndNode = false;
 
-		while (!pq.isEmpty()) {
-			final int nodeIdx = pq.poll();
+		while (!this.pq.isEmpty()) {
+			final int nodeIdx = this.pq.poll();
 			if (nodeIdx == endNodeIndex) {
 				foundEndNode = true;
 				break;
@@ -99,11 +99,11 @@ public class GraphDijkstra implements LeastCostPathCalculator {
 			double currCost = getCost(nodeIdx);
 			double currDistance = getDistance(nodeIdx);
 
-			outLI.reset(nodeIdx);
-			while (outLI.next()) {
-				int linkIdx = outLI.getLinkIndex();
+			this.outLI.reset(nodeIdx);
+			while (this.outLI.next()) {
+				int linkIdx = this.outLI.getLinkIndex();
 				Link link = this.graph.getLink(linkIdx);
-				int toNode = outLI.getToNodeIndex();
+				int toNode = this.outLI.getToNodeIndex();
 
 				double travelTime = this.tt.getLinkTravelTime(link, currTime, person, vehicle);
 				double newTime = currTime + travelTime;
@@ -112,14 +112,14 @@ public class GraphDijkstra implements LeastCostPathCalculator {
 				double oldCost = getCost(toNode);
 				if (Double.isFinite(oldCost)) {
 					if (newCost < oldCost) {
-						pq.decreaseKey(toNode, newCost);
+						this.pq.decreaseKey(toNode, newCost);
 						setData(toNode, newCost, newTime, currDistance + link.getLength());
 						this.comingFrom[toNode] = nodeIdx;
 						this.usedLink[toNode] = linkIdx;
 					}
 				} else {
 					setData(toNode, newCost, newTime, currDistance + link.getLength());
-					pq.insert(toNode);
+					this.pq.insert(toNode, newCost);
 					this.comingFrom[toNode] = nodeIdx;
 					this.usedLink[toNode] = linkIdx;
 				}
