@@ -33,10 +33,6 @@ class DAryMinHeap {
 	private final int d;
 	private final double[] cost;
 
-	public long insertCount = 0;
-	public long decreaseCount = 0;
-	public long pollCount = 0;
-
 	DAryMinHeap(int nodeCount, int d) {
 		this.heap = new int[nodeCount]; // worst case: every node is part of the heap
 		this.pos = new int[nodeCount]; // worst case: every node is part of the heap
@@ -45,7 +41,6 @@ class DAryMinHeap {
 	}
 
 	void insert(int node, double cost) {
-		this.insertCount++;
 		int i = this.size;
 		this.size++;
 
@@ -65,7 +60,6 @@ class DAryMinHeap {
 	}
 
 	void decreaseKey(int node, double cost) {
-		this.decreaseCount++;
 		int i = this.pos[node];
 		if (i < 0 || this.heap[i] != node) {
 			System.err.println("oops "  + node + "   " + i + "   " + (i < 0 ? "" : this.heap[i]));
@@ -90,7 +84,6 @@ class DAryMinHeap {
 	}
 
 	int poll() {
-		this.pollCount++;
 		if (this.size == 0) {
 			throw new NoSuchElementException("heap is empty");
 		}

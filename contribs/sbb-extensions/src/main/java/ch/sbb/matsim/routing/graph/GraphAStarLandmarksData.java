@@ -81,18 +81,6 @@ class GraphAStarLandmarksData {
 				this.deadendData[nodeIdx] = mergers.getOrDefault(deadend, deadend);
 			}
 		}
-//		try (BufferedWriter out = IOUtils.getBufferedWriter("/Users/mrieser/tmp/deadends.csv")) {
-//			out.write("NODE,X,Y,IDX\n");
-//			for (int nodeIdx = 0; nodeIdx < this.graph.nodeCount; nodeIdx++) {
-//				if (deadendData[nodeIdx] >= 0) {
-//					Node n = this.graph.getNode(nodeIdx);
-//					out.write(n.getId() + "," + n.getCoord().getX() + "," + n.getCoord().getY() + "," + deadendData[nodeIdx] + "\n");
-//				}
-//			}
-//		}
-//		catch (IOException e) {
-//			e.printStackTrace();
-//		}
 	}
 
 	private int checkNodeForDeadend(int[] deadends, Map<Integer, Integer> mergedDeadends, int nodeIdx, int currentDeadend, LinkIterator outLI, LinkIterator inLI) {
@@ -253,7 +241,6 @@ class GraphAStarLandmarksData {
 			while (outLI.next()) {
 				int toNode = outLI.getToNodeIndex();
 
-//				double newCost = currCost + outLI.getLength() / outLI.getFreespeedTravelTime();
 				double newCost = currCost + this.travelCosts.getLinkMinimumTravelDisutility(this.graph.getLink(outLI.getLinkIndex()));
 
 				double oldCost = data[toNode];
@@ -288,7 +275,6 @@ class GraphAStarLandmarksData {
 			while (inLI.next()) {
 				int fromNode = inLI.getFromNodeIndex();
 
-//				double newCost = currCost + inLI.getLength() / inLI.getFreespeedTravelTime();
 				double newCost = currCost + this.travelCosts.getLinkMinimumTravelDisutility(this.graph.getLink(inLI.getLinkIndex()));
 
 				double oldCost = data[fromNode];

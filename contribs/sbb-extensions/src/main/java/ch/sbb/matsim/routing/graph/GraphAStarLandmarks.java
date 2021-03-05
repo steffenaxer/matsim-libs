@@ -1,5 +1,8 @@
 package ch.sbb.matsim.routing.graph;
 
+import org.apache.log4j.LogManager;
+import org.apache.log4j.Logger;
+import org.matsim.api.core.v01.Coord;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Node;
 import org.matsim.api.core.v01.population.Person;
@@ -18,6 +21,8 @@ import java.util.List;
  */
 public class GraphAStarLandmarks implements LeastCostPathCalculator {
 
+	private final static Logger LOG = LogManager.getLogger(GraphAStarLandmarks.class);
+	
 	private final Graph graph;
 	private final GraphAStarLandmarksData astarData;
 	private final TravelTime tt;
@@ -51,14 +56,6 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 	private double getTimeRaw(int nodeIndex) {
 		return this.data[nodeIndex * 3 + 1];
 	}
-
-//	public OptionalTime getTime(int nodeIndex) {
-//		double time = this.data[nodeIndex * 3 + 1];
-//		if (Double.isInfinite(time)) {
-//			return OptionalTime.undefined();
-//		}
-//		return OptionalTime.defined(time);
-//	}
 
 	private double getDistance(int nodeIndex) {
 		return this.data[nodeIndex * 3 + 2];
@@ -108,9 +105,6 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 			}
 
 			double currTime = getTimeRaw(nodeIdx);
-			if (Double.isInfinite(currTime)) {
-				throw new RuntimeException("Undefined Time");
-			}
 			double currCost = getCost(nodeIdx);
 			double currDistance = getDistance(nodeIdx);
 
@@ -126,6 +120,7 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 				double newCost = currCost + travelCost;
 
 				if (this.iterationIds[toNode] == this.currentIteration) {
+					// this node was already visited in this route-query
 					double oldCost = getCost(toNode);
 					if (newCost < oldCost) {
 						estimation = estimateMinTravelcostToDestination(toNode, endNodeIndex, endNode);
@@ -147,6 +142,11 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 		if (foundEndNode) {
 			return constructPath(endNodeIndex, startTime);
 		}
+		LOG.warn("No route was found from node " + startNode.getId() + " to node " + endNode.getId() + ". Some possible reasons:");
+		LOG.warn("  * Network is not connected.  Run NetworkCleaner().") ;
+		LOG.warn("  * Network for considered mode does not even exist.  Modes need to be entered for each link in network.xml.");
+		LOG.warn("  * Network for considered mode is not connected to starting or ending point of route.  Setting insertingAccessEgressWalk to true may help.");
+		LOG.warn("This will now return null, but it may fail later with a NullPointerException.");
 		return null;
 	}
 
@@ -160,11 +160,12 @@ public class GraphAStarLandmarks implements LeastCostPathCalculator {
 		 * as this gives the closest approximation for the minimal travel time required to
 		 * go from S to T.
 		 */
-
 		Node node = this.graph.getNode(nodeIdx);
-		double distance = Math.abs(node.getCoord().getX() - destinationNode.getCoord().getX()) + Math.abs(node.getCoord().getY() - destinationNode.getCoord().getY());
+		Coord nodeCoord = node.getCoord();
+		Coord destCoord = destinationNode.getCoord();;
+		double distance = Math.abs(nodeCoord.getX() - destCoord.getX()) + Math.abs(nodeCoord.getY() - destCoord.getY());
 		double best = distance * this.astarData.getMinTravelCostPerLength();
-		for (int i = 0; i < this.astarData.getLandmarksCount(); i++) {
+		for (int i = 0, n = this.astarData.getLandmarksCount(); i < n; i++) {
 			double estimate = estimateMinTravelcostToDestination(nodeIdx, destinationIdx, i);
 			if (estimate > best) {
 				best = estimate;
