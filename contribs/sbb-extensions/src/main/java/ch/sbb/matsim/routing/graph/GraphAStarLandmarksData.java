@@ -3,6 +3,7 @@ package ch.sbb.matsim.routing.graph;
 import ch.sbb.matsim.routing.graph.Graph.LinkIterator;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Node;
 import org.matsim.core.router.util.TravelDisutility;
 
@@ -27,6 +28,7 @@ class GraphAStarLandmarksData {
 	private final int[] landmarksNodeIndices;
 	private final double[] nodesData; // for each node: 2 values per landmark
 	private final int[] deadendData;
+	private double minTravelCostPerLength = Double.NaN;
 
 	public GraphAStarLandmarksData(Graph graph, int landmarksCount, TravelDisutility travelCosts) {
 		this.graph = graph;
@@ -38,6 +40,7 @@ class GraphAStarLandmarksData {
 
 		this.findDeadEnds();
 		this.calcLandmarks();
+		this.calcMinTravelCostPerLength();
 	}
 
 	private void findDeadEnds() {
@@ -168,6 +171,21 @@ class GraphAStarLandmarksData {
 			}
 		}
 		executor.shutdown();
+	}
+
+	private void calcMinTravelCostPerLength() {
+		LOG.info("calculate min travelcost...");
+		double minCost = Double.POSITIVE_INFINITY;
+		for (int linkIdx = 0; linkIdx < graph.linkCount; linkIdx++) {
+			Link link = this.graph.getLink(linkIdx);
+			if (link != null) {
+				double cost = this.travelCosts.getLinkMinimumTravelDisutility(link) / link.getLength();
+				if (cost < minCost) {
+					minCost = cost;
+				}
+			}
+		}
+		this.minTravelCostPerLength = minCost;
 	}
 
 	private void setNodeData(double[] data, int offset) {
@@ -301,5 +319,9 @@ class GraphAStarLandmarksData {
 
 	double getTravelCostToLandmark(int nodeIndex, int landmarkIndex) {
 		return this.nodesData[nodeIndex * (this.landmarksCount * 2) + 2 * landmarkIndex + 1];
+	}
+
+	public double getMinTravelCostPerLength() {
+		return this.minTravelCostPerLength;
 	}
 }
