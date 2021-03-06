@@ -6,7 +6,6 @@ import org.matsim.api.core.v01.population.Person;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
-import org.matsim.core.utils.misc.OptionalTime;
 import org.matsim.vehicles.Vehicle;
 
 import java.util.ArrayList;
@@ -23,10 +22,11 @@ public class GraphDijkstra implements LeastCostPathCalculator {
 	private final TravelTime tt;
 	private final TravelDisutility td;
 	private final double[] data; // 3 entries per node: time, cost, distance
+	private int currentIteration = Integer.MIN_VALUE;
+	private final int[] iterationIds;
 	private final int[] comingFrom;
 	private final int[] usedLink;
 	private final Graph.LinkIterator outLI;
-	private final Graph.LinkIterator inLI;
 	private final DAryMinHeap pq;
 
 	public GraphDijkstra(Graph graph, TravelTime tt, TravelDisutility td) {
@@ -34,27 +34,19 @@ public class GraphDijkstra implements LeastCostPathCalculator {
 		this.tt = tt;
 		this.td = td;
 		this.data = new double[graph.nodeCount * 3];
+		this.iterationIds = new int[graph.nodeCount];
 		this.comingFrom = new int[graph.nodeCount];
 		this.usedLink = new int[graph.nodeCount];
 		this.pq = new DAryMinHeap(graph.nodeCount, 6);
 		this.outLI = graph.getOutLinkIterator();
-		this.inLI = graph.getInLinkIterator();
 	}
 
-	public double getCost(int nodeIndex) {
+	private double getCost(int nodeIndex) {
 		return this.data[nodeIndex * 3];
 	}
 
 	private double getTimeRaw(int nodeIndex) {
 		return this.data[nodeIndex * 3 + 1];
-	}
-
-	public OptionalTime getTime(int nodeIndex) {
-		double time = this.data[nodeIndex * 3 + 1];
-		if (Double.isInfinite(time)) {
-			return OptionalTime.undefined();
-		}
-		return OptionalTime.defined(time);
 	}
 
 	public double getDistance(int nodeIndex) {
@@ -70,16 +62,22 @@ public class GraphDijkstra implements LeastCostPathCalculator {
 		this.data[index] = cost;
 		this.data[index + 1] = time;
 		this.data[index + 2] = distance;
+		this.iterationIds[nodeIndex] = this.currentIteration;
 	}
 
 	@Override
 	public Path calcLeastCostPath(Node startNode, Node endNode, double startTime, Person person, Vehicle vehicle) {
+		this.currentIteration++;
+		if (this.currentIteration == Integer.MAX_VALUE) {
+			// reset iteration as we overflow
+			Arrays.fill(this.iterationIds, this.currentIteration);
+			this.currentIteration = Integer.MIN_VALUE;
+		}
+
 		int startNodeIndex = startNode.getId().index();
 		int endNodeIndex = endNode.getId().index();
 
-		Arrays.fill(this.data, Double.POSITIVE_INFINITY);
-		Arrays.fill(this.comingFrom, -1);
-
+		this.comingFrom[startNodeIndex] = -1;
 		setData(startNodeIndex, 0, startTime, 0);
 		this.pq.clear();
 		this.pq.insert(startNodeIndex, 0);
@@ -109,8 +107,9 @@ public class GraphDijkstra implements LeastCostPathCalculator {
 				double newTime = currTime + travelTime;
 				double newCost = currCost + this.td.getLinkTravelDisutility(link, currTime, person, vehicle);
 
-				double oldCost = getCost(toNode);
-				if (Double.isFinite(oldCost)) {
+				if (this.iterationIds[toNode] == this.currentIteration) {
+					// this node was already visited in this route-query
+					double oldCost = getCost(toNode);
 					if (newCost < oldCost) {
 						this.pq.decreaseKey(toNode, newCost);
 						setData(toNode, newCost, newTime, currDistance + link.getLength());
