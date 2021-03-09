@@ -295,6 +295,8 @@ public final class TripRouter implements MatsimExtensionPoint {
 
 		// replace the trip and return the former one
 		List<PlanElement> seq = plan.subList( indexOfOrigin + 1 , indexOfDestination );
+		// (the above returns a _view_, which means that changes in seq become visible in the original plan.  kai, mar'21)
+
 		List<PlanElement> oldTrip = new ArrayList<>( seq );
 		seq.clear();
 		assert trip != null;

@@ -69,15 +69,15 @@ public class PlanRouterTest {
 
 		router.run(plan);
 
-		assertEquals(1000.0, ((Leg) plan.getPlanElements().get(1)).getDepartureTime(), 1e-3);
-		assertEquals(2000.0, ((Leg) plan.getPlanElements().get(3)).getDepartureTime(), 1e-3);
+		assertEquals(1000.0, ((Leg) plan.getPlanElements().get(1)).getDepartureTime().seconds(), 1e-3);
+		assertEquals(2000.0, ((Leg) plan.getPlanElements().get(3)).getDepartureTime().seconds(), 1e-3);
 		
 		if (interpretation.equals(ActivityDurationInterpretation.tryEndTimeThenDuration)) {
-			assertEquals(3000.0, ((Leg) plan.getPlanElements().get(5)).getDepartureTime(), 1e-3);
+			assertEquals(3000.0, ((Leg) plan.getPlanElements().get(5)).getDepartureTime().seconds(), 1e-3);
 		} else if (!useDuration) {
-			assertEquals(3000.0, ((Leg) plan.getPlanElements().get(5)).getDepartureTime(), 1e-3);
+			assertEquals(3000.0, ((Leg) plan.getPlanElements().get(5)).getDepartureTime().seconds(), 1e-3);
 		} else {
-			assertEquals(2550.0, ((Leg) plan.getPlanElements().get(5)).getDepartureTime(), 1e-3);
+			assertEquals(2550.0, ((Leg) plan.getPlanElements().get(5)).getDepartureTime().seconds(), 1e-3);
 		}		
 	}
 
@@ -123,9 +123,9 @@ public class PlanRouterTest {
 
 		router.run(plan);
 
-		assertEquals(1000.0, ((Leg) plan.getPlanElements().get(1)).getDepartureTime(), 1e-3);
-		assertEquals(2100.0, ((Leg) plan.getPlanElements().get(3)).getDepartureTime(), 1e-3);
-		assertEquals(3200.0, ((Leg) plan.getPlanElements().get(5)).getDepartureTime(), 1e-3);
+		assertEquals(1000.0, ((Leg) plan.getPlanElements().get(1)).getDepartureTime().seconds(), 1e-3);
+		assertEquals(2100.0, ((Leg) plan.getPlanElements().get(3)).getDepartureTime().seconds(), 1e-3);
+		assertEquals(3200.0, ((Leg) plan.getPlanElements().get(5)).getDepartureTime().seconds(), 1e-3);
 	}
 	
 	@Test
@@ -170,9 +170,9 @@ public class PlanRouterTest {
 
 		router.run(plan);
 
-		assertEquals(1000.0, ((Leg) plan.getPlanElements().get(1)).getDepartureTime(), 1e-3);
-		assertEquals(2000.0, ((Leg) plan.getPlanElements().get(3)).getDepartureTime(), 1e-3);
-		assertEquals(3000.0, ((Leg) plan.getPlanElements().get(5)).getDepartureTime(), 1e-3);
+		assertEquals(1000.0, ((Leg) plan.getPlanElements().get(1)).getDepartureTime().seconds(), 1e-3);
+		assertEquals(2000.0, ((Leg) plan.getPlanElements().get(3)).getDepartureTime().seconds(), 1e-3);
+		assertEquals(3000.0, ((Leg) plan.getPlanElements().get(5)).getDepartureTime().seconds(), 1e-3);
 	}
 	
 	static private class GenericRoutingModule implements RoutingModule {

@@ -93,8 +93,8 @@ public class PlanRouter implements PlanAlgorithm, PersonAlgorithm {
 			final List<? extends PlanElement> newTrip =
 					tripRouter.calcRoute(
 							routingMode,
-						  FacilitiesUtils.toFacility( oldTrip.getOriginActivity(), facilities ),
-						  FacilitiesUtils.toFacility( oldTrip.getDestinationActivity(), facilities ),
+							FacilitiesUtils.toFacility( oldTrip.getOriginActivity(), facilities ),
+							FacilitiesUtils.toFacility( oldTrip.getDestinationActivity(), facilities ),
 							calcEndOfActivity( oldTrip.getOriginActivity() , plan, tripRouter.getConfig() ),
 							plan.getPerson() );
 			putVehicleFromOldTripIntoNewTripIfMeaningful(oldTrip, newTrip);
