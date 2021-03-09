@@ -11,22 +11,31 @@ import java.util.concurrent.Executors;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 
+/**
+ * Network reader which adds bicycle specific properties to the generated matsim-network. These include:
+ * - {@link TransportMode#bike} is added as allowed transport mode
+ * - Surface, smoothness are stored as link attributes
+ * - Cycleway and restriction attributes are set as link attributes as well
+ * - sets bicycleInfrastructureSpeedFactor to 0.5 on each link which has allowed mode {@link TransportMode#bike}
+ * <p>
+ * Additionally the osm-highway-tags cycleway, service, track, footway, pedestrian, path, steps are parsed from the
+ * original osm-network.
+ */
 public final class OsmBicycleReader extends SupersonicOsmNetworkReader {
 
-	public static final String BICYCLE_INFRASTRUCTURE_SPEED_FACTOR = "bicycleInfrastructureSpeedFactor";
 	private static final double BIKE_PCU = 0.25;
-	private static Set<String> bicycleNotAllowed = new HashSet<>(Arrays.asList(OsmTags.MOTORWAY, OsmTags.MOTORWAY_LINK,
+	private static final Set<String> bicycleNotAllowed = new HashSet<>(Arrays.asList(OsmTags.MOTORWAY, OsmTags.MOTORWAY_LINK,
 			OsmTags.TRUNK, OsmTags.TRUNK_LINK));
-	private static Set<String> onlyBicycleAllowed = new HashSet<>(Arrays.asList(OsmTags.TRACK, OsmTags.CYCLEWAY, OsmTags.SERVICE,
+	private static final Set<String> onlyBicycleAllowed = new HashSet<>(Arrays.asList(OsmTags.TRACK, OsmTags.CYCLEWAY, OsmTags.SERVICE,
 			OsmTags.FOOTWAY, OsmTags.PEDESTRIAN, OsmTags.PATH, OsmTags.STEPS));
 
-	private SupersonicOsmNetworkReader.AfterLinkCreated afterLinkCreated;
+	private final SupersonicOsmNetworkReader.AfterLinkCreated afterLinkCreated;
 
 	public OsmBicycleReader(OsmNetworkParser parser,
 							Predicate<Long> preserveNodeWithId,
 							BiPredicate<Coord, Integer> includeLinkAtCoordWithHierarchy,
-							SupersonicOsmNetworkReader.AfterLinkCreated afterLinkCreated) {
-		super(parser, preserveNodeWithId, includeLinkAtCoordWithHierarchy, (link, tags, direction) -> handleLink(link, tags, direction, afterLinkCreated));
+							AfterLinkCreated afterLinkCreated, double freeSpeedFactor, double adjustCapacityLength) {
+		super(parser, preserveNodeWithId, includeLinkAtCoordWithHierarchy, (link, tags, direction) -> handleLink(link, tags, direction, afterLinkCreated), freeSpeedFactor, adjustCapacityLength);
 		this.afterLinkCreated = afterLinkCreated;
 	}
 
@@ -39,9 +48,6 @@ public final class OsmBicycleReader extends SupersonicOsmNetworkReader {
 		setSmoothness(link, tags);
 		setCycleWay(link, tags);
 		setRestrictions(link, tags);
-
-		// do infrastructure factor
-		link.getAttributes().putAttribute(BICYCLE_INFRASTRUCTURE_SPEED_FACTOR, 0.5);
 
 		outfacingCallback.accept(link, tags, direction);
 	}
@@ -124,8 +130,7 @@ public final class OsmBicycleReader extends SupersonicOsmNetworkReader {
 
 	public static class Builder extends AbstractBuilder<OsmBicycleReader> {
 
-		@Override
-		OsmBicycleReader createInstance() {
+		public Builder() {
 			addOverridingLinkProperties(OsmTags.TRACK, new LinkProperties(9, 1, 30 / 3.6, 1500 * BIKE_PCU, false));
 			addOverridingLinkProperties(OsmTags.CYCLEWAY, new LinkProperties(9, 1, 30 / 3.6, 1500 * BIKE_PCU, false));
 			addOverridingLinkProperties(OsmTags.SERVICE, new LinkProperties(9, 1, 10 / 3.6, 100 * BIKE_PCU, false));
@@ -133,9 +138,12 @@ public final class OsmBicycleReader extends SupersonicOsmNetworkReader {
 			addOverridingLinkProperties(OsmTags.PEDESTRIAN, new LinkProperties(10, 1, 10 / 3.6, 600 * BIKE_PCU, false));
 			addOverridingLinkProperties(OsmTags.PATH, new LinkProperties(10, 1, 20 / 3.6, 600 * BIKE_PCU, false));
 			addOverridingLinkProperties(OsmTags.STEPS, new LinkProperties(11, 1, 1 / 3.6, 50 * BIKE_PCU, false));
+		}
 
+		@Override
+		OsmBicycleReader createInstance() {
 			OsmNetworkParser parser = new OsmNetworkParser(coordinateTransformation, linkProperties, includeLinkAtCoordWithHierarchy, Executors.newWorkStealingPool());
-			return new OsmBicycleReader(parser, preserveNodeWithId, includeLinkAtCoordWithHierarchy, afterLinkCreated);
+			return new OsmBicycleReader(parser, preserveNodeWithId, includeLinkAtCoordWithHierarchy, afterLinkCreated, freeSpeedFactor, adjustCapacityLength);
 		}
 	}
 }

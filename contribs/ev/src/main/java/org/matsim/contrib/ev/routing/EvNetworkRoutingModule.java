@@ -134,7 +134,7 @@ public final class EvNetworkRoutingModule implements RoutingModule {
 				for (Link stopLocation : stopLocations) {
 
 					StraightLineKnnFinder<Link, ChargerSpecification> straightLineKnnFinder = new StraightLineKnnFinder<>(
-							2, l -> l, s -> network.getLinks().get(s.getLinkId()));
+							2, Link::getCoord, s -> network.getLinks().get(s.getLinkId()).getCoord());
 					List<ChargerSpecification> nearestChargers = straightLineKnnFinder.findNearest(stopLocation,
 							chargingInfrastructureSpecification.getChargerSpecifications()
 									.values()
@@ -149,7 +149,7 @@ public final class EvNetworkRoutingModule implements RoutingModule {
 					List<? extends PlanElement> routeSegment = delegate.calcRoute(lastFrom, nexttoFacility,
 							lastArrivaltime, person);
 					Leg lastLeg = (Leg)routeSegment.get(0);
-					lastArrivaltime = lastLeg.getDepartureTime() + lastLeg.getTravelTime();
+					lastArrivaltime = lastLeg.getDepartureTime().seconds() + lastLeg.getTravelTime().seconds();
 					stagedRoute.add(lastLeg);
 					Activity chargeAct = PopulationUtils.createStageActivityFromCoordLinkIdAndModePrefix(selectedChargerLink.getCoord(),
 							selectedChargerLink.getId(), stageActivityModePrefix);
@@ -180,12 +180,12 @@ public final class EvNetworkRoutingModule implements RoutingModule {
 		DriveEnergyConsumption driveEnergyConsumption = pseudoVehicle.getDriveEnergyConsumption();
 		AuxEnergyConsumption auxEnergyConsumption = pseudoVehicle.getAuxEnergyConsumption();
 		double lastSoc = pseudoVehicle.getBattery().getSoc();
-		double linkEnterTime = basicLeg.getDepartureTime();
+		double linkEnterTime = basicLeg.getDepartureTime().seconds();
 		for (Link l : links) {
-			double travelT = travelTime.getLinkTravelTime(l, basicLeg.getDepartureTime(), null, null);
+			double travelT = travelTime.getLinkTravelTime(l, basicLeg.getDepartureTime().seconds(), null, null);
 
 			double consumption = driveEnergyConsumption.calcEnergyConsumption(l, travelT, linkEnterTime)
-					+ auxEnergyConsumption.calcEnergyConsumption(basicLeg.getDepartureTime(), travelT, l.getId());
+					+ auxEnergyConsumption.calcEnergyConsumption(basicLeg.getDepartureTime().seconds(), travelT, l.getId());
 			pseudoVehicle.getBattery().changeSoc(-consumption);
 			double currentSoc = pseudoVehicle.getBattery().getSoc();
 			// to accomodate for ERS, where energy charge is directly implemented in the consumption model

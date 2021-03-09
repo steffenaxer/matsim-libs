@@ -28,13 +28,18 @@ import org.matsim.utils.eventsfilecomparison.EventsFileComparator;
 
 public final class EventsUtils {
 
-	private EventsUtils(){
-	}
+	/**
+	 * Create a events manager instance that guarantees causality of processed events across all handlers.
+	 */
+    public static EventsManager createEventsManager() {
+		return new EventsManagerImpl();
+    }
 
-	public static EventsManager createEventsManager() {
-		final EventsManagerImpl events = new EventsManagerImpl();
-//		events.initProcessing();
-		return events;
+	/**
+	 * Creates a parallel events manager, with no guarantees for the order of processed events between multiple handlers.
+	 */
+	public static EventsManager createParallelEventsManager() {
+		return new ParallelEventsManager(false);
 	}
 
 	public static EventsManager createEventsManager(Config config) {
