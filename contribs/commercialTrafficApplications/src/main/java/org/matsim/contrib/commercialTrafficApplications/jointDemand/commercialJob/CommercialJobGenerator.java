@@ -244,9 +244,9 @@ class CommercialJobGenerator implements BeforeMobsimListener, AfterMobsimListene
                         if (lastTourElementActivity != null) {
                             lastTourElementActivity.setEndTime(tourLeg.getExpectedDepartureTime());
                             if (startActivity.getEndTime().isUndefined()) {
-								startActivity.setEndTime(lastTourElementActivity.getEndTime().seconds()
-										- lastTourElementActivity.getMaximumDuration().seconds()
-                                        - lastTourLeg.getTravelTime().seconds() * firsttourTraveltimeBuffer);
+								startActivity.setEndTime(lastTourElementActivity.getEndTime().seconds() //first service end time
+										- lastTourElementActivity.getMaximumDuration().seconds() //duration of first service
+                                        - lastTourLeg.getTravelTime().seconds() * firsttourTraveltimeBuffer); //travel time to first service * buffer
                                 lastTourElementActivity.setMaximumDurationUndefined();
                             }
                         }
@@ -269,7 +269,13 @@ class CommercialJobGenerator implements BeforeMobsimListener, AfterMobsimListene
 
                         plan.addActivity(tourElementActivity);
                         if (lastTourElementActivity == null) {
-                            tourElementActivity.setMaximumDuration(act.getDuration());
+
+                            if(lastTourLeg.getDepartureTime().seconds() + lastTourLeg.getTravelTime().seconds() < act.getTimeWindow().getStart()){
+                                //we will probably be too early and need to wait before closed doors
+                                tourElementActivity.setEndTime(act.getTimeWindow().getStart() + act.getDuration());
+                            } else {
+                                tourElementActivity.setMaximumDuration(act.getDuration());
+                            }
                         }
 
                         lastTourElementActivity = tourElementActivity;
