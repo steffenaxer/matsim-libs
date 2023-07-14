@@ -32,10 +32,10 @@ import java.util.concurrent.LinkedBlockingQueue;
 public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 	static public final String EVENT = "event";
 	static public final String EVENTS = "events";
-	private static final int THREADS_LIMIT = 4;
+	private static final int THREADS_LIMIT = 2;
 	public static String CLOSING_MARKER = UUID.randomUUID().toString();
 	private final Map<String, MatsimEventsReader.CustomEventMapper> customEventMappers = new HashMap<>();
-	final BlockingQueue<EventData> eventsQueue = new LinkedBlockingQueue<>();
+	final BlockingQueue<EventData> eventDataQueue = new LinkedBlockingQueue<>();
 	final BlockingQueue<CompletableFuture<Event>> futureEventsQueue = new LinkedBlockingQueue<>();
 	final EventsManager eventsManager;
 	Thread[] workerThreads;
@@ -51,7 +51,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 		workerThreads = new Thread[THREADS_LIMIT];
 		for (int i = 0; i < THREADS_LIMIT; i++) {
 			MatsimEventsWorker runner =
-					new MatsimEventsWorker(this.eventsQueue, this.customEventMappers);
+					new MatsimEventsWorker(this.eventDataQueue, this.customEventMappers);
 			Thread thread = new Thread(runner);
 			thread.setDaemon(true);
 			thread.setName(MatsimEventsWorker.class.toString() + i);
@@ -78,9 +78,8 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 	public void startTag(String name, Attributes atts, Stack<String> context) {
 		if (EVENT.equals(name)) {
 			CompletableFuture<Event> futureEvent = new CompletableFuture<>();
-			EventData eventData = new EventData(futureEvent, name, new AttributesImpl(atts));
 			try {
-				this.eventsQueue.put(eventData);
+				this.eventDataQueue.put(new EventData(futureEvent, name, new AttributesImpl(atts)));
 				this.futureEventsQueue.put(futureEvent);
 			} catch (InterruptedException e) {
 				throw new RuntimeException(e);
@@ -102,7 +101,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 		try {
 			for (int i = 0; i < THREADS_LIMIT; i++) {
 				EventData closingData = new EventData(e, CLOSING_MARKER, null);
-				this.eventsQueue.put(closingData);
+				this.eventDataQueue.put(closingData);
 			}
 			this.futureEventsQueue.put(e);
 		} catch (InterruptedException ex) {
