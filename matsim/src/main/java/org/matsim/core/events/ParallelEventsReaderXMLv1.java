@@ -13,7 +13,6 @@ import org.matsim.pt.transitSchedule.api.TransitRoute;
 import org.matsim.pt.transitSchedule.api.TransitStopFacility;
 import org.matsim.vehicles.Vehicle;
 import org.xml.sax.Attributes;
-import org.xml.sax.helpers.AttributesImpl;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -30,12 +29,9 @@ import java.util.concurrent.LinkedBlockingQueue;
  * @author steffenaxer
  */
 public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
-	private static String TYPE ="type";
-	private static String VALUE = "value";
-
 	static public final String EVENT = "event";
 	static public final String EVENTS = "events";
-	private static final int THREADS_LIMIT = 4;
+	private static final int THREADS_LIMIT = 2;
 	public static String CLOSING_MARKER = UUID.randomUUID().toString();
 	private final Map<String, MatsimEventsReader.CustomEventMapper> customEventMappers = new HashMap<>();
 	final BlockingQueue<EventData> eventDataQueue = new LinkedBlockingQueue<>(20000);
@@ -79,11 +75,11 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 
 	record Attribute(String qname ,String type, String value) {}
 
-	static Map<String,Attribute> getAsMap(Attributes atts) {
-		Map<String,Attribute> data = new HashMap<>();
+	static Attribute[] getAsArray(Attributes atts) {
+		Attribute[] data = new Attribute[atts.getLength()];
 		for (int i = 0; i < atts.getLength(); i++) {
 			Attribute att = new Attribute(atts.getQName(i),atts.getType(i),atts.getValue(i));
-			data.put(atts.getQName(i),att);
+			data[i]=att;
 		}
 		return data;
 	}
@@ -93,7 +89,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 		if (EVENT.equals(name)) {
 			CompletableFuture<Event> futureEvent = new CompletableFuture<>();
 			try {
-				this.eventDataQueue.put(new EventData(futureEvent, name, getAsMap(atts)));
+				this.eventDataQueue.put(new EventData(futureEvent, name, getAsArray(atts)));
 				this.futureEventsQueue.put(futureEvent);
 			} catch (InterruptedException e) {
 				throw new RuntimeException(e);
@@ -134,7 +130,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 		}
 	}
 
-	record EventData(CompletableFuture<Event> futureEvent, String name, Map<String,Attribute> data) {
+	record EventData(CompletableFuture<Event> futureEvent, String name, Attribute[] data) {
 	}
 
 
@@ -195,17 +191,23 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 			eventData.futureEvent.complete(event);
 		}
 
-		static String getValue(Map<String, Attribute> data, String qName)
+		static String getValue(Attribute[] data, String qName)
 		{
-			Attribute a = data.get(qName);
-			return a == null ? null : a.value;
+			for (Attribute attribute : data)
+			{
+				if (attribute.qname.equals(qName))
+				{
+					return attribute.value;
+				}
+			}
+			return null;
 		}
 
 		/**
 		 * This code is mainly a copy from the EventsReaderXMLv1
 		 */
 		void processEventData(EventData eventData) {
-			Map<String, Attribute> data = eventData.data;
+			Attribute[] data = eventData.data;
 			double time = Double.parseDouble(getValue(data, "time"));
 			String eventType = getValue(data, "type");
 
@@ -354,7 +356,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 			} else {
 				GenericEvent event = new GenericEvent(eventType, time);
 
-				for ( Attribute att : data.values()) {
+				for ( Attribute att : data) {
 					String key = att.qname;
 					if (key.equals("time") || key.equals("type")) {
 						continue;
