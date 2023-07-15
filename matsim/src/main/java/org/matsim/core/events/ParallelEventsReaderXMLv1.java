@@ -38,7 +38,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 	private static final int THREADS_LIMIT = 4;
 	public static String CLOSING_MARKER = UUID.randomUUID().toString();
 	private final Map<String, MatsimEventsReader.CustomEventMapper> customEventMappers = new HashMap<>();
-	final BlockingQueue<EventData> eventDataQueue = new LinkedBlockingQueue<>(10000);
+	final BlockingQueue<EventData> eventDataQueue = new LinkedBlockingQueue<>(20000);
 	final BlockingQueue<CompletableFuture<Event>> futureEventsQueue = new LinkedBlockingQueue<>();
 	final EventsManager eventsManager;
 	Thread[] workerThreads;
@@ -77,12 +77,12 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 		customEventMappers.put(eventType, cem);
 	}
 
-	record Attribute(String uri, String locaName, String qname ,String type, String value) {}
+	record Attribute(String qname ,String type, String value) {}
 
 	static Map<String,Attribute> getAsMap(Attributes atts) {
 		Map<String,Attribute> data = new HashMap<>();
 		for (int i = 0; i < atts.getLength(); i++) {
-			Attribute att = new Attribute(atts.getURI(i),atts.getLocalName(i), atts.getQName(i),atts.getType(i),atts.getValue(i));
+			Attribute att = new Attribute(atts.getQName(i),atts.getType(i),atts.getValue(i));
 			data.put(atts.getQName(i),att);
 		}
 		return data;
@@ -355,7 +355,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 				GenericEvent event = new GenericEvent(eventType, time);
 
 				for ( Attribute att : data.values()) {
-					String key = att.locaName;
+					String key = att.qname;
 					if (key.equals("time") || key.equals("type")) {
 						continue;
 					}
