@@ -32,10 +32,10 @@ import java.util.concurrent.LinkedBlockingQueue;
 public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 	static public final String EVENT = "event";
 	static public final String EVENTS = "events";
-	private static final int THREADS_LIMIT = 2;
+	private static final int THREADS_LIMIT = 4;
 	public static String CLOSING_MARKER = UUID.randomUUID().toString();
 	private final Map<String, MatsimEventsReader.CustomEventMapper> customEventMappers = new HashMap<>();
-	final BlockingQueue<EventData> eventDataQueue = new LinkedBlockingQueue<>(20000);
+	final BlockingQueue<EventData> eventDataQueue = new LinkedBlockingQueue<>(10000);
 	final BlockingQueue<CompletableFuture<Event>> futureEventsQueue = new LinkedBlockingQueue<>();
 	final EventsManager eventsManager;
 	Thread[] workerThreads;
@@ -79,7 +79,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 		if (EVENT.equals(name)) {
 			CompletableFuture<Event> futureEvent = new CompletableFuture<>();
 			try {
-				this.eventDataQueue.put(new EventData(futureEvent, name, new AttributesImplV2(atts)));
+				this.eventDataQueue.put(new EventData(futureEvent, name, new AttributesImpl(atts)));
 				this.futureEventsQueue.put(futureEvent);
 			} catch (InterruptedException e) {
 				throw new RuntimeException(e);
