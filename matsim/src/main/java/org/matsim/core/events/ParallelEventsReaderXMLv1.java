@@ -30,6 +30,9 @@ import java.util.concurrent.LinkedBlockingQueue;
  * @author steffenaxer
  */
 public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
+	private static String TYPE ="type";
+	private static String VALUE = "value";
+
 	static public final String EVENT = "event";
 	static public final String EVENTS = "events";
 	private static final int THREADS_LIMIT = 4;
@@ -74,12 +77,23 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 		customEventMappers.put(eventType, cem);
 	}
 
+	record Attribute(String uri, String locaName, String qname ,String type, String value) {}
+
+	static Map<String,Attribute> getAsMap(Attributes atts) {
+		Map<String,Attribute> data = new HashMap<>();
+		for (int i = 0; i < atts.getLength(); i++) {
+			Attribute att = new Attribute(atts.getURI(i),atts.getLocalName(i), atts.getQName(i),atts.getType(i),atts.getValue(i));
+			data.put(atts.getQName(i),att);
+		}
+		return data;
+	}
+
 	@Override
 	public void startTag(String name, Attributes atts, Stack<String> context) {
 		if (EVENT.equals(name)) {
 			CompletableFuture<Event> futureEvent = new CompletableFuture<>();
 			try {
-				this.eventDataQueue.put(new EventData(futureEvent, name, new AttributesImpl(atts)));
+				this.eventDataQueue.put(new EventData(futureEvent, name, getAsMap(atts)));
 				this.futureEventsQueue.put(futureEvent);
 			} catch (InterruptedException e) {
 				throw new RuntimeException(e);
@@ -120,7 +134,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 		}
 	}
 
-	record EventData(CompletableFuture<Event> futureEvent, String name, Attributes atts) {
+	record EventData(CompletableFuture<Event> futureEvent, String name, Map<String,Attribute> data) {
 	}
 
 
@@ -181,166 +195,174 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 			eventData.futureEvent.complete(event);
 		}
 
+		static String getValue(Map<String, Attribute> data, String qName)
+		{
+			Attribute a = data.get(qName);
+			return a == null ? null : a.value;
+		}
+
 		/**
 		 * This code is mainly a copy from the EventsReaderXMLv1
 		 */
 		void processEventData(EventData eventData) {
-			Attributes atts = eventData.atts;
-			double time = Double.parseDouble(atts.getValue("time"));
-			String eventType = atts.getValue("type");
+			Map<String, Attribute> data = eventData.data;
+			double time = Double.parseDouble(getValue(data, "time"));
+			String eventType = getValue(data, "type");
 
 			// === material related to wait2link below here ===
 			if (LinkLeaveEvent.EVENT_TYPE.equals(eventType)) {
 				completeEvent(eventData, new LinkLeaveEvent(time,
-						Id.create(atts.getValue(LinkLeaveEvent.ATTRIBUTE_VEHICLE), Vehicle.class),
-						Id.create(atts.getValue(LinkLeaveEvent.ATTRIBUTE_LINK), Link.class)
+						Id.create(getValue(data, LinkLeaveEvent.ATTRIBUTE_VEHICLE), Vehicle.class),
+						Id.create(getValue(data, LinkLeaveEvent.ATTRIBUTE_LINK), Link.class)
 						// had driver id in previous version
 				));
 			} else if (LinkEnterEvent.EVENT_TYPE.equals(eventType)) {
 				completeEvent(eventData, new LinkEnterEvent(time,
-						Id.create(atts.getValue(LinkEnterEvent.ATTRIBUTE_VEHICLE), Vehicle.class),
-						Id.create(atts.getValue(LinkEnterEvent.ATTRIBUTE_LINK), Link.class)
+						Id.create(getValue(data, LinkEnterEvent.ATTRIBUTE_VEHICLE), Vehicle.class),
+						Id.create(getValue(data, LinkEnterEvent.ATTRIBUTE_LINK), Link.class)
 						// had driver id in previous version
 				));
 			} else if (VehicleEntersTrafficEvent.EVENT_TYPE.equals(eventType)) {
 				// (this is the new version, marked by the new events name)
 
 				completeEvent(eventData, new VehicleEntersTrafficEvent(time,
-						Id.create(atts.getValue(HasPersonId.ATTRIBUTE_PERSON), Person.class),
-						Id.create(atts.getValue(VehicleEntersTrafficEvent.ATTRIBUTE_LINK), Link.class),
-						Id.create(atts.getValue(VehicleEntersTrafficEvent.ATTRIBUTE_VEHICLE), Vehicle.class),
-						atts.getValue(VehicleEntersTrafficEvent.ATTRIBUTE_NETWORKMODE),
-						Double.parseDouble(atts.getValue(VehicleEntersTrafficEvent.ATTRIBUTE_POSITION))
+						Id.create(getValue(data, HasPersonId.ATTRIBUTE_PERSON), Person.class),
+						Id.create(getValue(data, VehicleEntersTrafficEvent.ATTRIBUTE_LINK), Link.class),
+						Id.create(getValue(data, VehicleEntersTrafficEvent.ATTRIBUTE_VEHICLE), Vehicle.class),
+						getValue(data, VehicleEntersTrafficEvent.ATTRIBUTE_NETWORKMODE),
+						Double.parseDouble(getValue(data, VehicleEntersTrafficEvent.ATTRIBUTE_POSITION))
 				));
 			} else if ("wait2link".equals(eventType)) {
 				// (this is the old version, marked by the old events name)
 
 				// retrofit vehicle Id:
 				Id<Vehicle> vehicleId;
-				if (atts.getValue(VehicleEntersTrafficEvent.ATTRIBUTE_VEHICLE) != null) {
-					vehicleId = Id.create(atts.getValue(VehicleEntersTrafficEvent.ATTRIBUTE_VEHICLE), Vehicle.class);
+				if (getValue(data, VehicleEntersTrafficEvent.ATTRIBUTE_VEHICLE) != null) {
+					vehicleId = Id.create(getValue(data, VehicleEntersTrafficEvent.ATTRIBUTE_VEHICLE), Vehicle.class);
 				} else {
 					// for the old events type, we set the vehicle id to the driver id if the vehicle id does not exist:
-					vehicleId = Id.create(atts.getValue(HasPersonId.ATTRIBUTE_PERSON), Vehicle.class);
+					vehicleId = Id.create(getValue(data, HasPersonId.ATTRIBUTE_PERSON), Vehicle.class);
 				}
 				// retrofit position:
 				double position;
-				if (atts.getValue(VehicleEntersTrafficEvent.ATTRIBUTE_POSITION) != null) {
-					position = Double.parseDouble(atts.getValue(VehicleEntersTrafficEvent.ATTRIBUTE_POSITION));
+				if (getValue(data, VehicleEntersTrafficEvent.ATTRIBUTE_POSITION) != null) {
+					position = Double.parseDouble(getValue(data, VehicleEntersTrafficEvent.ATTRIBUTE_POSITION));
 				} else {
 					position = 1.0;
 				}
 				completeEvent(eventData, new VehicleEntersTrafficEvent(time,
-						Id.create(atts.getValue(HasPersonId.ATTRIBUTE_PERSON), Person.class),
-						Id.create(atts.getValue(VehicleEntersTrafficEvent.ATTRIBUTE_LINK), Link.class),
+						Id.create(getValue(data, HasPersonId.ATTRIBUTE_PERSON), Person.class),
+						Id.create(getValue(data, VehicleEntersTrafficEvent.ATTRIBUTE_LINK), Link.class),
 						vehicleId,
-						atts.getValue(VehicleEntersTrafficEvent.ATTRIBUTE_NETWORKMODE),
+						getValue(data, VehicleEntersTrafficEvent.ATTRIBUTE_NETWORKMODE),
 						position
 				));
 			} else if (VehicleLeavesTrafficEvent.EVENT_TYPE.equals(eventType)) {
 				completeEvent(eventData, new VehicleLeavesTrafficEvent(time,
-						Id.create(atts.getValue(VehicleLeavesTrafficEvent.ATTRIBUTE_DRIVER), Person.class),
-						Id.create(atts.getValue(VehicleLeavesTrafficEvent.ATTRIBUTE_LINK), Link.class),
-						atts.getValue(VehicleLeavesTrafficEvent.ATTRIBUTE_VEHICLE) == null ? null : Id.create(atts.getValue(VehicleLeavesTrafficEvent.ATTRIBUTE_VEHICLE), Vehicle.class),
-						atts.getValue(VehicleLeavesTrafficEvent.ATTRIBUTE_NETWORKMODE),
-						Double.parseDouble(atts.getValue(VehicleLeavesTrafficEvent.ATTRIBUTE_POSITION))
+						Id.create(getValue(data, VehicleLeavesTrafficEvent.ATTRIBUTE_DRIVER), Person.class),
+						Id.create(getValue(data, VehicleLeavesTrafficEvent.ATTRIBUTE_LINK), Link.class),
+						getValue(data, VehicleLeavesTrafficEvent.ATTRIBUTE_VEHICLE) == null ? null : Id.create(getValue(data,VehicleLeavesTrafficEvent.ATTRIBUTE_VEHICLE), Vehicle.class),
+						getValue(data, VehicleLeavesTrafficEvent.ATTRIBUTE_NETWORKMODE),
+						Double.parseDouble(getValue(data, VehicleLeavesTrafficEvent.ATTRIBUTE_POSITION))
 				));
 			}
 			// === material related to wait2link above here
 			else if (ActivityEndEvent.EVENT_TYPE.equals(eventType)) {
 				Coord coord = null;
-				if (atts.getValue(Event.ATTRIBUTE_X) != null) {
-					double xx = Double.parseDouble(atts.getValue(Event.ATTRIBUTE_X));
-					double yy = Double.parseDouble(atts.getValue(Event.ATTRIBUTE_Y));
+				if (getValue(data, Event.ATTRIBUTE_X) != null) {
+					double xx = Double.parseDouble(getValue(data, Event.ATTRIBUTE_X));
+					double yy = Double.parseDouble(getValue(data, Event.ATTRIBUTE_Y));
 					coord = new Coord(xx, yy);
 				}
 				completeEvent(eventData, new ActivityEndEvent(
 						time,
-						Id.create(atts.getValue(HasPersonId.ATTRIBUTE_PERSON), Person.class),
-						Id.create(atts.getValue(HasLinkId.ATTRIBUTE_LINK), Link.class),
-						atts.getValue(HasFacilityId.ATTRIBUTE_FACILITY) == null ? null : Id.create(atts.getValue(HasFacilityId.ATTRIBUTE_FACILITY),
+						Id.create(getValue(data, HasPersonId.ATTRIBUTE_PERSON), Person.class),
+						Id.create(getValue(data, HasLinkId.ATTRIBUTE_LINK), Link.class),
+						getValue(data, HasFacilityId.ATTRIBUTE_FACILITY) == null ? null : Id.create(getValue(data,HasFacilityId.ATTRIBUTE_FACILITY),
 								ActivityFacility.class),
-						atts.getValue(ActivityEndEvent.ATTRIBUTE_ACTTYPE),
+						getValue(data, ActivityEndEvent.ATTRIBUTE_ACTTYPE),
 						coord));
 			} else if (ActivityStartEvent.EVENT_TYPE.equals(eventType)) {
 				Coord coord = null;
-				if (atts.getValue(Event.ATTRIBUTE_X) != null) {
-					double xx = Double.parseDouble(atts.getValue(Event.ATTRIBUTE_X));
-					double yy = Double.parseDouble(atts.getValue(Event.ATTRIBUTE_Y));
+				if (getValue(data, Event.ATTRIBUTE_X) != null) {
+					double xx = Double.parseDouble(getValue(data, Event.ATTRIBUTE_X));
+					double yy = Double.parseDouble(getValue(data, Event.ATTRIBUTE_Y));
 					coord = new Coord(xx, yy);
 				}
 				completeEvent(eventData, new ActivityStartEvent(
 						time,
-						Id.create(atts.getValue(HasPersonId.ATTRIBUTE_PERSON), Person.class),
-						Id.create(atts.getValue(HasLinkId.ATTRIBUTE_LINK), Link.class),
-						atts.getValue(HasFacilityId.ATTRIBUTE_FACILITY) == null ? null : Id.create(atts.getValue(
+						Id.create(getValue(data, HasPersonId.ATTRIBUTE_PERSON), Person.class),
+						Id.create(getValue(data, HasLinkId.ATTRIBUTE_LINK), Link.class),
+						getValue(data, HasFacilityId.ATTRIBUTE_FACILITY) == null ? null : Id.create(getValue(data,
 								HasFacilityId.ATTRIBUTE_FACILITY), ActivityFacility.class),
-						atts.getValue(ActivityStartEvent.ATTRIBUTE_ACTTYPE),
+						getValue(data, ActivityStartEvent.ATTRIBUTE_ACTTYPE),
 						coord));
 			} else if (PersonArrivalEvent.EVENT_TYPE.equals(eventType)) {
-				String legMode = atts.getValue(PersonArrivalEvent.ATTRIBUTE_LEGMODE);
+				String legMode = getValue(data, PersonArrivalEvent.ATTRIBUTE_LEGMODE);
 				String mode = legMode == null ? null : legMode.intern();
-				completeEvent(eventData, new PersonArrivalEvent(time, Id.create(atts.getValue(PersonArrivalEvent.ATTRIBUTE_PERSON), Person.class), Id.create(atts.getValue(PersonArrivalEvent.ATTRIBUTE_LINK), Link.class), mode));
+				completeEvent(eventData, new PersonArrivalEvent(time, Id.create(getValue(data, PersonArrivalEvent.ATTRIBUTE_PERSON), Person.class), Id.create(getValue(data, PersonArrivalEvent.ATTRIBUTE_LINK), Link.class), mode));
 			} else if (PersonDepartureEvent.EVENT_TYPE.equals(eventType)) {
-				String legMode = atts.getValue(PersonDepartureEvent.ATTRIBUTE_LEGMODE);
+				String legMode = getValue(data, PersonDepartureEvent.ATTRIBUTE_LEGMODE);
 				String canonicalLegMode = legMode == null ? null : legMode.intern();
-				String routingMode = atts.getValue(PersonDepartureEvent.ATTRIBUTE_ROUTING_MODE);
+				String routingMode = getValue(data, PersonDepartureEvent.ATTRIBUTE_ROUTING_MODE);
 				String canonicalRoutingMode = routingMode == null ? null : routingMode.intern();
-				completeEvent(eventData, new PersonDepartureEvent(time, Id.create(atts.getValue(PersonDepartureEvent.ATTRIBUTE_PERSON), Person.class), Id.create(atts.getValue(PersonDepartureEvent.ATTRIBUTE_LINK), Link.class), canonicalLegMode, canonicalRoutingMode));
+				completeEvent(eventData, new PersonDepartureEvent(time, Id.create(getValue(data, PersonDepartureEvent.ATTRIBUTE_PERSON), Person.class), Id.create(getValue(data, PersonDepartureEvent.ATTRIBUTE_LINK), Link.class), canonicalLegMode, canonicalRoutingMode));
 			} else if (PersonStuckEvent.EVENT_TYPE.equals(eventType)) {
-				String legMode = atts.getValue(PersonStuckEvent.ATTRIBUTE_LEGMODE);
+				String legMode = getValue(data, PersonStuckEvent.ATTRIBUTE_LEGMODE);
 				String mode = legMode == null ? null : legMode.intern();
-				String linkIdString = atts.getValue(PersonStuckEvent.ATTRIBUTE_LINK);
+				String linkIdString = getValue(data, PersonStuckEvent.ATTRIBUTE_LINK);
 				Id<Link> linkId = linkIdString == null ? null : Id.create(linkIdString, Link.class); // linkId is optional
-				completeEvent(eventData, new PersonStuckEvent(time, Id.create(atts.getValue(PersonStuckEvent.ATTRIBUTE_PERSON), Person.class), linkId, mode));
+				completeEvent(eventData, new PersonStuckEvent(time, Id.create(getValue(data, PersonStuckEvent.ATTRIBUTE_PERSON), Person.class), linkId, mode));
 			} else if (VehicleAbortsEvent.EVENT_TYPE.equals(eventType)) {
-				String linkIdString = atts.getValue(VehicleAbortsEvent.ATTRIBUTE_LINK);
+				String linkIdString = getValue(data, VehicleAbortsEvent.ATTRIBUTE_LINK);
 				Id<Link> linkId = linkIdString == null ? null : Id.create(linkIdString, Link.class);
-				completeEvent(eventData, new VehicleAbortsEvent(time, Id.create(atts.getValue(VehicleAbortsEvent.ATTRIBUTE_VEHICLE), Vehicle.class), linkId));
+				completeEvent(eventData, new VehicleAbortsEvent(time, Id.create(getValue(data, VehicleAbortsEvent.ATTRIBUTE_VEHICLE), Vehicle.class), linkId));
 			} else if (PersonMoneyEvent.EVENT_TYPE.equals(eventType) || "agentMoney".equals(eventType)) {
-				completeEvent(eventData, new PersonMoneyEvent(time, Id.create(atts.getValue(PersonMoneyEvent.ATTRIBUTE_PERSON), Person.class), Double.parseDouble(atts.getValue(PersonMoneyEvent.ATTRIBUTE_AMOUNT)), atts.getValue(PersonMoneyEvent.ATTRIBUTE_PURPOSE), atts.getValue(PersonMoneyEvent.ATTRIBUTE_TRANSACTION_PARTNER)));
+				completeEvent(eventData, new PersonMoneyEvent(time, Id.create(getValue(data, PersonMoneyEvent.ATTRIBUTE_PERSON), Person.class), Double.parseDouble(getValue(data, PersonMoneyEvent.ATTRIBUTE_AMOUNT)), getValue(data, PersonMoneyEvent.ATTRIBUTE_PURPOSE), getValue(data, PersonMoneyEvent.ATTRIBUTE_TRANSACTION_PARTNER)));
 			} else if (PersonScoreEvent.EVENT_TYPE.equals(eventType) || "personScore".equals(eventType)) {
-				completeEvent(eventData, new PersonScoreEvent(time, Id.create(atts.getValue(PersonScoreEvent.ATTRIBUTE_PERSON), Person.class), Double.parseDouble(atts.getValue(PersonScoreEvent.ATTRIBUTE_AMOUNT)), atts.getValue(PersonScoreEvent.ATTRIBUTE_KIND)));
+				completeEvent(eventData, new PersonScoreEvent(time, Id.create(getValue(data, PersonScoreEvent.ATTRIBUTE_PERSON), Person.class), Double.parseDouble(getValue(data, PersonScoreEvent.ATTRIBUTE_AMOUNT)), getValue(data, PersonScoreEvent.ATTRIBUTE_KIND)));
 			} else if (PersonEntersVehicleEvent.EVENT_TYPE.equals(eventType)) {
-				String personString = atts.getValue(PersonEntersVehicleEvent.ATTRIBUTE_PERSON);
-				String vehicleString = atts.getValue(PersonEntersVehicleEvent.ATTRIBUTE_VEHICLE);
+				String personString = getValue(data, PersonEntersVehicleEvent.ATTRIBUTE_PERSON);
+				String vehicleString = getValue(data, PersonEntersVehicleEvent.ATTRIBUTE_VEHICLE);
 				completeEvent(eventData, new PersonEntersVehicleEvent(time, Id.create(personString, Person.class), Id.create(vehicleString, Vehicle.class)));
 			} else if (PersonLeavesVehicleEvent.EVENT_TYPE.equals(eventType)) {
-				Id<Person> pId = Id.create(atts.getValue(PersonLeavesVehicleEvent.ATTRIBUTE_PERSON), Person.class);
-				Id<Vehicle> vId = Id.create(atts.getValue(PersonLeavesVehicleEvent.ATTRIBUTE_VEHICLE), Vehicle.class);
+				Id<Person> pId = Id.create(getValue(data, PersonLeavesVehicleEvent.ATTRIBUTE_PERSON), Person.class);
+				Id<Vehicle> vId = Id.create(getValue(data, PersonLeavesVehicleEvent.ATTRIBUTE_VEHICLE), Vehicle.class);
 				completeEvent(eventData, new PersonLeavesVehicleEvent(time, pId, vId));
 			} else if (TeleportationArrivalEvent.EVENT_TYPE.equals(eventType)) {
 				completeEvent(eventData, new TeleportationArrivalEvent(
 						time,
-						Id.create(atts.getValue(TeleportationArrivalEvent.ATTRIBUTE_PERSON), Person.class),
-						Double.parseDouble(atts.getValue(TeleportationArrivalEvent.ATTRIBUTE_DISTANCE)), atts.getValue(TeleportationArrivalEvent.ATTRIBUTE_MODE)));
+						Id.create(getValue(data, TeleportationArrivalEvent.ATTRIBUTE_PERSON), Person.class),
+						Double.parseDouble(getValue(data, TeleportationArrivalEvent.ATTRIBUTE_DISTANCE)), getValue(data, TeleportationArrivalEvent.ATTRIBUTE_MODE)));
 			} else if (VehicleArrivesAtFacilityEvent.EVENT_TYPE.equals(eventType)) {
-				String delay = atts.getValue(VehicleArrivesAtFacilityEvent.ATTRIBUTE_DELAY);
-				completeEvent(eventData, new VehicleArrivesAtFacilityEvent(time, Id.create(atts.getValue(VehicleArrivesAtFacilityEvent.ATTRIBUTE_VEHICLE), Vehicle.class), Id.create(atts.getValue(VehicleArrivesAtFacilityEvent.ATTRIBUTE_FACILITY), TransitStopFacility.class), delay == null ? 0.0 : Double.parseDouble(delay)));
+				String delay = getValue(data, VehicleArrivesAtFacilityEvent.ATTRIBUTE_DELAY);
+				completeEvent(eventData, new VehicleArrivesAtFacilityEvent(time, Id.create(getValue(data, VehicleArrivesAtFacilityEvent.ATTRIBUTE_VEHICLE), Vehicle.class), Id.create(getValue(data, VehicleArrivesAtFacilityEvent.ATTRIBUTE_FACILITY), TransitStopFacility.class), delay == null ? 0.0 : Double.parseDouble(delay)));
 			} else if (VehicleDepartsAtFacilityEvent.EVENT_TYPE.equals(eventType)) {
-				String delay = atts.getValue(VehicleDepartsAtFacilityEvent.ATTRIBUTE_DELAY);
-				completeEvent(eventData, new VehicleDepartsAtFacilityEvent(time, Id.create(atts.getValue(VehicleArrivesAtFacilityEvent.ATTRIBUTE_VEHICLE), Vehicle.class), Id.create(atts.getValue(VehicleArrivesAtFacilityEvent.ATTRIBUTE_FACILITY), TransitStopFacility.class), delay == null ? 0.0 : Double.parseDouble(delay)));
+				String delay = getValue(data, VehicleDepartsAtFacilityEvent.ATTRIBUTE_DELAY);
+				completeEvent(eventData, new VehicleDepartsAtFacilityEvent(time, Id.create(getValue(data, VehicleArrivesAtFacilityEvent.ATTRIBUTE_VEHICLE), Vehicle.class), Id.create(getValue(data, VehicleArrivesAtFacilityEvent.ATTRIBUTE_FACILITY), TransitStopFacility.class), delay == null ? 0.0 : Double.parseDouble(delay)));
 			} else if (TransitDriverStartsEvent.EVENT_TYPE.equals(eventType)) {
-				completeEvent(eventData, new TransitDriverStartsEvent(time, Id.create(atts.getValue(TransitDriverStartsEvent.ATTRIBUTE_DRIVER_ID), Person.class), Id.create(atts.getValue(TransitDriverStartsEvent.ATTRIBUTE_VEHICLE_ID), Vehicle.class), Id.create(atts.getValue(TransitDriverStartsEvent.ATTRIBUTE_TRANSIT_LINE_ID), TransitLine.class), Id.create(atts.getValue(TransitDriverStartsEvent.ATTRIBUTE_TRANSIT_ROUTE_ID), TransitRoute.class), Id.create(atts.getValue(TransitDriverStartsEvent.ATTRIBUTE_DEPARTURE_ID), Departure.class)));
+				completeEvent(eventData, new TransitDriverStartsEvent(time, Id.create(getValue(data, TransitDriverStartsEvent.ATTRIBUTE_DRIVER_ID), Person.class), Id.create(getValue(data, TransitDriverStartsEvent.ATTRIBUTE_VEHICLE_ID), Vehicle.class), Id.create(getValue(data, TransitDriverStartsEvent.ATTRIBUTE_TRANSIT_LINE_ID), TransitLine.class), Id.create(getValue(data, TransitDriverStartsEvent.ATTRIBUTE_TRANSIT_ROUTE_ID), TransitRoute.class), Id.create(getValue(data, TransitDriverStartsEvent.ATTRIBUTE_DEPARTURE_ID), Departure.class)));
 			} else if (BoardingDeniedEvent.EVENT_TYPE.equals(eventType)) {
-				Id<Person> personId = Id.create(atts.getValue(BoardingDeniedEvent.ATTRIBUTE_PERSON_ID), Person.class);
-				Id<Vehicle> vehicleId = Id.create(atts.getValue(BoardingDeniedEvent.ATTRIBUTE_VEHICLE_ID), Vehicle.class);
+				Id<Person> personId = Id.create(getValue(data, BoardingDeniedEvent.ATTRIBUTE_PERSON_ID), Person.class);
+				Id<Vehicle> vehicleId = Id.create(getValue(data, BoardingDeniedEvent.ATTRIBUTE_VEHICLE_ID), Vehicle.class);
 				completeEvent(eventData, new BoardingDeniedEvent(time, personId, vehicleId));
 			} else if (AgentWaitingForPtEvent.EVENT_TYPE.equals(eventType)) {
-				Id<Person> agentId = Id.create(atts.getValue(AgentWaitingForPtEvent.ATTRIBUTE_AGENT), Person.class);
-				Id<TransitStopFacility> waitStopId = Id.create(atts.getValue(AgentWaitingForPtEvent.ATTRIBUTE_WAITSTOP), TransitStopFacility.class);
-				Id<TransitStopFacility> destinationStopId = Id.create(atts.getValue(AgentWaitingForPtEvent.ATTRIBUTE_DESTINATIONSTOP), TransitStopFacility.class);
+				Id<Person> agentId = Id.create(getValue(data, AgentWaitingForPtEvent.ATTRIBUTE_AGENT), Person.class);
+				Id<TransitStopFacility> waitStopId = Id.create(getValue(data, AgentWaitingForPtEvent.ATTRIBUTE_WAITSTOP), TransitStopFacility.class);
+				Id<TransitStopFacility> destinationStopId = Id.create(getValue(data, AgentWaitingForPtEvent.ATTRIBUTE_DESTINATIONSTOP), TransitStopFacility.class);
 				completeEvent(eventData, new AgentWaitingForPtEvent(time, agentId, waitStopId, destinationStopId));
 			} else {
 				GenericEvent event = new GenericEvent(eventType, time);
-				for (int ii = 0; ii < atts.getLength(); ii++) {
-					String key = atts.getLocalName(ii);
+
+				for ( Attribute att : data.values()) {
+					String key = att.locaName;
 					if (key.equals("time") || key.equals("type")) {
 						continue;
 					}
-					String value = atts.getValue(ii);
+					String value = att.value;
 					event.getAttributes().put(key, value);
 				}
+
 				MatsimEventsReader.CustomEventMapper cem = customEventMappers.get(eventType);
 				if (cem != null) {
 					completeEvent(eventData, cem.apply(event));
