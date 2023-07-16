@@ -75,8 +75,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 	static Attribute[] getAsArray(Attributes atts) {
 		Attribute[] data = new Attribute[atts.getLength()];
 		for (int i = 0; i < atts.getLength(); i++) {
-			Attribute att = new Attribute(atts.getQName(i),atts.getType(i),atts.getValue(i));
-			data[i]=att;
+			data[i] = new Attribute(atts.getQName(i),atts.getType(i),atts.getValue(i));
 		}
 		return data;
 	}
