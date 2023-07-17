@@ -31,8 +31,8 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 	private static final int THREADS_LIMIT = 2;
 	public static String CLOSING_MARKER = UUID.randomUUID().toString();
 	private final Map<String, MatsimEventsReader.CustomEventMapper> customEventMappers = new HashMap<>();
-	final BlockingQueue<EventData> eventDataQueue = new LinkedBlockingQueue<>(20000);
-	final BlockingQueue<CompletableFuture<Event>> futureEventsQueue = new LinkedBlockingQueue<>();
+	final BlockingQueue<EventData> inputQueue = new LinkedBlockingQueue<>(20000);
+	final BlockingQueue<CompletableFuture<Event>> outputQueue = new LinkedBlockingQueue<>();
 	final EventsManager eventsManager;
 	Thread[] workerThreads;
 	Thread inserterThread;
@@ -47,7 +47,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 		workerThreads = new Thread[THREADS_LIMIT];
 		for (int i = 0; i < THREADS_LIMIT; i++) {
 			MatsimEventsWorker runner =
-					new MatsimEventsWorker(this.eventDataQueue, this.customEventMappers);
+					new MatsimEventsWorker(this.inputQueue, this.customEventMappers);
 			Thread thread = new Thread(runner);
 			thread.setDaemon(true);
 			thread.setName(MatsimEventsWorker.class.toString() + i);
@@ -57,7 +57,7 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 	}
 
 	void initializeInserterThread() {
-		MatsimEventsInserter eventsInserter = new MatsimEventsInserter(this.eventsManager, this.futureEventsQueue);
+		MatsimEventsInserter eventsInserter = new MatsimEventsInserter(this.eventsManager, this.outputQueue);
 		Thread thread = new Thread(eventsInserter);
 		thread.setDaemon(true);
 		thread.setName(MatsimEventsInserter.class.toString());
@@ -85,8 +85,8 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 		if (EVENT.equals(name)) {
 			CompletableFuture<Event> futureEvent = new CompletableFuture<>();
 			try {
-				this.eventDataQueue.put(new EventData(futureEvent, name, getAsArray(atts)));
-				this.futureEventsQueue.put(futureEvent);
+				this.inputQueue.put(new EventData(futureEvent, name, getAsArray(atts)));
+				this.outputQueue.put(futureEvent);
 			} catch (InterruptedException e) {
 				throw new RuntimeException(e);
 			}
@@ -107,9 +107,9 @@ public class ParallelEventsReaderXMLv1 extends MatsimXmlEventsParser {
 		try {
 			for (int i = 0; i < THREADS_LIMIT; i++) {
 				EventData closingData = new EventData(e, CLOSING_MARKER, null);
-				this.eventDataQueue.put(closingData);
+				this.inputQueue.put(closingData);
 			}
-			this.futureEventsQueue.put(e);
+			this.outputQueue.put(e);
 		} catch (InterruptedException ex) {
 			throw new RuntimeException(ex);
 		}
