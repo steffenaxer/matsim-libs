@@ -55,14 +55,18 @@ public class TestSenozon {
 		// Copy person attributes
 		AttributesUtils.copyTo(originalPerson.getAttributes(), clonedPerson.getAttributes());
 
-		// Copy plans
-		Plan originalPlan = originalPerson.getSelectedPlan();
-		Plan clonedPlan = PopulationUtils.createPlan(clonedPerson);
-		PopulationUtils.copyFromTo(originalPlan, clonedPlan);
-		clonedPerson.addPlan(clonedPlan);
+		for (int i = 0; i<originalPerson.getPlans().size(); i++)
+		{
+			// Copy plans
+			Plan originalPlan = originalPerson.getPlans().get(i);
+			Plan clonedPlan = PopulationUtils.createPlan(clonedPerson);
+			PopulationUtils.copyFromTo(originalPlan, clonedPlan);
+			clonedPerson.addPlan(clonedPlan);
 
-		// Compare cloned Plans on object scope
-		comparePlans(originalPlan, clonedPlan);
+			// Compare cloned Plans on object scope
+			comparePlans(originalPlan, clonedPlan);
+		}
+
 		return clonedPerson;
 	}
 
@@ -72,9 +76,12 @@ public class TestSenozon {
 		new PopulationReader(scenarioReference).readFile(a);
 		new PopulationReader(scenarioCurrent).readFile(b);
 
-		for (Person person : scenarioReference.getPopulation().getPersons().values()) {
-			Plan copyPersonSelectedPlan = scenarioCurrent.getPopulation().getPersons().get(person.getId()).getSelectedPlan();
-			comparePlans(person.getSelectedPlan(), copyPersonSelectedPlan);
+		for (Person originalPerson : scenarioReference.getPopulation().getPersons().values()) {
+			Person clonedPerson = scenarioCurrent.getPopulation().getPersons().get(originalPerson.getId());
+			for (int i = 0; i<originalPerson.getPlans().size(); i++)
+			{
+				comparePlans(originalPerson.getPlans().get(i), clonedPerson.getPlans().get(i));
+			}
 		}
 	}
 
