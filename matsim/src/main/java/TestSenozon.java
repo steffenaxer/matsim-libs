@@ -1,7 +1,6 @@
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.Scenario;
-import org.matsim.api.core.v01.population.Person;
-import org.matsim.api.core.v01.population.Plan;
+import org.matsim.api.core.v01.population.*;
 import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.population.PopulationUtils;
 import org.matsim.core.population.algorithms.PersonAlgorithm;
@@ -17,11 +16,49 @@ import org.matsim.utils.objectattributes.attributable.AttributesUtils;
 public class TestSenozon {
 	public static void main(String[] args) {
 		String inPop = "/Users/steffenaxer/Downloads/hamburg-v3.0-10pct-base.output_plans.10pct.xml.gz";
+		// Creates a population that has start and end times
+		String populationWithStartEndTimes = "/Users/steffenaxer/Downloads/input.xml.gz";
+		createPopulationWithStartTimes(inPop, populationWithStartEndTimes);
+
 		String outPop = "/Users/steffenaxer/Downloads/output.xml.gz";
-		createPopulationCopy(inPop, outPop);
+		createPopulationCopy(populationWithStartEndTimes, outPop);
 
 		// Compare plans on xml scope
-		comparePopulations(inPop, outPop);
+		comparePopulations(populationWithStartEndTimes, outPop);
+	}
+
+	static PersonAlgorithm createArtificialStartTimes(StreamingPopulationWriter w) {
+		return new PersonAlgorithm() {
+			@Override
+			public void run(Person person) {
+				for (Plan plan : person.getPlans()) {
+					for (PlanElement pe : plan.getPlanElements()) {
+						if (pe instanceof Activity activity) {
+							if (activity.getEndTime().isDefined()) {
+								activity.setStartTime(activity.getEndTime().seconds() - 60.);
+							}
+						}
+					}
+				}
+				w.writePerson(person);
+			}
+		};
+
+	}
+
+	static void createPopulationWithStartTimes(String inPop, String outPop) {
+		//Prepare Streaming Writer
+		StreamingPopulationWriter w = new StreamingPopulationWriter();
+		w.startStreaming(outPop);
+		Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+
+		//Prepare Streaming Reader
+		StreamingPopulationReader r = new StreamingPopulationReader(scenario);
+		r.addAlgorithm(createArtificialStartTimes(w));
+		r.readFile(inPop);
+
+		//Close Streaming Writer
+		w.closeStreaming();
 	}
 
 	static void createPopulationCopy(String inPop, String outPop) {
