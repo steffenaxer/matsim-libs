@@ -44,7 +44,7 @@ import org.matsim.core.controler.listener.IterationEndsListener;
 import org.matsim.core.controler.listener.ShutdownListener;
 import org.matsim.core.events.algorithms.EventWriter;
 import org.matsim.core.events.algorithms.EventWriterJson;
-import org.matsim.core.events.algorithms.EventWriterXML;
+import org.matsim.core.events.algorithms.ParallelEventWriterXML;
 
 import java.io.File;
 import org.matsim.core.utils.io.IOUtils;
@@ -54,14 +54,14 @@ final class EventsHandlingImpl implements EventsHandling, BeforeMobsimListener,
 	IterationEndsListener, ShutdownListener {
 
 	final static private Logger log = LogManager.getLogger(EventsHandlingImpl.class);
-	
+
 	private final EventsManager eventsManager;
 	private List<EventWriter> eventWriters = new LinkedList<>();
 
 	private int writeEventsInterval;
-    
+
 	private Set<EventsFileFormat> eventsFileFormats ;
-	
+
 	private OutputDirectoryHierarchy controlerIO ;
 
 	private int writeMoreUntilIteration;
@@ -90,8 +90,10 @@ final class EventsHandlingImpl implements EventsHandling, BeforeMobsimListener,
 			for (EventsFileFormat format : eventsFileFormats) {
 				switch (format) {
 					case xml:
-						this.eventWriters.add(new EventWriterXML(controlerIO.getIterationFilename(event.getIteration(),
+							this.eventWriters.add(new ParallelEventWriterXML(controlerIO.getIterationFilename(event.getIteration(),
 								Controler.DefaultFiles.events)));
+//							this.eventWriters.add(new EventWriterXML(controlerIO.getIterationFilename(event.getIteration(),
+//								Controler.DefaultFiles.events)));
 						break;
 					case pb:
 						// The pb dependency is optional at the moment so we search it first
@@ -118,11 +120,11 @@ final class EventsHandlingImpl implements EventsHandling, BeforeMobsimListener,
 			}
 		}
 	}
-	
+
 	@Override
 	public void notifyIterationEnds(IterationEndsEvent event) {
 		/*
-		 * Events that are produced after the Mobsim has ended, e.g. by the RoadProcing 
+		 * Events that are produced after the Mobsim has ended, e.g. by the RoadProcing
 		 * module, should also be written to the events file.
 		 */
 		for (EventWriter writer : this.eventWriters) {
@@ -138,5 +140,5 @@ final class EventsHandlingImpl implements EventsHandling, BeforeMobsimListener,
 			writer.closeFile();
 		}
 	}
-	
+
 }
