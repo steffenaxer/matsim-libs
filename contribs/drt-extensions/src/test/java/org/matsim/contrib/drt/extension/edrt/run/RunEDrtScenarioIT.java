@@ -78,8 +78,6 @@ public class RunEDrtScenarioIT {
 		Config config = ConfigUtils.loadConfig(configUrl, new MultiModeDrtConfigGroup(), new DvrpConfigGroup(),
 			new OTFVisConfigGroup(), new EvConfigGroup());
 
-		config.qsim().setNumberOfThreads(4);
-		config.global().setNumberOfThreads(4);
 
 		Controler controller = RunEDrtScenario.createControler(config, false);
 		config.controller().setLastIteration(10);
@@ -89,7 +87,7 @@ public class RunEDrtScenarioIT {
 
 		controller.run();
 
-		assertEquals(1956, tracker.passengerPickupEvents);
+		assertEquals(1928, tracker.passengerPickupEvents);
 	}
 
 
