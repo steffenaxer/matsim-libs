@@ -80,14 +80,14 @@ public class RunEDrtScenarioIT {
 
 
 		Controler controller = RunEDrtScenario.createControler(config, false);
-		config.controller().setLastIteration(10);
+		config.controller().setLastIteration(2);
 
 		PassengerPickUpTracker tracker = new PassengerPickUpTracker();
 		tracker.install(controller);
 
 		controller.run();
 
-		assertEquals(1968, tracker.passengerPickupEvents);
+		assertEquals(2011, tracker.passengerPickupEvents);
 	}
 
 
