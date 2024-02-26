@@ -123,7 +123,40 @@
 		</plugins>
 	</reporting>
 
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.dizitart</groupId>
+				<artifactId>nitrite-bom</artifactId>
+				<version>4.2.1</version>
+				<scope>import</scope>
+				<type>pom</type>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+
 	<dependencies>
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-api</artifactId>
+			<version>${log4j.version}</version>
+			<scope>compile</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-core</artifactId>
+			<version>${log4j.version}</version>
+			<scope>compile</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.dizitart</groupId>
+			<artifactId>nitrite</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.dizitart</groupId>
+			<artifactId>nitrite-rocksdb-adapter</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>it.unimi.dsi</groupId>
 			<artifactId>fastutil-core</artifactId>
@@ -257,7 +290,8 @@
 		<dependency>
 			<groupId>jakarta.xml.bind</groupId>
 			<artifactId>jakarta.xml.bind-api</artifactId>
-<!--			-->
+			<version>4.0.1</version>
+			<scope>compile</scope>
 		</dependency>
 		<dependency>
 			<groupId>com.sun.xml.bind</groupId>
