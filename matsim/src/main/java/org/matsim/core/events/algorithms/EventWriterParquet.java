@@ -85,20 +85,6 @@ public class EventWriterParquet implements EventWriter, BasicEventHandler {
 		return watch.getTime();
 	}
 
-	private static long matsimDefaultWriter(String input, String outout) throws IOException {
-		StopWatch watch = new StopWatch();
-		watch.start();
-		EventWriter w = new EventWriterXML(outout);
-		EventsManager manager = EventsUtils.createEventsManager();
-		manager.addHandler(w);
-		manager.initProcessing();
-		EventsUtils.readEvents(manager, input);
-		manager.finishProcessing();
-		w.closeFile();
-		watch.stop();
-		return watch.getTime();
-	}
-
 	ParquetWriter<GenericData.Record> getWriter(Path filePath) throws IOException {
 		return AvroParquetWriter.<GenericData.Record>builder(HadoopOutputFile.fromPath(filePath,new Configuration()))
 				.withCompressionCodec(CompressionCodecName.ZSTD)
