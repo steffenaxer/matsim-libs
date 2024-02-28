@@ -1,19 +1,15 @@
 package org.matsim.core.events.algorithms;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
-import org.apache.avro.reflect.ReflectData;
 import org.apache.commons.lang3.time.StopWatch;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
-import org.apache.parquet.hadoop.ParquetFileWriter.Mode;
+import org.apache.parquet.hadoop.ParquetFileWriter;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.matsim.api.core.v01.events.Event;
@@ -45,10 +41,6 @@ public class EventWriterParquet implements EventWriter, BasicEventHandler {
 				.endRecord();
 	}
 
-	public static Schema getEventSchema() {
-		return ReflectData.get().getSchema(Event.class);
-	}
-
 	@Override
 	public void closeFile() {
 		try {
@@ -68,7 +60,7 @@ public class EventWriterParquet implements EventWriter, BasicEventHandler {
 	}
 
 	public static void main(String[] args) throws IOException {
-		matsimParquetWriter("C:\\dev\\msf\\output\\austinWithSpeedProfile\\ITERS\\it.0\\0.events.xml.zst","C:\\dev\\tmp\\events2.parquet");
+		matsimParquetWriter("C:\\dev\\msf\\output\\austinWithSpeedProfile\\ITERS\\it.0\\0.events.xml.zst","C:\\dev\\tmp\\events3.parquet");
 	}
 
 	private static long matsimParquetWriter(String input, String outout) throws IOException {
@@ -89,7 +81,7 @@ public class EventWriterParquet implements EventWriter, BasicEventHandler {
 		return AvroParquetWriter.<GenericData.Record>builder(HadoopOutputFile.fromPath(filePath,new Configuration()))
 				.withCompressionCodec(CompressionCodecName.ZSTD)
 				.withPageSize(ParquetWriter.DEFAULT_PAGE_SIZE)
-				.withWriteMode(Mode.OVERWRITE)
+				.withWriteMode(ParquetFileWriter.Mode.OVERWRITE)
 				.withSchema(RECORD_SCHEMA)
 				.withValidation(false)
 				.withDictionaryEncoding(true)
