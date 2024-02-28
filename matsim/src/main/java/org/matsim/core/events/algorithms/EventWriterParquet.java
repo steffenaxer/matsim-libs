@@ -51,7 +51,7 @@ public class EventWriterParquet implements EventWriter, BasicEventHandler {
 	}
 
 	public static void main(String[] args) throws IOException {
-		matsimParquetWriter("C:\\dev\\msf\\output\\austinWithSpeedProfile\\ITERS\\it.0\\0.events.xml.zst","C:\\dev\\tmp\\events3.parquet");
+		matsimParquetWriter("C:\\Users\\vwbidgn\\Downloads\\berlin-v5.5.3-10pct.output_events.xml.gz","C:\\dev\\tmp\\events3.parquet");
 	}
 
 	private static long matsimParquetWriter(String input, String outout) throws IOException {
@@ -72,7 +72,6 @@ public class EventWriterParquet implements EventWriter, BasicEventHandler {
 		return  CarpetParquetWriter.builder(outputStream, EventRecord.class)
         .withWriteMode(Mode.OVERWRITE)
         .withCompressionCodec(CompressionCodecName.ZSTD)
-        .withPageRowCountLimit(100_000)
         .build();
 	}
 
