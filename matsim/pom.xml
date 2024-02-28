@@ -126,45 +126,10 @@
 	<!-- parquet -->
 	<dependencies>
 		<dependency>
-			<groupId>org.apache.hadoop</groupId>
-			<artifactId>hadoop-client</artifactId>
-			<version>3.3.6</version>
+			<groupId>com.jerolba</groupId>
+			<artifactId>carpet-record</artifactId>
+			<version>0.0.11</version>
 		</dependency>
-		<dependency>
-			<groupId>org.apache.hadoop</groupId>
-			<artifactId>hadoop-mapreduce-client-core</artifactId>
-			<version>3.3.6</version>
-		</dependency>
-		<!-- <dependency>
-			<groupId>org.apache.hadoop</groupId>
-			<artifactId>hadoop-hdfs-client</artifactId>
-			<version>3.3.6</version>
-		</dependency> -->
-		<dependency>
-			<groupId>org.apache.parquet</groupId>
-			<artifactId>parquet-hadoop</artifactId>
-			<version>1.13.1</version>
-		</dependency>
-		<dependency>
-			<groupId>org.apache.parquet</groupId>
-			<artifactId>parquet-avro</artifactId>
-			<version>1.13.1</version>
-		</dependency>
-		<dependency>
-			<groupId>org.apache.parquet</groupId>
-			<artifactId>parquet-common</artifactId>
-			<version>1.13.1</version>
-		</dependency>
-		<dependency>
-			<groupId>org.apache.avro</groupId>
-			<artifactId>avro</artifactId>
-			<version>1.11.3</version>
-		</dependency>
-		<!-- <dependency>
-			<groupId>org.apache.parquet</groupId>
-			<artifactId>parquet-format</artifactId>
-			<version>2.10.0</version>
-		</dependency> -->
 	<!-- parquet -->
 	
 		<dependency>

@@ -1,21 +1,14 @@
 package org.matsim.core.events.algorithms;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
-import java.util.stream.Collectors;
-
-import org.apache.avro.generic.GenericRecord;
-import org.apache.avro.util.Utf8;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.parquet.avro.AvroParquetReader;
-import org.apache.parquet.hadoop.ParquetReader;
-import org.apache.parquet.hadoop.util.HadoopInputFile;
 import org.matsim.api.core.v01.Coord;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.events.ActivityEndEvent;
@@ -50,6 +43,7 @@ import org.matsim.core.api.internal.MatsimReader;
 import org.matsim.core.events.EventsUtils;
 import org.matsim.core.events.MatsimEventsReader;
 import org.matsim.core.events.MatsimEventsReader.CustomEventMapper;
+import org.matsim.core.events.algorithms.EventWriterParquet.EventRecord;
 import org.matsim.facilities.ActivityFacility;
 import org.matsim.pt.transitSchedule.api.Departure;
 import org.matsim.pt.transitSchedule.api.TransitLine;
@@ -57,74 +51,67 @@ import org.matsim.pt.transitSchedule.api.TransitRoute;
 import org.matsim.pt.transitSchedule.api.TransitStopFacility;
 import org.matsim.vehicles.Vehicle;
 
+import com.jerolba.carpet.CarpetReader;
+
 public class EventReaderParquet implements MatsimReader {
-    private static final Logger LOG = LogManager.getLogger(EventReaderParquet.class);
-    private ParquetReader<GenericRecord> reader;
+    private CarpetReader<EventRecord> reader;
     private final EventsManager events;
     private final Map<String, CustomEventMapper> customEventMappers = new HashMap<>();
 
     public EventReaderParquet(final EventsManager events) {
         this.events = events;
-
     }
 
     public static void main(String[] args) {
         EventsManager eventsManager = EventsUtils.createEventsManager();
         EventReaderParquet eventsReader = new EventReaderParquet(eventsManager);
         eventsManager.initProcessing();
-        eventsReader.readFile("C:\\dev\\tmp\\events2.parquet");
+        eventsReader.readFile("C:\\dev\\tmp\\events3.parquet");
         eventsManager.finishProcessing();
     }
 
-    private ParquetReader<GenericRecord> getReader(Path filename) throws IOException {
-        return AvroParquetReader.genericRecordReader(HadoopInputFile.fromPath(filename, new Configuration()));
+    private CarpetReader<EventRecord> getReader(File filename) {
+        return new CarpetReader<>(filename, EventRecord.class);
     }
 
     @Override
     public void readURL(URL url) {
         try {
-            this.reader = getReader(new Path(url.toURI()));
-            this.read();
-            this.reader.close();
-        } catch (IOException | URISyntaxException e) {
+            this.reader = getReader(new File(url.toURI()));
+        } catch (URISyntaxException e) {
             e.printStackTrace();
+            throw new IllegalStateException(e);
         }
+        this.read();
     }
 
     @Override
     public void readFile(String filename) {
-        try {
-            this.reader = getReader(new Path(filename));
+            this.reader = getReader(new File(filename));
             this.read();
-            this.reader.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
     }
 
-    private void read() throws IOException {
-        Object obj = reader.read();
-        while (obj != null) {
-            if (obj instanceof GenericRecord genericRecord) {
-                this.processEvent(genericRecord);
-            }
-            obj = reader.read();
+    private void read() {
+        Iterator<EventRecord> iterator = reader.iterator();
+        while (iterator.hasNext()) {
+            EventRecord r = iterator.next();
+            processEvent(r);
         }
     }
 
     static class AttributeAdapter {
-        final GenericRecord genericRecord;
+        final EventRecord eventRecord;
         final Map<String, String> attributes;
 
-        AttributeAdapter(GenericRecord genericRecord) {
-            this.genericRecord = genericRecord;
-            this.attributes = mapToStringMap(genericRecord);
+        AttributeAdapter(EventRecord eventRecord) {
+            this.eventRecord = eventRecord;
+            this.attributes = eventRecord.attributes();
             this.addBasicData();
         }
 
         private void addBasicData() {
-            this.attributes.put(("time"), genericRecord.get("time").toString());
-            this.attributes.put("type", genericRecord.get("type").toString());
+            this.attributes.put(("time"), String.valueOf(eventRecord.time()));
+            this.attributes.put("type", eventRecord.tpye());
         }
 
         public String getValue(String key) {
@@ -138,18 +125,10 @@ public class EventReaderParquet implements MatsimReader {
         public Map<String, String> getMap() {
             return attributes;
         }
-
-        @SuppressWarnings("unchecked")
-        private static Map<String, String> mapToStringMap(GenericRecord genericRecord) {
-            Map<Utf8, Utf8> utf8Map = (Map<Utf8, Utf8>) genericRecord.get("attributes");
-
-            return new HashMap<>(utf8Map.entrySet().stream()
-                    .collect(Collectors.toMap(e -> e.getKey().toString(), e -> e.getValue().toString())));
-        }
     }
 
-    private void processEvent(GenericRecord genericRecord) {
-        startEvent(new AttributeAdapter(genericRecord));
+    private void processEvent(EventRecord eventRecord) {
+        startEvent(new AttributeAdapter(eventRecord));
     }
 
     // This is a copy from EventsReaderXMLv1. Could should be centralized.

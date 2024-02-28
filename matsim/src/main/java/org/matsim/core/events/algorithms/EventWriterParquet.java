@@ -1,45 +1,36 @@
 package org.matsim.core.events.algorithms;
 
+import java.io.FileOutputStream;
 import java.io.IOException;
-import org.apache.avro.Schema;
-import org.apache.avro.SchemaBuilder;
-import org.apache.avro.generic.GenericData;
+import java.util.Map;
+
+
 import org.apache.commons.lang3.time.StopWatch;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
-import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
-import org.apache.parquet.hadoop.ParquetFileWriter;
+import org.apache.parquet.hadoop.ParquetFileWriter.Mode;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
-import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.matsim.api.core.v01.events.Event;
 import org.matsim.core.api.experimental.events.EventsManager;
 import org.matsim.core.events.EventsUtils;
 import org.matsim.core.events.handler.BasicEventHandler;
 
+import com.jerolba.carpet.CarpetParquetWriter;
+import com.jerolba.carpet.io.OutputStreamOutputFile;
+
 /**
  * @author steffenaxer
  */
 public class EventWriterParquet implements EventWriter, BasicEventHandler {
-	private static final Schema RECORD_SCHEMA = getMapSchema();
-	private final ParquetWriter<GenericData.Record> writer;
+	private final ParquetWriter<EventRecord> writer;
+	private final OutputStreamOutputFile output ;
 
 	EventWriterParquet(String filePath) throws IOException {
-		Path p = new Path(filePath);
-		this.writer = getWriter(p);
+		this.output = new OutputStreamOutputFile(new FileOutputStream(filePath));
+		this.writer = getWriter(output);
 	}
 
-	public static Schema getMapSchema() {
 
-		final Schema valueType = SchemaBuilder.builder().stringType();
-
-		return SchemaBuilder.builder("org.matsim").record("event")
-				.fields()
-				.name("time").type(Schema.create(Schema.Type.DOUBLE)).noDefault()
-				.name("type").type(Schema.create(Schema.Type.STRING)).noDefault()
-				.name("attributes").type(Schema.createMap(valueType)).noDefault()
-				.endRecord();
-	}
+	public record EventRecord(double time, String tpye, Map<String, String> attributes) {}
 
 	@Override
 	public void closeFile() {
@@ -53,7 +44,7 @@ public class EventWriterParquet implements EventWriter, BasicEventHandler {
 	@Override
 	public void handleEvent(Event event) {
 		try {
-			this.writer.write(getRecord(event));
+			this.writer.write(new EventRecord(event.getTime(),event.getEventType(),event.getAttributes()));
 		} catch (IOException e) {
 			throw new RuntimeException(e);
 		}
@@ -77,22 +68,12 @@ public class EventWriterParquet implements EventWriter, BasicEventHandler {
 		return watch.getTime();
 	}
 
-	ParquetWriter<GenericData.Record> getWriter(Path filePath) throws IOException {
-		return AvroParquetWriter.<GenericData.Record>builder(HadoopOutputFile.fromPath(filePath,new Configuration()))
-				.withCompressionCodec(CompressionCodecName.ZSTD)
-				.withPageSize(ParquetWriter.DEFAULT_PAGE_SIZE)
-				.withWriteMode(ParquetFileWriter.Mode.OVERWRITE)
-				.withSchema(RECORD_SCHEMA)
-				.withValidation(false)
-				.withDictionaryEncoding(true)
-				.build();
+	ParquetWriter<EventRecord> getWriter(OutputStreamOutputFile outputStream) throws IOException {
+		return  CarpetParquetWriter.builder(outputStream, EventRecord.class)
+        .withWriteMode(Mode.OVERWRITE)
+        .withCompressionCodec(CompressionCodecName.ZSTD)
+        .withPageRowCountLimit(100_000)
+        .build();
 	}
 
-	private static GenericData.Record getRecord(Event event) {
-		GenericData.Record r = new GenericData.Record(RECORD_SCHEMA);
-		r.put("time", event.getTime());
-		r.put("type", event.getEventType());
-		r.put("attributes", event.getAttributes());
-		return r;
-	}
 }
