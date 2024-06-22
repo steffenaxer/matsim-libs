@@ -57,13 +57,12 @@ final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch, Mobs
 	private final InsertionCostCalculator insertionCostCalculator;
 	private final MatsimServices matsimServices;
 	private final String mode;
-	private final TravelTimeMatrix travelTimeMatrix;
 	private final AdaptiveTravelTimeMatrix adaptiveTravelTimeMatrix;
 	private final RepeatedSelectiveInsertionSearchParams insertionSearchParams;
 
 	public RepeatedSelectiveInsertionSearch(RepeatedSelectiveInsertionProvider insertionProvider,
 											SingleInsertionDetourPathCalculator detourPathCalculator, InsertionCostCalculator insertionCostCalculator,
-											DrtConfigGroup drtCfg, MatsimServices matsimServices, StopTimeCalculator stopTimeCalculator, TravelTimeMatrix travelTimeMatrix, AdaptiveTravelTimeMatrix adaptiveTravelTimeMatrix) {
+											DrtConfigGroup drtCfg, MatsimServices matsimServices, StopTimeCalculator stopTimeCalculator, AdaptiveTravelTimeMatrix adaptiveTravelTimeMatrix) {
 		this.insertionSearchParams = (RepeatedSelectiveInsertionSearchParams) drtCfg.getDrtInsertionSearchParams();
 		this.insertionProvider = insertionProvider;
 		this.detourPathCalculator = detourPathCalculator;
@@ -71,7 +70,6 @@ final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch, Mobs
 		this.detourTimeCalculator = new InsertionDetourTimeCalculator(stopTimeCalculator, null);
 		this.matsimServices = matsimServices;
 		this.mode = drtCfg.getMode();
-		this.travelTimeMatrix = travelTimeMatrix;
 		this.adaptiveTravelTimeMatrix = adaptiveTravelTimeMatrix;
 	}
 
@@ -102,7 +100,7 @@ final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch, Mobs
 
             // For each realized routing, we update the adaptiveTravelTimeMatrix
 			// The idea is to get a passively updated travel time estimation, without additional routing costs
-            updateMatrix(drtRequest, travelTimeMatrix, adaptiveTravelTimeMatrix, insertionWithDetourData);
+            updateMatrix(drtRequest, adaptiveTravelTimeMatrix, insertionWithDetourData);
 
             if (insertionCost < INFEASIBLE_SOLUTION_COST) {
                 return Optional.of(insertionWithDetourData);
@@ -122,14 +120,14 @@ final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch, Mobs
 				dropoffTimeLossStats);
 	}
 
-	private void updateMatrix(DrtRequest request, TravelTimeMatrix travelTimeMatrix, AdaptiveTravelTimeMatrix updatableTravelTimeMatrix, InsertionWithDetourData insertionWithDetourData) {
-		updateMatrix(request, travelTimeMatrix, updatableTravelTimeMatrix, insertionWithDetourData.detourData.detourToPickup);
-		updateMatrix(request, travelTimeMatrix, updatableTravelTimeMatrix, insertionWithDetourData.detourData.detourFromPickup);
-		updateMatrix(request, travelTimeMatrix, updatableTravelTimeMatrix, insertionWithDetourData.detourData.detourToDropoff);
-		updateMatrix(request, travelTimeMatrix, updatableTravelTimeMatrix, insertionWithDetourData.detourData.detourFromDropoff);
+	private void updateMatrix(DrtRequest request, AdaptiveTravelTimeMatrix updatableTravelTimeMatrix, InsertionWithDetourData insertionWithDetourData) {
+		updateMatrix(request, updatableTravelTimeMatrix, insertionWithDetourData.detourData.detourToPickup);
+		updateMatrix(request, updatableTravelTimeMatrix, insertionWithDetourData.detourData.detourFromPickup);
+		updateMatrix(request, updatableTravelTimeMatrix, insertionWithDetourData.detourData.detourToDropoff);
+		updateMatrix(request, updatableTravelTimeMatrix, insertionWithDetourData.detourData.detourFromDropoff);
 	}
 
-	private static void updateMatrix(DrtRequest request, TravelTimeMatrix travelTimeMatrix, AdaptiveTravelTimeMatrix updatableTravelTimeMatrix, OneToManyPathSearch.PathData pathData) {
+	private static void updateMatrix(DrtRequest request, AdaptiveTravelTimeMatrix updatableTravelTimeMatrix, OneToManyPathSearch.PathData pathData) {
 		if(pathData!=null && pathData.getPath().links!=null)
 		{
 			LeastCostPathCalculator.Path path = pathData.getPath();

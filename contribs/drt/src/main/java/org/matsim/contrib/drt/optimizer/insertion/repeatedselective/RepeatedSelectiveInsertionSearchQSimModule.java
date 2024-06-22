@@ -43,7 +43,7 @@ import org.matsim.core.router.util.TravelTime;
  */
 public class RepeatedSelectiveInsertionSearchQSimModule extends AbstractDvrpModeQSimModule {
     private static final double SPEED_FACTOR = 1.;
-    
+
     private final DrtConfigGroup drtCfg;
 
     public RepeatedSelectiveInsertionSearchQSimModule(DrtConfigGroup drtCfg) {
@@ -58,7 +58,7 @@ public class RepeatedSelectiveInsertionSearchQSimModule extends AbstractDvrpMode
 					SPEED_FACTOR, getter.getModal(AdaptiveTravelTimeMatrix.class), getter.getModal(TravelTime.class));
 			return detourTimeEstimatorWithUpdatedTravelTimes;
 		}));
-    	
+
         addModalComponent(RepeatedSelectiveInsertionSearch.class, modalProvider(getter -> {
 			RepeatedSelectiveInsertionProvider provider = RepeatedSelectiveInsertionProvider.create(
 					getter.getModal(InsertionCostCalculator.class),
@@ -68,7 +68,7 @@ public class RepeatedSelectiveInsertionSearchQSimModule extends AbstractDvrpMode
             return new RepeatedSelectiveInsertionSearch(provider,
                     getter.getModal(SingleInsertionDetourPathCalculator.class),
                     insertionCostCalculator, drtCfg, getter.get(MatsimServices.class),
-                    getter.getModal(StopTimeCalculator.class), getter.getModal(TravelTimeMatrix.class),
+                    getter.getModal(StopTimeCalculator.class),
                     getter.getModal(AdaptiveTravelTimeMatrix.class));
         }));
         bindModal(DrtInsertionSearch.class).to(modalKey(RepeatedSelectiveInsertionSearch.class));
