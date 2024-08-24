@@ -28,10 +28,6 @@ public class ShiftsParams extends ReflectiveConfigGroupWithConfigurableParameter
 	public String shiftInputFile;
 
 	@Parameter
-	@Comment("allow modifiable shift end times")
-	public boolean modifiableShiftEndTimes = false;
-
-	@Parameter
 	@Comment("changeover duration in [seconds]")
 	public double changeoverDuration = 900;
 
