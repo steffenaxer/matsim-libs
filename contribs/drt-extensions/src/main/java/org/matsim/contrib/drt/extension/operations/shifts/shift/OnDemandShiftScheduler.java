@@ -64,11 +64,10 @@ public class OnDemandShiftScheduler implements ShiftScheduler {
 	private void unassignShifts(double simStep, Fleet fleet) {
 		fleet.getVehicles().values().stream().filter(v -> this.shouldUnassignLogic((ShiftDvrpVehicle) v, simStep))
 			.forEach(v -> {
-				var tasks = v.getSchedule().getTasks();
-				double endTime = tasks.get(tasks.size() - 2).getEndTime();
 				DynamicDrtShiftImpl dynamicDrtShift = (DynamicDrtShiftImpl) ((ShiftDvrpVehicle) v).getShifts().peek();
 				if (dynamicDrtShift != null) {
-					dynamicDrtShift.setEndTime(endTime);
+					//Unassign now!
+					dynamicDrtShift.setEndTime(simStep);
 				}
 			});
 	}
