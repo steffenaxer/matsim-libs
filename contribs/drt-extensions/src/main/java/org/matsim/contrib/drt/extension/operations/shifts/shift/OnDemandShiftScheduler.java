@@ -34,7 +34,6 @@ public class OnDemandShiftScheduler implements ShiftScheduler {
 	private final DrtShiftsSpecification shiftsSpecification;
 	private final ReassignLogic reassignLogic;
 	private final UnassignLogic unassignLogic;
-	private Map<DvrpVehicle, Double> offlineVehicleMap;
 
 	public OnDemandShiftScheduler(DrtShiftsSpecification shiftsSpecification,
 								  ReassignLogic reassignLogic, UnassignLogic unassignLogic) {
