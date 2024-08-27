@@ -16,6 +16,7 @@ import java.util.UUID;
  */
 public class FixedTimeReassignLogic implements ReassignLogic {
 	double maxUnassignedTime;
+	double doNotAssignBuffer = 3600;
 
 	public FixedTimeReassignLogic(double maxUnassignedTime) {
 		this.maxUnassignedTime = maxUnassignedTime;
@@ -25,13 +26,18 @@ public class FixedTimeReassignLogic implements ReassignLogic {
 	@Override
 	public Optional<DrtShiftSpecification> shouldReassign(ShiftDvrpVehicle shiftDvrpVehicle, double time) {
 
+		double shiftStartTime = time + 1;
+		double shiftEndTime = shiftDvrpVehicle.getServiceEndTime() - doNotAssignBuffer;
+
 		if (shiftDvrpVehicle.getSchedule().getStatus() == Schedule.ScheduleStatus.STARTED
 			&& shiftDvrpVehicle.getSchedule().getCurrentTask() instanceof WaitForShiftTask
-			&& (time - shiftDvrpVehicle.getSchedule().getCurrentTask().getBeginTime()) > maxUnassignedTime) {
-			DrtShiftSpecificationImpl.Builder builder =  DrtShiftSpecificationImpl.newBuilder() ;
+			&& (time - shiftDvrpVehicle.getSchedule().getCurrentTask().getBeginTime()) > maxUnassignedTime
+			&& (shiftDvrpVehicle.getServiceEndTime() - time) > doNotAssignBuffer
+			&& shiftStartTime < shiftEndTime) {
+			DrtShiftSpecificationImpl.Builder builder = DrtShiftSpecificationImpl.newBuilder();
 			builder.id(Id.create(UUID.randomUUID().toString(), DrtShift.class));
 			builder.start(time + 1);
-			builder.end(shiftDvrpVehicle.getSpecification().getServiceEndTime());
+			builder.end(shiftDvrpVehicle.getServiceEndTime() - doNotAssignBuffer);
 			builder.designatedVehicle(shiftDvrpVehicle.getId());
 			return Optional.of(builder.build());
 		}

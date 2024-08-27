@@ -8,6 +8,7 @@ import org.matsim.contrib.dvrp.schedule.Schedule;
  * @author steffenaxer
  */
 public class FixedTimeUnassignLogic implements UnassignLogic {
+	double doNotUnassignBuffer = 3600.;
 	double maxAssignedTime;
 
 	public FixedTimeUnassignLogic(double maxAssignedTime) {
@@ -20,7 +21,9 @@ public class FixedTimeUnassignLogic implements UnassignLogic {
 		if (shiftDvrpVehicle.getSchedule().getStatus() == Schedule.ScheduleStatus.STARTED &&
 			currentShift != null &&
 			currentShift.isStarted() &&
-			!currentShift.isEnded()) {
+			!currentShift.isEnded() &&
+			(shiftDvrpVehicle.getServiceEndTime() - time)> doNotUnassignBuffer
+		) {
 			double shiftDuration = time - currentShift.getStartTime();
 			return shiftDuration > maxAssignedTime;
 		}

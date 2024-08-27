@@ -20,8 +20,8 @@ public class OnDemandShiftLogicModule extends AbstractDvrpModeModule {
 
 	@Override
 	public void install() {
-		bindModal(ReassignLogic.class).toProvider(modalProvider(getter -> new FixedTimeReassignLogic(3600.))).asEagerSingleton();
-		bindModal(UnassignLogic.class).toProvider(modalProvider(getter -> new FixedTimeUnassignLogic(3600.))).asEagerSingleton();
+		bindModal(ReassignLogic.class).toProvider(modalProvider(getter -> new FixedTimeReassignLogic(3600))).asEagerSingleton();
+		bindModal(UnassignLogic.class).toProvider(modalProvider(getter -> new FixedTimeUnassignLogic(3600))).asEagerSingleton();
 
 		bindModal(ShiftScheduler.class).toProvider(modalProvider(getter -> new OnDemandShiftScheduler(
 			new DrtShiftsSpecificationImpl(), // Only use on demand shifts

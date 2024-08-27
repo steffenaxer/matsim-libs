@@ -1,12 +1,14 @@
-package org.matsim.contrib.drt.extension.operations.shifts.run;
+package org.matsim.contrib.drt.extension.operations.eshifts.run;
 
 import org.junit.jupiter.api.Test;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.contrib.common.zones.systems.grid.square.SquareGridZoneSystemParams;
 import org.matsim.contrib.drt.analysis.zonal.DrtZoneSystemParams;
 import org.matsim.contrib.drt.extension.DrtWithExtensionsConfigGroup;
+import org.matsim.contrib.drt.extension.maintenance.MaintenanceQSimModule;
 import org.matsim.contrib.drt.extension.operations.DrtOperationsControlerCreator;
 import org.matsim.contrib.drt.extension.operations.DrtOperationsParams;
+import org.matsim.contrib.drt.extension.operations.EDrtOperationsControlerCreator;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilitiesParams;
 import org.matsim.contrib.drt.extension.operations.shifts.config.ShiftsParams;
 import org.matsim.contrib.drt.extension.operations.shifts.shift.*;
@@ -17,7 +19,11 @@ import org.matsim.contrib.drt.optimizer.rebalancing.RebalancingParams;
 import org.matsim.contrib.drt.optimizer.rebalancing.mincostflow.MinCostFlowRebalancingStrategyParams;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
+import org.matsim.contrib.dvrp.run.AbstractDvrpModeQSimModule;
 import org.matsim.contrib.dvrp.run.DvrpConfigGroup;
+import org.matsim.contrib.ev.EvConfigGroup;
+import org.matsim.contrib.ev.charging.*;
+import org.matsim.contrib.ev.temperature.TemperatureService;
 import org.matsim.contrib.zone.skims.DvrpTravelTimeMatrixParams;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigGroup;
@@ -25,6 +31,7 @@ import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.config.groups.QSimConfigGroup;
 import org.matsim.core.config.groups.ReplanningConfigGroup;
 import org.matsim.core.config.groups.ScoringConfigGroup;
+import org.matsim.core.controler.AbstractModule;
 import org.matsim.core.controler.Controler;
 import org.matsim.core.controler.OutputDirectoryHierarchy;
 import org.matsim.examples.ExamplesUtils;
@@ -33,6 +40,9 @@ import java.util.HashSet;
 import java.util.Set;
 
 public class RunOnDemandShiftDrtScenarioIT {
+	private static final double MAX_RELATIVE_SOC = 0.9;// charge up to 80% SOC
+	private static final double MIN_RELATIVE_SOC = 0.15;// send to chargers vehicles below 20% SOC
+	private static final double TEMPERATURE = 20;// oC
 
     @Test
     void test() {
@@ -43,6 +53,8 @@ public class RunOnDemandShiftDrtScenarioIT {
         String plansFile = "holzkirchenPlans.xml.gz";
         String networkFile = "holzkirchenNetwork.xml.gz";
         String opFacilitiesFile = "holzkirchenOperationFacilities.xml";
+		String chargersFile =  "holzkirchenChargers.xml";
+		String evsFile =  "holzkirchenElectricFleet.xml";
 
         DrtWithExtensionsConfigGroup drtWithShiftsConfigGroup = (DrtWithExtensionsConfigGroup) multiModeDrtConfigGroup.createParameterSet("drt");
 
@@ -142,6 +154,11 @@ public class RunOnDemandShiftDrtScenarioIT {
 
         operationFacilitiesParams.operationFacilityInputFile = opFacilitiesFile;
         shiftsParams.allowInFieldChangeover = true;
+		shiftsParams.shiftAssignmentBatteryThreshold= 0.4;
+		shiftsParams.chargeAtHubThreshold = 0.8;
+		shiftsParams.outOfShiftChargerType = "slow";
+		shiftsParams.breakChargerType = "fast";
+
         drtWithShiftsConfigGroup.addParameterSet(operationsParams);
 
         DrtFareParams drtFareParams = new DrtFareParams();
@@ -149,9 +166,33 @@ public class RunOnDemandShiftDrtScenarioIT {
         drtFareParams.distanceFare_m = 1. / 1000;
         drtWithShiftsConfigGroup.addParameterSet(drtFareParams);
 
-        final Controler run = DrtOperationsControlerCreator.createControler(config, false);
+		final EvConfigGroup evConfigGroup = new EvConfigGroup();
+		evConfigGroup.chargersFile = chargersFile;
+		evConfigGroup.minimumChargeTime = 0;
+		evConfigGroup.timeProfiles = true;
+		config.addModule(evConfigGroup);
+
+		config.vehicles().setVehiclesFile(evsFile);
+
+        final Controler run = EDrtOperationsControlerCreator.createControler(config, false);
+
+		run.addOverridingQSimModule(new AbstractDvrpModeQSimModule(drtWithShiftsConfigGroup.getMode()) {
+			@Override
+			protected void configureQSim() {
+				install(new MaintenanceQSimModule(drtWithShiftsConfigGroup));
+			}
+		});
 
         run.addOverridingModule(new OnDemandShiftLogicModule(drtWithShiftsConfigGroup));
+		run.addOverridingModule(new AbstractModule() {
+			@Override
+			public void install() {
+				bind(ChargingLogic.Factory.class).toProvider(new ChargingWithQueueingAndAssignmentLogic.FactoryProvider(
+					charger -> new ChargeUpToMaxSocStrategy(charger, MAX_RELATIVE_SOC)));
+				bind(ChargingPower.Factory.class).toInstance(FastThenSlowCharging::new);
+				bind(TemperatureService.class).toInstance(linkId -> TEMPERATURE);
+			}
+		});
 
         run.run();
     }
