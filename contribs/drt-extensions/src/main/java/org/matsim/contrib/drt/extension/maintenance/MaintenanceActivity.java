@@ -4,10 +4,10 @@ import org.matsim.contrib.dynagent.DynActivity;
 
 public class MaintenanceActivity implements DynActivity {
 	public static final String ACTIVITY_TYPE = "Maintenance";
-	private final MaintenanceTask maintenanceTask;
+	private final EDrtMaintenanceTask EDrtMaintenanceTask;
 
-	public MaintenanceActivity(MaintenanceTask maintenanceTask) {
-		this.maintenanceTask = maintenanceTask;
+	public MaintenanceActivity(EDrtMaintenanceTask EDrtMaintenanceTask) {
+		this.EDrtMaintenanceTask = EDrtMaintenanceTask;
 	}
 
 	@Override
@@ -17,7 +17,7 @@ public class MaintenanceActivity implements DynActivity {
 
 	@Override
 	public double getEndTime() {
-		return maintenanceTask.getEndTime();
+		return EDrtMaintenanceTask.getEndTime();
 	}
 
 	@Override

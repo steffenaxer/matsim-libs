@@ -1,15 +1,6 @@
 package org.matsim.contrib.drt.extension.maintenance;
 
-import org.matsim.contrib.drt.extension.operations.eshifts.charging.ChargingBreakActivity;
-import org.matsim.contrib.drt.extension.operations.eshifts.charging.ChargingChangeoverActivity;
-import org.matsim.contrib.drt.extension.operations.eshifts.charging.ChargingWaitForShiftActivity;
-import org.matsim.contrib.drt.extension.operations.eshifts.schedule.EDrtShiftBreakTaskImpl;
-import org.matsim.contrib.drt.extension.operations.eshifts.schedule.EDrtShiftChangeoverTaskImpl;
-import org.matsim.contrib.drt.extension.operations.eshifts.schedule.EDrtWaitForShiftTask;
-import org.matsim.contrib.drt.passenger.DrtStopActivity;
-import org.matsim.contrib.drt.schedule.DrtStopTask;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
-import org.matsim.contrib.dvrp.passenger.PassengerHandler;
 import org.matsim.contrib.dvrp.schedule.Task;
 import org.matsim.contrib.dvrp.vrpagent.VrpAgentLogic;
 import org.matsim.contrib.dynagent.DynAction;
@@ -33,9 +24,9 @@ public class MaintenanceDynActionCreator implements VrpAgentLogic.DynActionCreat
 	public DynAction createAction(DynAgent dynAgent, DvrpVehicle vehicle, double now) {
 
 		Task task = vehicle.getSchedule().getCurrentTask();
-		if (task instanceof MaintenanceTask maintenanceTask) {
+		if (task instanceof EDrtMaintenanceTask EDrtMaintenanceTask) {
 			task.initTaskTracker(new OfflineETaskTracker((EvDvrpVehicle) vehicle, timer));
-			return new MaintenanceActivity(maintenanceTask);
+			return new MaintenanceActivity(EDrtMaintenanceTask);
 		}
 
 		DynAction dynAction = delegate.createAction(dynAgent, vehicle, now);
