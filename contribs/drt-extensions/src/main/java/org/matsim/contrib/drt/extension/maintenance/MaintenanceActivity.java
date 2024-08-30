@@ -1,13 +1,14 @@
 package org.matsim.contrib.drt.extension.maintenance;
 
+import org.matsim.contrib.drt.extension.maintenance.tasks.DrtMaintenanceTask;
 import org.matsim.contrib.dynagent.DynActivity;
 
 public class MaintenanceActivity implements DynActivity {
 	public static final String ACTIVITY_TYPE = "Maintenance";
-	private final EDrtMaintenanceTask EDrtMaintenanceTask;
+	private final DrtMaintenanceTask drtMaintenanceTask;
 
-	public MaintenanceActivity(EDrtMaintenanceTask EDrtMaintenanceTask) {
-		this.EDrtMaintenanceTask = EDrtMaintenanceTask;
+	public MaintenanceActivity(DrtMaintenanceTask drtMaintenanceTask) {
+		this.drtMaintenanceTask = drtMaintenanceTask;
 	}
 
 	@Override
@@ -17,7 +18,7 @@ public class MaintenanceActivity implements DynActivity {
 
 	@Override
 	public double getEndTime() {
-		return EDrtMaintenanceTask.getEndTime();
+		return this.drtMaintenanceTask.getEndTime();
 	}
 
 	@Override

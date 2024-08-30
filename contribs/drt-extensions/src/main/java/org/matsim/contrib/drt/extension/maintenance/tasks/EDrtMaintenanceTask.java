@@ -1,4 +1,4 @@
-package org.matsim.contrib.drt.extension.maintenance;
+package org.matsim.contrib.drt.extension.maintenance.tasks;
 
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacility;

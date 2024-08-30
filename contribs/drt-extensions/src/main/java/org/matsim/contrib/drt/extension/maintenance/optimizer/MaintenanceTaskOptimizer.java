@@ -1,6 +1,6 @@
-package org.matsim.contrib.drt.extension.maintenance;
+package org.matsim.contrib.drt.extension.maintenance.optimizer;
 
-import org.matsim.contrib.drt.extension.operations.shifts.dispatcher.DrtShiftDispatcher;
+import org.matsim.contrib.drt.extension.maintenance.dispatcher.MaintenanceTaskDispatcher;
 import org.matsim.contrib.drt.extension.operations.shifts.optimizer.ShiftDrtOptimizer;
 import org.matsim.contrib.drt.optimizer.DrtOptimizer;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;

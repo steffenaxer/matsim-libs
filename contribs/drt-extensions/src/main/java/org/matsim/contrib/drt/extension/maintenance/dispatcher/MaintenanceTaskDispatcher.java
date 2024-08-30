@@ -1,4 +1,4 @@
-package org.matsim.contrib.drt.extension.maintenance;
+package org.matsim.contrib.drt.extension.maintenance.dispatcher;
 
 /**
  * @author steffenaxer

@@ -1,5 +1,6 @@
 package org.matsim.contrib.drt.extension.maintenance;
 
+import org.matsim.contrib.drt.extension.maintenance.tasks.EDrtMaintenanceTask;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.schedule.Task;
 import org.matsim.contrib.dvrp.vrpagent.VrpAgentLogic;
@@ -12,11 +13,11 @@ import org.matsim.core.mobsim.framework.MobsimTimer;
 /**
  * @author steffenaxer
  */
-public class MaintenanceDynActionCreator implements VrpAgentLogic.DynActionCreator {
+public class EDrtMaintenanceDynActionCreator implements VrpAgentLogic.DynActionCreator {
 	private final VrpAgentLogic.DynActionCreator delegate;
 	private final MobsimTimer timer;
 
-	public MaintenanceDynActionCreator(VrpAgentLogic.DynActionCreator delegate, MobsimTimer timer) {
+	public EDrtMaintenanceDynActionCreator(VrpAgentLogic.DynActionCreator delegate, MobsimTimer timer) {
 		this.delegate = delegate;
 		this.timer = timer;
 	}
