@@ -3,12 +3,13 @@ package org.matsim.contrib.drt.extension.maintenance;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.drt.extension.maintenance.dispatcher.MaintenanceTaskDispatcher;
 import org.matsim.contrib.drt.extension.maintenance.dispatcher.MaintenanceTaskDispatcherImpl;
-import org.matsim.contrib.drt.extension.maintenance.logic.MaintenanceLogic;
-import org.matsim.contrib.drt.extension.maintenance.logic.StopBasedMaintenanceLogic;
+import org.matsim.contrib.drt.extension.maintenance.logic.*;
 import org.matsim.contrib.drt.extension.maintenance.optimizer.MaintenanceTaskOptimizer;
 import org.matsim.contrib.drt.extension.maintenance.scheduler.MaintenanceTaskScheduler;
 import org.matsim.contrib.drt.extension.maintenance.scheduler.MaintenanceTaskSchedulerImpl;
-import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilities;
+import org.matsim.contrib.drt.extension.maintenance.tasks.DrtMaintenanceTaskFactoryImpl;
+import org.matsim.contrib.drt.extension.maintenance.tasks.MaintenanceTaskFactory;
+import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilityFinder;
 import org.matsim.contrib.drt.optimizer.DefaultDrtOptimizer;
 import org.matsim.contrib.drt.optimizer.DrtOptimizer;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
@@ -18,6 +19,7 @@ import org.matsim.contrib.drt.optimizer.rebalancing.RebalancingStrategy;
 import org.matsim.contrib.drt.prebooking.PrebookingActionCreator;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.schedule.DrtTaskFactory;
+import org.matsim.contrib.drt.schedule.DrtTaskFactoryImpl;
 import org.matsim.contrib.drt.scheduler.DrtScheduleInquiry;
 import org.matsim.contrib.drt.scheduler.EmptyVehicleRelocator;
 import org.matsim.contrib.drt.vrpagent.DrtActionCreator;
@@ -50,36 +52,11 @@ public class DrtMaintenanceQSimModule extends AbstractDvrpModeQSimModule {
 
 		bindModal(VrpAgentLogic.DynActionCreator.class).to(modalKey(DrtMaintenanceDynActionCreator.class));
 
-		bindModal(MaintenanceLogic.class).toProvider(modalProvider(getter -> new StopBasedMaintenanceLogic(30)))
-			.asEagerSingleton();
 
-		bindModal(MaintenanceTaskDispatcher.class).toProvider(modalProvider(getter -> new MaintenanceTaskDispatcherImpl(
-			getter.getModal(Fleet.class),
-			getter.get(EventsManager.class),
-			getter.getModal(OperationFacilities.class),
-			getter.getModal(MaintenanceTaskScheduler.class),
-			getter.getModal(MaintenanceLogic.class)))).asEagerSingleton();
-
-		bindModal(MaintenanceTaskScheduler.class).toProvider(modalProvider(getter -> new MaintenanceTaskSchedulerImpl(
-			getter.getModal(Network.class),
-			getter.getModal(TravelTime.class),
-			getter.getModal(TravelDisutilityFactory.class).createTravelDisutility(getter.getModal(TravelTime.class)),
-			getter.get(MobsimTimer.class),
-			getter.getModal(DrtTaskFactory.class)))).asEagerSingleton();
-
-		addModalComponent(DrtOptimizer.class, modalProvider(
-			getter -> {
-				DrtOptimizer delegate = new DefaultDrtOptimizer(drtConfigGroup, getter.getModal(Fleet.class), getter.get(MobsimTimer.class),
-					getter.getModal(DepotFinder.class), getter.getModal(RebalancingStrategy.class),
-					getter.getModal(DrtScheduleInquiry.class), getter.getModal(ScheduleTimingUpdater.class),
-					getter.getModal(EmptyVehicleRelocator.class), getter.getModal(UnplannedRequestInserter.class),
-					getter.getModal(DrtRequestInsertionRetryQueue.class)
-				);
-
-				return new MaintenanceTaskOptimizer(getter.getModal(MaintenanceTaskDispatcher.class),
-					delegate,
-					getter.getModal(ScheduleTimingUpdater.class));
-			}));
-
+		bindModal(DrtTaskFactory.class).toProvider(modalProvider(getter ->
+		{
+			DrtTaskFactory delegate = new DrtTaskFactoryImpl();
+			return new DrtMaintenanceTaskFactoryImpl(delegate);
+		})).asEagerSingleton();
 	}
 }

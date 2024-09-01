@@ -31,6 +31,7 @@ public class RunDrtMaintenanceScenarioIT {
 			@Override
 			protected void configureQSim() {
 				install(new DrtMaintenanceQSimModule(drtConfigGroup));
+				install(new MaintenanceOptimizerQSimModule(drtConfigGroup));
 			}
 		});
 

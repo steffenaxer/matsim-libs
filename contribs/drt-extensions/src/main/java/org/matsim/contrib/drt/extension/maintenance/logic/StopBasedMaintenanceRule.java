@@ -3,26 +3,23 @@ package org.matsim.contrib.drt.extension.maintenance.logic;
 import org.matsim.contrib.drt.extension.maintenance.tasks.DrtMaintenanceTask;
 import org.matsim.contrib.drt.schedule.DrtStopTask;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
-import org.matsim.contrib.dvrp.fleet.Fleet;
 import org.matsim.contrib.dvrp.schedule.Schedule;
 import org.matsim.contrib.dvrp.schedule.Task;
-
-import java.util.List;
 
 /**
  * @author steffenaxer
  */
-public class StopBasedMaintenanceLogic implements MaintenanceLogic {
+public class StopBasedMaintenanceRule implements MaintenanceRule {
 	private final int requiredStops;
 
-	public StopBasedMaintenanceLogic(int requiredStops)
+	public StopBasedMaintenanceRule(int requiredStops)
 	{
 		this.requiredStops = requiredStops;
 	}
 
 	@Override
-	public List<DvrpVehicle> requiresMaintenance(Fleet fleet, double timeStep) {
-		return fleet.getVehicles().values().stream().filter(this::judgeVehicle).toList();
+	public boolean requiresMaintenance(DvrpVehicle dvrpVehicle, double timeStep) {
+		return this.judgeVehicle(dvrpVehicle);
 	}
 
 	boolean judgeVehicle(DvrpVehicle dvrpVehicle)

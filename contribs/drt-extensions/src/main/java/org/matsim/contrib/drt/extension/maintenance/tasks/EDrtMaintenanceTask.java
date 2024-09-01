@@ -9,13 +9,16 @@ import org.matsim.contrib.evrp.ETask;
  */
 public class EDrtMaintenanceTask extends DrtMaintenanceTask implements ETask {
 
-	public EDrtMaintenanceTask(double beginTime, double endTime, Link link, OperationFacility facility) {
-		super(beginTime, endTime, link, facility);
+	private final double consumedEnergy;
+
+	public EDrtMaintenanceTask(double beginTime, double endTime, Link link, double consumedEnergy) {
+		super(beginTime, endTime, link);
+		this.consumedEnergy = consumedEnergy;
 	}
 
 	@Override
 	public double getTotalEnergy() {
-		return 0;
+		return consumedEnergy;
 	}
 }
 

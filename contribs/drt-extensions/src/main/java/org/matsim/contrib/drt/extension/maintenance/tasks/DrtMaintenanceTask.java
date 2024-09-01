@@ -18,20 +18,12 @@ import static org.matsim.contrib.drt.schedule.DrtTaskBaseType.STOP;
 /**
  * @author steffenaxer
  */
-public class DrtMaintenanceTask extends DefaultStayTask implements DrtStopTask, OperationalStop  {
+public class DrtMaintenanceTask extends DefaultStayTask implements DrtStopTask  {
 
 	public static final DrtTaskType TYPE = new DrtTaskType("MAINTENANCE", STOP);
 
-	private final OperationFacility facility;
-
-	public DrtMaintenanceTask(double beginTime, double endTime, Link link, OperationFacility facility) {
+	public DrtMaintenanceTask(double beginTime, double endTime, Link link) {
 		super(TYPE,beginTime, endTime, link);
-		this.facility = facility;
-	}
-
-	@Override
-	public OperationFacility getFacility() {
-		return facility;
 	}
 
 	@Override
