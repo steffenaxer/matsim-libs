@@ -1,6 +1,6 @@
 package org.matsim.contrib.drt.extension.maintenance.optimizer;
 
-import org.matsim.contrib.drt.extension.maintenance.dispatcher.MaintenanceTaskDispatcher;
+import org.matsim.contrib.drt.extension.maintenance.dispatcher.ServiceTaskDispatcher;
 import org.matsim.contrib.drt.extension.operations.shifts.optimizer.ShiftDrtOptimizer;
 import org.matsim.contrib.drt.optimizer.DrtOptimizer;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
@@ -13,15 +13,15 @@ import org.matsim.core.mobsim.framework.listeners.MobsimInitializedListener;
 /**
  * @author steffenaxer
  */
-public class MaintenanceTaskOptimizer implements DrtOptimizer, MobsimInitializedListener {
+public class ServiceTaskOptimizer implements DrtOptimizer, MobsimInitializedListener {
 	private final DrtOptimizer delegate;
 	private final ScheduleTimingUpdater scheduleTimingUpdater;
-	private final MaintenanceTaskDispatcher maintenanceTaskDispatcher;
+	private final ServiceTaskDispatcher serviceTaskDispatcher;
 
-	public MaintenanceTaskOptimizer(MaintenanceTaskDispatcher maintenanceTaskDispatcher, DrtOptimizer delegate, ScheduleTimingUpdater scheduleTimingUpdater) {
+	public ServiceTaskOptimizer(ServiceTaskDispatcher serviceTaskDispatcher, DrtOptimizer delegate, ScheduleTimingUpdater scheduleTimingUpdater) {
 		this.delegate = delegate;
 		this.scheduleTimingUpdater = scheduleTimingUpdater;
-		this.maintenanceTaskDispatcher = maintenanceTaskDispatcher;
+		this.serviceTaskDispatcher = serviceTaskDispatcher;
 	}
 
 	@Override
@@ -37,7 +37,7 @@ public class MaintenanceTaskOptimizer implements DrtOptimizer, MobsimInitialized
 
 	@Override
 	public void notifyMobsimBeforeSimStep(MobsimBeforeSimStepEvent e) {
-		this.maintenanceTaskDispatcher.dispatch(e.getSimulationTime());
+		this.serviceTaskDispatcher.dispatch(e.getSimulationTime());
 		this.delegate.notifyMobsimBeforeSimStep(e);
 	}
 

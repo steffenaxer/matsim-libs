@@ -1,8 +1,9 @@
-package org.matsim.contrib.drt.extension.maintenance.logic;
+package org.matsim.contrib.drt.extension.maintenance.services.conditions;
 
 import com.google.common.collect.Streams;
 import org.matsim.api.core.v01.network.Link;
-import org.matsim.contrib.drt.extension.maintenance.tasks.DrtMaintenanceTask;
+import org.matsim.contrib.drt.extension.maintenance.services.params.MileageBasedConditionParam;
+import org.matsim.contrib.drt.extension.maintenance.tasks.DrtServiceTask;
 import org.matsim.contrib.drt.schedule.DrtDriveTask;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.path.VrpPath;
@@ -12,16 +13,16 @@ import org.matsim.contrib.dvrp.schedule.Task;
 /**
  * @author steffenaxer
  */
-public class MileageBaseMaintenanceRule implements MaintenanceRule {
-	private final double requiredMileage;
+public class MileageBaseServiceExecutionCondition implements ServiceExecutionCondition {
+	private final MileageBasedConditionParam mileageBasedConditionParam;
 
-	public MileageBaseMaintenanceRule(double requiredMileage)
+	public MileageBaseServiceExecutionCondition(MileageBasedConditionParam mileageBasedConditionParam)
 	{
-		this.requiredMileage = requiredMileage;
+		this.mileageBasedConditionParam = mileageBasedConditionParam;
 	}
 
 	@Override
-	public boolean requiresMaintenance(DvrpVehicle dvrpVehicle, double timeStep) {
+	public boolean requiresService(DvrpVehicle dvrpVehicle, double timeStep) {
 		return this.judgeVehicle(dvrpVehicle, timeStep);
 	}
 
@@ -30,7 +31,7 @@ public class MileageBaseMaintenanceRule implements MaintenanceRule {
 		if(dvrpVehicle.getSchedule().getStatus() == Schedule.ScheduleStatus.STARTED)
 		{
 			double lastMaintenanceTime = dvrpVehicle.getSchedule().getTasks().stream()
-				.filter(t -> t instanceof DrtMaintenanceTask)
+				.filter(t -> t instanceof DrtServiceTask)
 				.mapToDouble(Task::getEndTime)
 				.max()
 				.orElse(0);
@@ -42,7 +43,7 @@ public class MileageBaseMaintenanceRule implements MaintenanceRule {
 				.mapToDouble(t -> getDistance(((DrtDriveTask) t).getPath()))
 				.sum();
 
-			return drivenDistance > this.requiredMileage;
+			return drivenDistance > mileageBasedConditionParam.requiredMileage;
 		}
 
 		return false;

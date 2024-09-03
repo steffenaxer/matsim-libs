@@ -5,7 +5,7 @@ import org.matsim.api.core.v01.TransportMode;
 import org.matsim.contrib.common.zones.systems.grid.square.SquareGridZoneSystemParams;
 import org.matsim.contrib.drt.analysis.zonal.DrtZoneSystemParams;
 import org.matsim.contrib.drt.extension.DrtWithExtensionsConfigGroup;
-import org.matsim.contrib.drt.extension.maintenance.DrtMaintenanceQSimModule;
+import org.matsim.contrib.drt.extension.maintenance.optimizer.DrtServiceQSimModule;
 import org.matsim.contrib.drt.extension.operations.DrtOperationsParams;
 import org.matsim.contrib.drt.extension.operations.EDrtOperationsControlerCreator;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilitiesParams;
@@ -178,7 +178,7 @@ public class RunOnDemandShiftDrtScenarioIT {
 		run.addOverridingQSimModule(new AbstractDvrpModeQSimModule(drtWithShiftsConfigGroup.getMode()) {
 			@Override
 			protected void configureQSim() {
-				install(new DrtMaintenanceQSimModule(drtWithShiftsConfigGroup));
+				install(new DrtServiceQSimModule(drtWithShiftsConfigGroup));
 			}
 		});
 

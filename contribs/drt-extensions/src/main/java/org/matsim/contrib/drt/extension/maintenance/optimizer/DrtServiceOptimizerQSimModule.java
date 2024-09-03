@@ -1,15 +1,11 @@
-package org.matsim.contrib.drt.extension.maintenance;
+package org.matsim.contrib.drt.extension.maintenance.optimizer;
 
 import org.matsim.api.core.v01.network.Network;
-import org.matsim.contrib.drt.extension.maintenance.dispatcher.MaintenanceTaskDispatcher;
-import org.matsim.contrib.drt.extension.maintenance.dispatcher.MaintenanceTaskDispatcherImpl;
-import org.matsim.contrib.drt.extension.maintenance.logic.ChargingBasedMaintenanceRule;
-import org.matsim.contrib.drt.extension.maintenance.logic.MaintenanceRuleCollectorImpl;
-import org.matsim.contrib.drt.extension.maintenance.logic.MileageBaseMaintenanceRule;
-import org.matsim.contrib.drt.extension.maintenance.logic.StopBasedMaintenanceRule;
-import org.matsim.contrib.drt.extension.maintenance.optimizer.MaintenanceTaskOptimizer;
-import org.matsim.contrib.drt.extension.maintenance.scheduler.MaintenanceTaskScheduler;
-import org.matsim.contrib.drt.extension.maintenance.scheduler.MaintenanceTaskSchedulerImpl;
+import org.matsim.contrib.drt.extension.maintenance.dispatcher.ServiceTaskDispatcher;
+import org.matsim.contrib.drt.extension.maintenance.dispatcher.ServiceTaskDispatcherImpl;
+import org.matsim.contrib.drt.extension.maintenance.services.*;
+import org.matsim.contrib.drt.extension.maintenance.schedule.ServiceTaskScheduler;
+import org.matsim.contrib.drt.extension.maintenance.schedule.ServiceTaskSchedulerImpl;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilityFinder;
 import org.matsim.contrib.drt.optimizer.DefaultDrtOptimizer;
 import org.matsim.contrib.drt.optimizer.DrtOptimizer;
@@ -32,11 +28,11 @@ import org.matsim.core.router.util.TravelTime;
 /**
  * @author steffenaxer
  */
-public class MaintenanceOptimizerQSimModule extends AbstractDvrpModeQSimModule {
+public class DrtServiceOptimizerQSimModule extends AbstractDvrpModeQSimModule {
 
 	DrtConfigGroup drtConfigGroup;
 
-	public MaintenanceOptimizerQSimModule(DrtConfigGroup drtConfigGroup) {
+	public DrtServiceOptimizerQSimModule(DrtConfigGroup drtConfigGroup) {
 		super(drtConfigGroup.getMode());
 		this.drtConfigGroup = drtConfigGroup;
 	}
@@ -44,33 +40,27 @@ public class MaintenanceOptimizerQSimModule extends AbstractDvrpModeQSimModule {
 	@Override
 	protected void configureQSim() {
 
-		MaintenanceRuleCollectorImpl composer = new MaintenanceRuleCollectorImpl();
-		composer.installMaintenanceRule(new ChargingBasedMaintenanceRule());
-		composer.installMaintenanceRule(new StopBasedMaintenanceRule(70));
-		composer.installMaintenanceRule(new MileageBaseMaintenanceRule(50_000));
-
-		bindModal(MaintenanceTaskDispatcher.class).toProvider(modalProvider(getter -> new MaintenanceTaskDispatcherImpl(
+		bindModal(ServiceTaskDispatcher.class).toProvider(modalProvider(getter -> new ServiceTaskDispatcherImpl(
 			getter.getModal(Fleet.class),
 			getter.get(EventsManager.class),
-			getter.getModal(MaintenanceTaskScheduler.class),
-			composer,
-			getter.getModal(OperationFacilityFinder.class)))).asEagerSingleton();
+			getter.getModal(ServiceTaskScheduler.class),
+			getter.getModal(ServiceCollector.class),
+			getter.getModal(OperationFacilityFinder.class),
+			getter.getModal(ServiceExecutionConditionFactory.class)))).asEagerSingleton();
 
 		addModalComponent(DrtOptimizer.class, modalProvider(
 			getter -> {
-				DrtOptimizer delegate = new DefaultDrtOptimizer(drtConfigGroup, getter.getModal(Fleet.class), getter.get(MobsimTimer.class),
+				var delegate = new DefaultDrtOptimizer(drtConfigGroup, getter.getModal(Fleet.class), getter.get(MobsimTimer.class),
 					getter.getModal(DepotFinder.class), getter.getModal(RebalancingStrategy.class),
 					getter.getModal(DrtScheduleInquiry.class), getter.getModal(ScheduleTimingUpdater.class),
 					getter.getModal(EmptyVehicleRelocator.class), getter.getModal(UnplannedRequestInserter.class),
-					getter.getModal(DrtRequestInsertionRetryQueue.class)
-				);
-
-				return new MaintenanceTaskOptimizer(getter.getModal(MaintenanceTaskDispatcher.class),
+					getter.getModal(DrtRequestInsertionRetryQueue.class));
+				return new ServiceTaskOptimizer(getter.getModal(ServiceTaskDispatcher.class),
 					delegate,
 					getter.getModal(ScheduleTimingUpdater.class));
 			}));
 
-		bindModal(MaintenanceTaskScheduler.class).toProvider(modalProvider(getter -> new MaintenanceTaskSchedulerImpl(
+		bindModal(ServiceTaskScheduler.class).toProvider(modalProvider(getter -> new ServiceTaskSchedulerImpl(
 			getter.getModal(Network.class),
 			getter.getModal(TravelTime.class),
 			getter.getModal(TravelDisutilityFactory.class).createTravelDisutility(getter.getModal(TravelTime.class)),

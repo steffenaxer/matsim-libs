@@ -6,6 +6,6 @@ import org.matsim.contrib.drt.schedule.DrtTaskFactory;
 /**
  * @author steffenaxer
  */
-public interface MaintenanceTaskFactory extends DrtTaskFactory {
-	DrtMaintenanceTask createMaintenanceTask(double beginTime, double endTime, Link link);
+public interface ServiceTaskFactory extends DrtTaskFactory {
+	DrtServiceTask createServiceTask(double beginTime, double endTime, Link link);
 }

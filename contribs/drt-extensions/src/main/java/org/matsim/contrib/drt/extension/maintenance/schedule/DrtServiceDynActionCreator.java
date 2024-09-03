@@ -1,6 +1,6 @@
-package org.matsim.contrib.drt.extension.maintenance;
+package org.matsim.contrib.drt.extension.maintenance.schedule;
 
-import org.matsim.contrib.drt.extension.maintenance.tasks.DrtMaintenanceTask;
+import org.matsim.contrib.drt.extension.maintenance.tasks.DrtServiceTask;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.schedule.Task;
 import org.matsim.contrib.dvrp.vrpagent.VrpAgentLogic;
@@ -11,11 +11,11 @@ import org.matsim.core.mobsim.framework.MobsimTimer;
 /**
  * @author steffenaxer
  */
-public class DrtMaintenanceDynActionCreator implements VrpAgentLogic.DynActionCreator {
+public class DrtServiceDynActionCreator implements VrpAgentLogic.DynActionCreator {
 	private final VrpAgentLogic.DynActionCreator delegate;
 	private final MobsimTimer timer;
 
-	public DrtMaintenanceDynActionCreator(VrpAgentLogic.DynActionCreator delegate, MobsimTimer timer) {
+	public DrtServiceDynActionCreator(VrpAgentLogic.DynActionCreator delegate, MobsimTimer timer) {
 		this.delegate = delegate;
 		this.timer = timer;
 	}
@@ -23,8 +23,8 @@ public class DrtMaintenanceDynActionCreator implements VrpAgentLogic.DynActionCr
 	public DynAction createAction(DynAgent dynAgent, DvrpVehicle vehicle, double now) {
 
 		Task task = vehicle.getSchedule().getCurrentTask();
-		if (task instanceof DrtMaintenanceTask eDrtMaintenanceTask) {
-			return new MaintenanceActivity(eDrtMaintenanceTask);
+		if (task instanceof DrtServiceTask eDrtServiceTask) {
+			return new ServiceActivity(eDrtServiceTask);
 		}
 
 		return delegate.createAction(dynAgent, vehicle, now);

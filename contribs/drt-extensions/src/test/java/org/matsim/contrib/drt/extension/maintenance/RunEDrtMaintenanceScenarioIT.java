@@ -7,6 +7,9 @@ import org.matsim.contrib.drt.analysis.zonal.DrtZoneSystemParams;
 import org.matsim.contrib.drt.extension.DrtWithExtensionsConfigGroup;
 import org.matsim.contrib.drt.extension.edrt.optimizer.EDrtVehicleDataEntryFactory;
 import org.matsim.contrib.drt.extension.edrt.run.EDrtControlerCreator;
+import org.matsim.contrib.drt.extension.maintenance.optimizer.EDrtServiceOptimizerQSimModule;
+import org.matsim.contrib.drt.extension.maintenance.optimizer.EDrtServiceQSimModule;
+import org.matsim.contrib.drt.extension.maintenance.services.ServiceExecutionModule;
 import org.matsim.contrib.drt.extension.operations.DrtOperationsParams;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilitiesModeModule;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilitiesParams;
@@ -20,7 +23,6 @@ import org.matsim.contrib.drt.optimizer.rebalancing.mincostflow.MinCostFlowRebal
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
 import org.matsim.contrib.dvrp.run.AbstractDvrpModeModule;
-import org.matsim.contrib.dvrp.run.AbstractDvrpModeQSimModule;
 import org.matsim.contrib.dvrp.run.DvrpConfigGroup;
 import org.matsim.contrib.ev.EvConfigGroup;
 import org.matsim.contrib.ev.charging.*;
@@ -74,7 +76,7 @@ public class RunEDrtMaintenanceScenarioIT {
         drtWithShiftsConfigGroup.vehiclesFile = fleetFile;
         drtWithShiftsConfigGroup.operationalScheme = DrtConfigGroup.OperationalScheme.door2door;
         drtWithShiftsConfigGroup.plotDetailedCustomerStats = true;
-        drtWithShiftsConfigGroup.idleVehiclesReturnToDepots = false;
+        drtWithShiftsConfigGroup.idleVehiclesReturnToDepots = true;
 
         drtWithShiftsConfigGroup.addParameterSet(new ExtensiveInsertionSearchParams());
 
@@ -179,14 +181,10 @@ public class RunEDrtMaintenanceScenarioIT {
         final Controler run = EDrtControlerCreator.createControler(config,false);
 
 		run.addOverridingModule(new OperationFacilitiesModeModule(drtWithShiftsConfigGroup));
+		run.addOverridingModule(new ServiceExecutionModule(drtWithShiftsConfigGroup));
 		run.addOverridingQSimModule(new OperationFacilitiesQSimModule(drtWithShiftsConfigGroup));
-		run.addOverridingQSimModule(new AbstractDvrpModeQSimModule(drtWithShiftsConfigGroup.getMode()) {
-			@Override
-			protected void configureQSim() {
-				install(new EDrtMaintenanceQSimModule(drtWithShiftsConfigGroup));
-				install(new MaintenanceOptimizerQSimModule(drtWithShiftsConfigGroup));
-			}
-		});
+		run.addOverridingQSimModule(new EDrtServiceQSimModule(drtWithShiftsConfigGroup));
+		run.addOverridingQSimModule(new EDrtServiceOptimizerQSimModule(drtWithShiftsConfigGroup));
 
 		run.addOverridingModule(new AbstractDvrpModeModule(drtWithShiftsConfigGroup.getMode()) {
 			@Override

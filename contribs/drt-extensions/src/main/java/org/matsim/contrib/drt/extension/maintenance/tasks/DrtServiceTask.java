@@ -2,8 +2,6 @@ package org.matsim.contrib.drt.extension.maintenance.tasks;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
-import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacility;
-import org.matsim.contrib.drt.extension.operations.shifts.schedule.OperationalStop;
 import org.matsim.contrib.drt.passenger.AcceptedDrtRequest;
 import org.matsim.contrib.drt.schedule.DrtStopTask;
 import org.matsim.contrib.drt.schedule.DrtTaskType;
@@ -18,11 +16,11 @@ import static org.matsim.contrib.drt.schedule.DrtTaskBaseType.STOP;
 /**
  * @author steffenaxer
  */
-public class DrtMaintenanceTask extends DefaultStayTask implements DrtStopTask  {
+public class DrtServiceTask extends DefaultStayTask implements DrtStopTask  {
 
-	public static final DrtTaskType TYPE = new DrtTaskType("MAINTENANCE", STOP);
+	public static final DrtTaskType TYPE = new DrtTaskType("SERVICE", STOP);
 
-	public DrtMaintenanceTask(double beginTime, double endTime, Link link) {
+	public DrtServiceTask(double beginTime, double endTime, Link link) {
 		super(TYPE,beginTime, endTime, link);
 	}
 

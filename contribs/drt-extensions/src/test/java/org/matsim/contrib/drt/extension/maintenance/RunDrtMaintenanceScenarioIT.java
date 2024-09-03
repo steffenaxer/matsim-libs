@@ -3,11 +3,13 @@ package org.matsim.contrib.drt.extension.maintenance;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.matsim.contrib.drt.extension.DrtWithExtensionsConfigGroup;
+import org.matsim.contrib.drt.extension.maintenance.optimizer.DrtServiceOptimizerQSimModule;
+import org.matsim.contrib.drt.extension.maintenance.optimizer.DrtServiceQSimModule;
+import org.matsim.contrib.drt.extension.maintenance.services.ServiceExecutionModule;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilitiesModeModule;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilitiesQSimModule;
 import org.matsim.contrib.drt.run.DrtControlerCreator;
 import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
-import org.matsim.contrib.dvrp.run.AbstractDvrpModeQSimModule;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.controler.Controler;
@@ -26,14 +28,10 @@ public class RunDrtMaintenanceScenarioIT {
 		var drtConfigGroup = multiModeDrtConfigGroup.getModalElements().stream().findFirst().orElseThrow();
 
 		controler.addOverridingModule(new OperationFacilitiesModeModule((DrtWithExtensionsConfigGroup) drtConfigGroup));
+		controler.addOverridingModule(new ServiceExecutionModule(drtConfigGroup));
 		controler.addOverridingQSimModule(new OperationFacilitiesQSimModule(drtConfigGroup));
-		controler.addOverridingQSimModule(new AbstractDvrpModeQSimModule(drtConfigGroup.getMode()) {
-			@Override
-			protected void configureQSim() {
-				install(new DrtMaintenanceQSimModule(drtConfigGroup));
-				install(new MaintenanceOptimizerQSimModule(drtConfigGroup));
-			}
-		});
+		controler.addOverridingQSimModule(new DrtServiceQSimModule(drtConfigGroup));
+		controler.addOverridingQSimModule(new DrtServiceOptimizerQSimModule(drtConfigGroup));
 
         controler.run();
     }
