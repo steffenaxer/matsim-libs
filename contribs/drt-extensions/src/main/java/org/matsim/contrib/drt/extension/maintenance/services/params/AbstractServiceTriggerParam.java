@@ -7,13 +7,13 @@ import org.matsim.core.config.ReflectiveConfigGroup;
 /**
  * @author steffenaxer
  */
-public abstract class AbstractServiceParam extends ReflectiveConfigGroup {
+public abstract class AbstractServiceTriggerParam extends ReflectiveConfigGroup {
 
 	@NotNull
 	@Parameter
 	public String name;
 
-	public AbstractServiceParam(String name)
+	public AbstractServiceTriggerParam(String name)
 	{
 		super(name);
 		this.name = name;
@@ -21,7 +21,7 @@ public abstract class AbstractServiceParam extends ReflectiveConfigGroup {
 
 	@Override
 	public void addParameterSet(ConfigGroup configGroup) {
-		if (configGroup instanceof AbstractServiceParam) {
+		if (configGroup instanceof AbstractServiceTriggerParam) {
 			if(!this.getParameterSets().isEmpty())
 			{
 				throw new IllegalStateException("Adding more than one parameter is not allowed.");

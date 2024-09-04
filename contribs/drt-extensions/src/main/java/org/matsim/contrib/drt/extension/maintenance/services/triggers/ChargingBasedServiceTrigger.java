@@ -1,6 +1,7 @@
-package org.matsim.contrib.drt.extension.maintenance.services.conditions;
+package org.matsim.contrib.drt.extension.maintenance.services.triggers;
 
-import org.matsim.contrib.drt.extension.maintenance.services.params.ChargingBasedConditionParam;
+import org.matsim.api.core.v01.Id;
+import org.matsim.contrib.drt.extension.maintenance.services.params.ChargingBasedTriggerParam;
 import org.matsim.contrib.drt.extension.maintenance.tasks.DrtServiceTask;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.schedule.Schedule;
@@ -10,9 +11,10 @@ import org.matsim.contrib.evrp.ChargingTask;
 /**
  * @author steffenaxer
  */
-public class ChargingBasedServiceExecutionCondition implements ServiceExecutionCondition {
+public class ChargingBasedServiceTrigger extends AbstractTrigger {
 
-	public ChargingBasedServiceExecutionCondition(ChargingBasedConditionParam chargingBasedConditionParam) {
+	public ChargingBasedServiceTrigger(Id<DvrpVehicle> vehicleId, ChargingBasedTriggerParam chargingBasedConditionParam) {
+		super(vehicleId);
 	}
 
 	@Override

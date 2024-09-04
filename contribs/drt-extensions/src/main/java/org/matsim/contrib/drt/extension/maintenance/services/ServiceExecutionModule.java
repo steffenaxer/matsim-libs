@@ -19,7 +19,7 @@ public class ServiceExecutionModule extends AbstractDvrpModeModule {
 	@Override
 	public void install() {
 
-		bindModal(ServiceExecutionConditionFactory.class).toInstance(new DefaultServiceExecutionConditionFactoryImpl());
+		bindModal(ServiceTriggerFactory.class).toInstance(new DefaultServiceTriggerFactoryImpl());
 
 		bindModal(ServiceCollector.class).toProvider(
 				modalProvider(getter -> {

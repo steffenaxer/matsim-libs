@@ -47,7 +47,7 @@ public class EDrtServiceOptimizerQSimModule extends AbstractDvrpModeQSimModule {
 			getter.getModal(ServiceTaskScheduler.class),
 			getter.getModal(ServiceCollector.class),
 			getter.getModal(OperationFacilityFinder.class),
-			getter.getModal(ServiceExecutionConditionFactory.class)))).asEagerSingleton();
+			getter.getModal(ServiceTriggerFactory.class)))).asEagerSingleton();
 
 		addModalComponent(DrtOptimizer.class, modalProvider(
 			getter -> {

@@ -1,6 +1,7 @@
-package org.matsim.contrib.drt.extension.maintenance.services.conditions;
+package org.matsim.contrib.drt.extension.maintenance.services.triggers;
 
-import org.matsim.contrib.drt.extension.maintenance.services.params.StopBasedConditionParam;
+import org.matsim.api.core.v01.Id;
+import org.matsim.contrib.drt.extension.maintenance.services.params.StopBasedTriggerParam;
 import org.matsim.contrib.drt.extension.maintenance.tasks.DrtServiceTask;
 import org.matsim.contrib.drt.schedule.DrtStopTask;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
@@ -10,11 +11,12 @@ import org.matsim.contrib.dvrp.schedule.Task;
 /**
  * @author steffenaxer
  */
-public class StopBasedServiceExecutionCondition implements ServiceExecutionCondition {
-	private final StopBasedConditionParam stopBasedConditionParam;
+public class StopBasedServiceTrigger extends AbstractTrigger {
+	private final StopBasedTriggerParam stopBasedConditionParam;
 
-	public StopBasedServiceExecutionCondition(StopBasedConditionParam stopBasedConditionParam)
+	public StopBasedServiceTrigger(Id<DvrpVehicle> vehicleId, StopBasedTriggerParam stopBasedConditionParam)
 	{
+		super(vehicleId);
 		this.stopBasedConditionParam = stopBasedConditionParam;
 	}
 

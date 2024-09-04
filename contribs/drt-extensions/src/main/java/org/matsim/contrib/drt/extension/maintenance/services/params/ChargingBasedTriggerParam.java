@@ -4,10 +4,10 @@ package org.matsim.contrib.drt.extension.maintenance.services.params;
 /**
  * @author steffenaxer
  */
-public class ChargingBasedConditionParam extends AbstractServiceParam {
-	public static final String SET_NAME = "ChargingBasedCondition";
+public class ChargingBasedTriggerParam extends AbstractServiceTriggerParam {
+	public static final String SET_NAME = "ChargingBasedTrigger";
 
-	public ChargingBasedConditionParam() {
+	public ChargingBasedTriggerParam() {
 		super(SET_NAME);
 	}
 

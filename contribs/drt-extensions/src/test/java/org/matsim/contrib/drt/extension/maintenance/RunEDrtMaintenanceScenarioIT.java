@@ -12,8 +12,8 @@ import org.matsim.contrib.drt.extension.maintenance.optimizer.EDrtServiceQSimMod
 import org.matsim.contrib.drt.extension.maintenance.services.ServiceExecutionModule;
 import org.matsim.contrib.drt.extension.maintenance.services.params.DrtServiceParams;
 import org.matsim.contrib.drt.extension.maintenance.services.params.DrtServicesParams;
-import org.matsim.contrib.drt.extension.maintenance.services.params.StopBasedConditionParam;
-import org.matsim.contrib.drt.extension.maintenance.services.params.TimeOfDayBasedConditionParam;
+import org.matsim.contrib.drt.extension.maintenance.services.params.StopBasedTriggerParam;
+import org.matsim.contrib.drt.extension.maintenance.services.params.TimeOfDayBasedTriggerParam;
 import org.matsim.contrib.drt.extension.operations.DrtOperationsParams;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilitiesModeModule;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilitiesParams;
@@ -186,13 +186,13 @@ public class RunEDrtMaintenanceScenarioIT {
 
 		{
 			DrtServiceParams clean = new DrtServiceParams("clean");
-			clean.maxRepetition = 1;
+			clean.maxTriggerCnt = 1;
 			clean.duration = 900;
-			var condition1 = new TimeOfDayBasedConditionParam();
-			condition1.serviceTimeOfDay = 12 * 3600 + 1111;
+			var condition1 = new TimeOfDayBasedTriggerParam();
+			condition1.executionTime = 12 * 3600 + 1111;
 			clean.addParameterSet(condition1);
 
-			var condition2 = new StopBasedConditionParam();
+			var condition2 = new StopBasedTriggerParam();
 			condition2.requiredStops = 10;
 			clean.addParameterSet(condition2);
 			drtServicesParams.addParameterSet(clean);
@@ -201,10 +201,10 @@ public class RunEDrtMaintenanceScenarioIT {
 
 		{
 			DrtServiceParams deepClean = new DrtServiceParams("deep clean");
-			deepClean.maxRepetition = 1;
+			deepClean.maxTriggerCnt = 1;
 			deepClean.duration = 1800;
-			var condition1 = new TimeOfDayBasedConditionParam();
-			condition1.serviceTimeOfDay = 12 * 3600 + 1111;
+			var condition1 = new TimeOfDayBasedTriggerParam();
+			condition1.executionTime = 12 * 3600 + 1111;
 			deepClean.addParameterSet(condition1);
 			drtServicesParams.addParameterSet(deepClean);
 		}

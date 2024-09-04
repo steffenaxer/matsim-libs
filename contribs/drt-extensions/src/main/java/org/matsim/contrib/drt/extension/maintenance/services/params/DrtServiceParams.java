@@ -22,7 +22,7 @@ public class DrtServiceParams extends ReflectiveConfigGroup {
 
 	@Positive
 	@Parameter
-	public int maxRepetition = Integer.MAX_VALUE;
+	public int maxTriggerCnt = Integer.MAX_VALUE;
 
 	public DrtServiceParams() {
 		this(null);
@@ -46,7 +46,7 @@ public class DrtServiceParams extends ReflectiveConfigGroup {
 
 	@Override
 	public void addParameterSet(ConfigGroup configGroup) {
-		if (configGroup instanceof AbstractServiceParam) {
+		if (configGroup instanceof AbstractServiceTriggerParam) {
 			super.addParameterSet(configGroup);
 		} else {
 			throw new IllegalStateException("Unsupported ConfigGroup "+ configGroup.getName());

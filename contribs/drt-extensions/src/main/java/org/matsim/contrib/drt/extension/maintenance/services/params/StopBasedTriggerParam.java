@@ -4,10 +4,10 @@ package org.matsim.contrib.drt.extension.maintenance.services.params;
 /**
  * @author steffenaxer
  */
-public class StopBasedConditionParam extends AbstractServiceParam {
-	public static final String SET_NAME = "StopBasedCondition";
+public class StopBasedTriggerParam extends AbstractServiceTriggerParam {
+	public static final String SET_NAME = "StopBasedTrigger";
 
-	public StopBasedConditionParam() {
+	public StopBasedTriggerParam() {
 		super(SET_NAME);
 	}
 

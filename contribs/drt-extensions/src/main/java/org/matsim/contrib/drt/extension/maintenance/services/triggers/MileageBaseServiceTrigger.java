@@ -1,8 +1,9 @@
-package org.matsim.contrib.drt.extension.maintenance.services.conditions;
+package org.matsim.contrib.drt.extension.maintenance.services.triggers;
 
 import com.google.common.collect.Streams;
+import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
-import org.matsim.contrib.drt.extension.maintenance.services.params.MileageBasedConditionParam;
+import org.matsim.contrib.drt.extension.maintenance.services.params.MileageBasedTriggerParam;
 import org.matsim.contrib.drt.extension.maintenance.tasks.DrtServiceTask;
 import org.matsim.contrib.drt.schedule.DrtDriveTask;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
@@ -13,11 +14,12 @@ import org.matsim.contrib.dvrp.schedule.Task;
 /**
  * @author steffenaxer
  */
-public class MileageBaseServiceExecutionCondition implements ServiceExecutionCondition {
-	private final MileageBasedConditionParam mileageBasedConditionParam;
+public class MileageBaseServiceTrigger extends AbstractTrigger {
+	private final MileageBasedTriggerParam mileageBasedConditionParam;
 
-	public MileageBaseServiceExecutionCondition(MileageBasedConditionParam mileageBasedConditionParam)
+	public MileageBaseServiceTrigger(Id<DvrpVehicle> vehicleId, MileageBasedTriggerParam mileageBasedConditionParam)
 	{
+		super(vehicleId);
 		this.mileageBasedConditionParam = mileageBasedConditionParam;
 	}
 

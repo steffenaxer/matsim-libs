@@ -1,0 +1,31 @@
+package org.matsim.contrib.drt.extension.maintenance.services.triggers;
+
+import org.matsim.api.core.v01.Id;
+import org.matsim.contrib.drt.extension.maintenance.services.params.TimeOfDayBasedTriggerParam;
+import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
+import org.matsim.contrib.dvrp.schedule.Schedule;
+
+/**
+ * @author steffenaxer
+ */
+public class TimeOfDayBaseServiceAbstractTrigger extends AbstractTrigger {
+	private final TimeOfDayBasedTriggerParam timeOfDayBasedConditionParam;
+
+	public TimeOfDayBaseServiceAbstractTrigger(Id<DvrpVehicle> vehicleId, TimeOfDayBasedTriggerParam timeOfDayBasedConditionParam)
+	{
+		super(vehicleId);
+		this.timeOfDayBasedConditionParam = timeOfDayBasedConditionParam;
+	}
+
+	@Override
+	public boolean requiresService(DvrpVehicle dvrpVehicle, double timeStep) {
+		return this.judgeVehicle(dvrpVehicle, timeStep);
+	}
+
+	boolean judgeVehicle(DvrpVehicle dvrpVehicle, double timeStep)
+	{
+		return dvrpVehicle.getSchedule().getStatus() == Schedule.ScheduleStatus.STARTED
+			&& timeStep==this.timeOfDayBasedConditionParam.executionTime;
+	}
+
+}
