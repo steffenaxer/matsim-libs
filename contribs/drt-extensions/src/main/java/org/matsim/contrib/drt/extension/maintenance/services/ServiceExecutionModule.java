@@ -1,14 +1,19 @@
 package org.matsim.contrib.drt.extension.maintenance.services;
 
+import org.matsim.contrib.drt.extension.DrtWithExtensionsConfigGroup;
 import org.matsim.contrib.drt.extension.maintenance.services.params.*;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.dvrp.run.AbstractDvrpModeModule;
+
 /**
  * @author steffenaxer
  */
 public class ServiceExecutionModule extends AbstractDvrpModeModule {
+	private final DrtServicesParams drtServicesParams;
+
 	public ServiceExecutionModule(DrtConfigGroup drtConfigGroup) {
 		super(drtConfigGroup.mode);
+		this.drtServicesParams = ((DrtWithExtensionsConfigGroup) drtConfigGroup).getServicesParams().orElseThrow();
 	}
 
 	@Override
@@ -20,24 +25,9 @@ public class ServiceExecutionModule extends AbstractDvrpModeModule {
 				modalProvider(getter -> {
 					ServiceCollector collector = new ServiceCollectorImpl();
 
-					ServiceExecutionConfigGroup cleaning = new ServiceExecutionConfigGroup("clean");
-					cleaning.maxRepetition = 2;
-					cleaning.duration = 900;
-
-					var condition1 = new ChargingBasedConditionParam();
-					condition1.offsetWithPrevTask = true;
-
-					var condition2 = new MileageBasedConditionParam();
-					condition2.requiredMileage = 50_000;
-
-					var condition3 = new StopBasedConditionParam();
-					condition3.requiredStops = 50;
-
-					cleaning.addParameterSet(condition1);
-					cleaning.addParameterSet(condition2);
-					cleaning.addParameterSet(condition3);
-
-					collector.addService(cleaning);
+					for (var service : drtServicesParams.getParameterSets(DrtServiceParams.SET_TYPE)) {
+						collector.addService((DrtServiceParams) service);
+					}
 
 					return collector;
 				}))

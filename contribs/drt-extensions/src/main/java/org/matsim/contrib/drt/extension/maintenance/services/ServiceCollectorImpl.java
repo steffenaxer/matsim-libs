@@ -1,27 +1,27 @@
 package org.matsim.contrib.drt.extension.maintenance.services;
 
 import java.util.*;
-import org.matsim.contrib.drt.extension.maintenance.services.params.ServiceExecutionConfigGroup;
+import org.matsim.contrib.drt.extension.maintenance.services.params.DrtServiceParams;
 
 /**
  * @author steffenaxer
  */
 public class ServiceCollectorImpl implements ServiceCollector {
-	List<ServiceExecutionConfigGroup> maintenanceJobs = new ArrayList<>();;
+	List<DrtServiceParams> maintenanceJobs = new ArrayList<>();;
 
 	@Override
-	public void addService(ServiceExecutionConfigGroup serviceExecutionConfigGroup)
+	public void addService(DrtServiceParams drtServiceParams)
 	{
-		this.maintenanceJobs.add(serviceExecutionConfigGroup);
+		this.maintenanceJobs.add(drtServiceParams);
 	}
 
 	@Override
-	public void removeService(ServiceExecutionConfigGroup serviceExecutionConfigGroup) {
-		maintenanceJobs.remove(serviceExecutionConfigGroup);
+	public void removeService(DrtServiceParams drtServiceParams) {
+		maintenanceJobs.remove(drtServiceParams);
 	}
 
 	@Override
-	public List<ServiceExecutionConfigGroup> getServices() {
+	public List<DrtServiceParams> getServices() {
 		return Collections.unmodifiableList(this.maintenanceJobs);
 	}
 }

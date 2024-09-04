@@ -11,5 +11,5 @@ import static org.matsim.contrib.drt.schedule.DrtTaskBaseType.DRIVE;
  */
 public interface ServiceTaskScheduler {
 	DrtTaskType RELOCATE_SERVICE_TASK_TYPE = new DrtTaskType("RELOCATE_SERVICE", DRIVE);
-	void scheduleServiceTask(DvrpVehicle vehicle, OperationFacility operationFacility);
+	void scheduleServiceTask(DvrpVehicle vehicle, OperationFacility operationFacility, double duration);
 }

@@ -10,6 +10,10 @@ import org.matsim.contrib.drt.extension.edrt.run.EDrtControlerCreator;
 import org.matsim.contrib.drt.extension.maintenance.optimizer.EDrtServiceOptimizerQSimModule;
 import org.matsim.contrib.drt.extension.maintenance.optimizer.EDrtServiceQSimModule;
 import org.matsim.contrib.drt.extension.maintenance.services.ServiceExecutionModule;
+import org.matsim.contrib.drt.extension.maintenance.services.params.DrtServiceParams;
+import org.matsim.contrib.drt.extension.maintenance.services.params.DrtServicesParams;
+import org.matsim.contrib.drt.extension.maintenance.services.params.StopBasedConditionParam;
+import org.matsim.contrib.drt.extension.maintenance.services.params.TimeOfDayBasedConditionParam;
 import org.matsim.contrib.drt.extension.operations.DrtOperationsParams;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilitiesModeModule;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilitiesParams;
@@ -177,6 +181,36 @@ public class RunEDrtMaintenanceScenarioIT {
 		config.addModule(evConfigGroup);
 
 		config.vehicles().setVehiclesFile(evsFile);
+
+		DrtServicesParams drtServicesParams = new DrtServicesParams();
+
+		{
+			DrtServiceParams clean = new DrtServiceParams("clean");
+			clean.maxRepetition = 1;
+			clean.duration = 900;
+			var condition1 = new TimeOfDayBasedConditionParam();
+			condition1.serviceTimeOfDay = 12 * 3600 + 1111;
+			clean.addParameterSet(condition1);
+
+			var condition2 = new StopBasedConditionParam();
+			condition2.requiredStops = 10;
+			clean.addParameterSet(condition2);
+			drtServicesParams.addParameterSet(clean);
+
+		}
+
+		{
+			DrtServiceParams deepClean = new DrtServiceParams("deep clean");
+			deepClean.maxRepetition = 1;
+			deepClean.duration = 1800;
+			var condition1 = new TimeOfDayBasedConditionParam();
+			condition1.serviceTimeOfDay = 12 * 3600 + 1111;
+			deepClean.addParameterSet(condition1);
+			drtServicesParams.addParameterSet(deepClean);
+		}
+
+
+		drtWithShiftsConfigGroup.addParameterSet(drtServicesParams);
 
         final Controler run = EDrtControlerCreator.createControler(config,false);
 

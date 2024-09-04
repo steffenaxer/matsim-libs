@@ -8,8 +8,8 @@ import org.matsim.core.config.ReflectiveConfigGroup;
 /**
  * @author steffenaxer
  */
-public class ServiceExecutionConfigGroup extends ReflectiveConfigGroup {
-	public static final String SET_TYPE = "serviceCollection";
+public class DrtServiceParams extends ReflectiveConfigGroup {
+	public static final String SET_TYPE = "service";
 
 	@NotNull
 	@Parameter
@@ -24,11 +24,11 @@ public class ServiceExecutionConfigGroup extends ReflectiveConfigGroup {
 	@Parameter
 	public int maxRepetition = Integer.MAX_VALUE;
 
-	public ServiceExecutionConfigGroup() {
+	public DrtServiceParams() {
 		this(null);
 	}
 
-	public ServiceExecutionConfigGroup(String name)
+	public DrtServiceParams(String name)
 	{
 		super(SET_TYPE);
 		this.name = name;
@@ -38,9 +38,9 @@ public class ServiceExecutionConfigGroup extends ReflectiveConfigGroup {
 	public ConfigGroup createParameterSet(final String type) {
 		if (type.equals(SET_TYPE))
 		{
-			return new ServiceExecutionConfigGroup();
+			return new DrtServiceParams();
 		}
-		return new ConfigGroup( type );
+		throw new IllegalStateException("Unsupported ConfigGroup "+ type);
 	}
 
 
@@ -49,7 +49,7 @@ public class ServiceExecutionConfigGroup extends ReflectiveConfigGroup {
 		if (configGroup instanceof AbstractServiceParam) {
 			super.addParameterSet(configGroup);
 		} else {
-			throw new IllegalArgumentException();
+			throw new IllegalStateException("Unsupported ConfigGroup "+ configGroup.getName());
 		}
 	}
 }

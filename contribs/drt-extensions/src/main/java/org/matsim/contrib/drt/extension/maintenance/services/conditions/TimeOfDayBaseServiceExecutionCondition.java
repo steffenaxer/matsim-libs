@@ -7,7 +7,7 @@ import org.matsim.contrib.dvrp.schedule.Schedule;
 /**
  * @author steffenaxer
  */
-public class TimeOfDayBaseServiceExecutionCondition implements ServiceExecutionCondition {
+public class TimeOfDayBaseServiceExecutionCondition implements ServiceExecutionCondition, TimedCondition {
 	private final TimeOfDayBasedConditionParam timeOfDayBasedConditionParam;
 
 	public TimeOfDayBaseServiceExecutionCondition(TimeOfDayBasedConditionParam timeOfDayBasedConditionParam)
@@ -26,4 +26,8 @@ public class TimeOfDayBaseServiceExecutionCondition implements ServiceExecutionC
 			&& timeStep==this.timeOfDayBasedConditionParam.serviceTimeOfDay;
 	}
 
+	@Override
+	public double getExecutionTime() {
+		return this.timeOfDayBasedConditionParam.serviceTimeOfDay;
+	}
 }

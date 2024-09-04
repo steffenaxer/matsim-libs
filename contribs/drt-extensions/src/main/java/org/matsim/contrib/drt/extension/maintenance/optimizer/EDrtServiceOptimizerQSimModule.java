@@ -1,6 +1,7 @@
 package org.matsim.contrib.drt.extension.maintenance.optimizer;
 
 import org.matsim.api.core.v01.network.Network;
+import org.matsim.contrib.drt.extension.DrtWithExtensionsConfigGroup;
 import org.matsim.contrib.drt.extension.edrt.optimizer.EDrtOptimizer;
 import org.matsim.contrib.drt.extension.edrt.scheduler.EmptyVehicleChargingScheduler;
 import org.matsim.contrib.drt.extension.maintenance.dispatcher.ServiceTaskDispatcher;
@@ -8,6 +9,7 @@ import org.matsim.contrib.drt.extension.maintenance.dispatcher.ServiceTaskDispat
 import org.matsim.contrib.drt.extension.maintenance.services.*;
 import org.matsim.contrib.drt.extension.maintenance.schedule.ServiceTaskScheduler;
 import org.matsim.contrib.drt.extension.maintenance.schedule.ServiceTaskSchedulerImpl;
+import org.matsim.contrib.drt.extension.maintenance.services.params.DrtServicesParams;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilityFinder;
 import org.matsim.contrib.drt.optimizer.DefaultDrtOptimizer;
 import org.matsim.contrib.drt.optimizer.DrtOptimizer;
@@ -26,17 +28,20 @@ import org.matsim.core.router.util.TravelTime;
  */
 public class EDrtServiceOptimizerQSimModule extends AbstractDvrpModeQSimModule {
 
-	DrtConfigGroup drtConfigGroup;
+	private final DrtServicesParams drtServicesParams;
+	private final DrtConfigGroup drtConfigGroup;
 
 	public EDrtServiceOptimizerQSimModule(DrtConfigGroup drtConfigGroup) {
 		super(drtConfigGroup.getMode());
 		this.drtConfigGroup = drtConfigGroup;
+		this.drtServicesParams = ((DrtWithExtensionsConfigGroup) drtConfigGroup).getServicesParams().orElseThrow();
 	}
 
 	@Override
 	protected void configureQSim() {
 
 		bindModal(ServiceTaskDispatcher.class).toProvider(modalProvider(getter -> new ServiceTaskDispatcherImpl(
+			drtServicesParams,
 			getter.getModal(Fleet.class),
 			getter.get(EventsManager.class),
 			getter.getModal(ServiceTaskScheduler.class),

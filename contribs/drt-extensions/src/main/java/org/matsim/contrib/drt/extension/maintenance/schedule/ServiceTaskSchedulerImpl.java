@@ -22,8 +22,6 @@ import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
 
-import static org.matsim.contrib.drt.extension.maintenance.dispatcher.ServiceTaskDispatcherImpl.MAINTENANCE_TIME;
-
 /**
  * @author steffenaxer
  */
@@ -44,7 +42,7 @@ public class ServiceTaskSchedulerImpl implements ServiceTaskScheduler {
 	}
 
 	@Override
-	public void scheduleServiceTask(DvrpVehicle vehicle, OperationFacility maintenanceFacility) {
+	public void scheduleServiceTask(DvrpVehicle vehicle, OperationFacility maintenanceFacility, double duration) {
 		final Schedule schedule = vehicle.getSchedule();
 
 		final Task currentTask = schedule.getCurrentTask();
@@ -53,7 +51,7 @@ public class ServiceTaskSchedulerImpl implements ServiceTaskScheduler {
 		{
 			schedule.removeLastTask(); //Remove stay
 			double startTime = chargingTask.getEndTime();
-			double endTime = startTime + MAINTENANCE_TIME;
+			double endTime = startTime + duration;
 			addServiceTask(vehicle, startTime, endTime, chargingTask.getLink());
 			return;
 		}
@@ -86,7 +84,7 @@ public class ServiceTaskSchedulerImpl implements ServiceTaskScheduler {
 			}
 
 			double startTime = path.getArrivalTime();
-			double endTime = startTime + MAINTENANCE_TIME;
+			double endTime = startTime + duration;
 
 			addServiceTask(vehicle, startTime, endTime, toLink);
 
@@ -116,7 +114,7 @@ public class ServiceTaskSchedulerImpl implements ServiceTaskScheduler {
 					//add drive to maintenance location
 					schedule.addTask(taskFactory.createDriveTask(vehicle, path, RELOCATE_SERVICE_TASK_TYPE)); // add RELOCATE
 					double startTime = path.getArrivalTime();
-					double endTime = startTime + MAINTENANCE_TIME;
+					double endTime = startTime + duration;
 
 					addServiceTask(vehicle, startTime, endTime, toLink);
 				}
@@ -130,7 +128,7 @@ public class ServiceTaskSchedulerImpl implements ServiceTaskScheduler {
 					startTime = task.getBeginTime();
 					schedule.removeLastTask();
 				}
-				double endTime = startTime + MAINTENANCE_TIME;
+				double endTime = startTime + duration;
 
 				addServiceTask(vehicle, startTime, endTime, toLink);
 			}
