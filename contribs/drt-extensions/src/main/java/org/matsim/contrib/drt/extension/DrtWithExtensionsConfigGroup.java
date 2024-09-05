@@ -24,7 +24,7 @@ import java.util.Optional;
 import javax.annotation.Nullable;
 
 import org.matsim.contrib.drt.extension.companions.DrtCompanionParams;
-import org.matsim.contrib.drt.extension.maintenance.services.params.DrtServicesParams;
+import org.matsim.contrib.drt.extension.services.services.params.DrtServicesParams;
 import org.matsim.contrib.drt.extension.operations.DrtOperationsParams;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 
