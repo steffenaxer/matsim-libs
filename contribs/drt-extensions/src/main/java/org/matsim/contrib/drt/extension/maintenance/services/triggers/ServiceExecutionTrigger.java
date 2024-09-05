@@ -7,4 +7,5 @@ import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
  */
 public interface ServiceExecutionTrigger {
 	boolean requiresService(DvrpVehicle dvrpVehicle, double timeStep);
+	String getName();
 }

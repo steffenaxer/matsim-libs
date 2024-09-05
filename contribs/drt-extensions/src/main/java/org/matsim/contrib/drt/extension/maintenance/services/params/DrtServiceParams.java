@@ -22,7 +22,10 @@ public class DrtServiceParams extends ReflectiveConfigGroup {
 
 	@Positive
 	@Parameter
-	public int maxTriggerCnt = Integer.MAX_VALUE;
+	public int executionLimit = Integer.MAX_VALUE;
+
+	@Parameter
+	public boolean enableTaskStacking = false;
 
 	public DrtServiceParams() {
 		this(null);

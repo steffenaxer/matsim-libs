@@ -11,18 +11,22 @@ import org.matsim.contrib.dvrp.schedule.Task;
 /**
  * @author steffenaxer
  */
-public class StopBasedServiceTrigger extends AbstractTrigger {
+public class StopBasedServiceTrigger implements ServiceExecutionTrigger {
 	private final StopBasedTriggerParam stopBasedConditionParam;
 
 	public StopBasedServiceTrigger(Id<DvrpVehicle> vehicleId, StopBasedTriggerParam stopBasedConditionParam)
 	{
-		super(vehicleId);
 		this.stopBasedConditionParam = stopBasedConditionParam;
 	}
 
 	@Override
 	public boolean requiresService(DvrpVehicle dvrpVehicle, double timeStep) {
 		return this.judgeVehicle(dvrpVehicle);
+	}
+
+	@Override
+	public String getName() {
+		return stopBasedConditionParam.name;
 	}
 
 	boolean judgeVehicle(DvrpVehicle dvrpVehicle)

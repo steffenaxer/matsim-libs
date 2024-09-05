@@ -1,19 +1,22 @@
 package org.matsim.contrib.drt.extension.maintenance.schedule;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.drt.extension.edrt.schedule.EDrtChargingTask;
+import org.matsim.contrib.drt.extension.maintenance.services.params.DrtServiceParams;
+import org.matsim.contrib.drt.extension.maintenance.tasks.DefaultJoinableTasksImpl;
+import org.matsim.contrib.drt.extension.maintenance.tasks.DrtServiceTask;
 import org.matsim.contrib.drt.extension.maintenance.tasks.ServiceTaskFactory;
+import org.matsim.contrib.drt.extension.maintenance.tasks.JoinableTasks;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacility;
 import org.matsim.contrib.drt.schedule.DrtTaskFactory;
 import org.matsim.contrib.drt.scheduler.EmptyVehicleRelocator;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.path.VrpPathWithTravelData;
 import org.matsim.contrib.dvrp.path.VrpPaths;
-import org.matsim.contrib.dvrp.schedule.DriveTask;
-import org.matsim.contrib.dvrp.schedule.Schedule;
-import org.matsim.contrib.dvrp.schedule.StayTask;
-import org.matsim.contrib.dvrp.schedule.Task;
+import org.matsim.contrib.dvrp.schedule.*;
 import org.matsim.contrib.dvrp.tracker.OnlineDriveTaskTracker;
 import org.matsim.contrib.dvrp.util.LinkTimePair;
 import org.matsim.core.mobsim.framework.MobsimTimer;
@@ -26,11 +29,13 @@ import org.matsim.core.router.util.TravelTime;
  * @author steffenaxer
  */
 public class ServiceTaskSchedulerImpl implements ServiceTaskScheduler {
+	private static final Logger LOG = LogManager.getLogger(ServiceTaskSchedulerImpl.class);
+	private final static JoinableTasks JOINABLE_SERVICES = new DefaultJoinableTasksImpl();
 	private final Network network;
 	private final TravelTime travelTime;
 	private final MobsimTimer timer;
 	private final ServiceTaskFactory taskFactory;
-    private final LeastCostPathCalculator router;
+	private final LeastCostPathCalculator router;
 
 	public ServiceTaskSchedulerImpl(Network network, TravelTime travelTime, TravelDisutility travelDisutility,
 									MobsimTimer timer, DrtTaskFactory taskFactory) {
@@ -38,23 +43,15 @@ public class ServiceTaskSchedulerImpl implements ServiceTaskScheduler {
 		this.travelTime = travelTime;
 		this.timer = timer;
 		this.taskFactory = (ServiceTaskFactory) taskFactory;
-        this.router = new SpeedyALTFactory().createPathCalculator(network, travelDisutility, travelTime);
+		this.router = new SpeedyALTFactory().createPathCalculator(network, travelDisutility, travelTime);
 	}
 
 	@Override
-	public void scheduleServiceTask(DvrpVehicle vehicle, OperationFacility maintenanceFacility, double duration) {
+	public void scheduleServiceTask(DvrpVehicle vehicle, OperationFacility maintenanceFacility, DrtServiceParams drtServiceParams) {
+		double duration = drtServiceParams.duration;
 		final Schedule schedule = vehicle.getSchedule();
 
 		final Task currentTask = schedule.getCurrentTask();
-
-		if(currentTask instanceof EDrtChargingTask chargingTask)
-		{
-			schedule.removeLastTask(); //Remove stay
-			double startTime = chargingTask.getEndTime();
-			double endTime = startTime + duration;
-			addServiceTask(vehicle, startTime, endTime, chargingTask.getLink());
-			return;
-		}
 
 		Link toLink = network.getLinks().get(maintenanceFacility.getLinkId());
 
@@ -88,7 +85,18 @@ public class ServiceTaskSchedulerImpl implements ServiceTaskScheduler {
 
 			addServiceTask(vehicle, startTime, endTime, toLink);
 
+		} else if (currentTask instanceof EDrtChargingTask chargingTask &&
+			Schedules.getLastTask(schedule) != currentTask &&
+			!(Schedules.getNextTask(schedule) instanceof DrtServiceTask)) {
+
+			// Append to charging task and keep position
+			double compensatedDuration = compensateDuration(currentTask, duration, drtServiceParams.name);
+			schedule.removeLastTask(); //Remove stay
+			double startTime = currentTask.getEndTime();
+			double endTime = startTime + compensatedDuration;
+			addServiceTask(vehicle, startTime, endTime, chargingTask.getLink());
 		} else {
+			double compensatedDuration = compensateDuration(currentTask, duration, drtServiceParams.name);
 			final Task task = schedule.getTasks().get(schedule.getTaskCount() - 1);
 			final Link lastLink = ((StayTask) task).getLink();
 
@@ -114,7 +122,7 @@ public class ServiceTaskSchedulerImpl implements ServiceTaskScheduler {
 					//add drive to maintenance location
 					schedule.addTask(taskFactory.createDriveTask(vehicle, path, RELOCATE_SERVICE_TASK_TYPE)); // add RELOCATE
 					double startTime = path.getArrivalTime();
-					double endTime = startTime + duration;
+					double endTime = startTime + compensatedDuration;
 
 					addServiceTask(vehicle, startTime, endTime, toLink);
 				}
@@ -128,7 +136,7 @@ public class ServiceTaskSchedulerImpl implements ServiceTaskScheduler {
 					startTime = task.getBeginTime();
 					schedule.removeLastTask();
 				}
-				double endTime = startTime + duration;
+				double endTime = startTime + compensatedDuration;
 
 				addServiceTask(vehicle, startTime, endTime, toLink);
 			}
@@ -137,12 +145,28 @@ public class ServiceTaskSchedulerImpl implements ServiceTaskScheduler {
 
 	private void addServiceTask(DvrpVehicle vehicle, double startTime, double endTime, Link link) {
 		Schedule schedule = vehicle.getSchedule();
-
 		// append DrtServiceTask
 		schedule.addTask(taskFactory.createServiceTask(startTime, endTime, link));
 
 		// append DrtStayTask
-		schedule.addTask(taskFactory.createStayTask(vehicle, endTime, Math.max(vehicle.getServiceEndTime(),endTime) , link));
+		schedule.addTask(taskFactory.createStayTask(vehicle, endTime, Math.max(vehicle.getServiceEndTime(), endTime), link));
+	}
+
+	double compensateDuration(Task currentTask, double requestedDuration, String serviceName) {
+		if (JOINABLE_SERVICES.isStackableTask(currentTask)) {
+			double currentTaskDuration = currentTask.getEndTime() - currentTask.getBeginTime();
+			if (requestedDuration <= currentTaskDuration) {
+				LOG.info("Service {} with requested {} seconds takes place while {}"
+					,serviceName,requestedDuration, currentTask.getTaskType().name());
+				return 1.;
+			} else {
+				double compensatedDuration = Math.max(1, requestedDuration - currentTaskDuration);
+				LOG.info("Service {} with requested {} seconds takes partially place while {}. Remaining {} seconds"
+					,serviceName,requestedDuration, currentTask.getTaskType().name(), compensatedDuration);
+				return compensatedDuration;
+			}
+		}
+		return requestedDuration;
 	}
 
 

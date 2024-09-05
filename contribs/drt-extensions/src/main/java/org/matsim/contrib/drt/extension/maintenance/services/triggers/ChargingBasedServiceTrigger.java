@@ -11,15 +11,22 @@ import org.matsim.contrib.evrp.ChargingTask;
 /**
  * @author steffenaxer
  */
-public class ChargingBasedServiceTrigger extends AbstractTrigger {
+public class ChargingBasedServiceTrigger implements ServiceExecutionTrigger {
+	ChargingBasedTriggerParam chargingBasedConditionParam;
 
 	public ChargingBasedServiceTrigger(Id<DvrpVehicle> vehicleId, ChargingBasedTriggerParam chargingBasedConditionParam) {
-		super(vehicleId);
+
+		this.chargingBasedConditionParam = chargingBasedConditionParam;
 	}
 
 	@Override
 	public boolean requiresService(DvrpVehicle dvrpVehicle, double timeStep) {
 		return this.judgeVehicle(dvrpVehicle);
+	}
+
+	@Override
+	public String getName() {
+		return chargingBasedConditionParam.name;
 	}
 
 	boolean judgeVehicle(DvrpVehicle dvrpVehicle)

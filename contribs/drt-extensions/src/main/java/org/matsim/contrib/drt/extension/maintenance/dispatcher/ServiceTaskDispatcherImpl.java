@@ -6,13 +6,13 @@ import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.drt.extension.maintenance.services.ServiceTriggerFactory;
-import org.matsim.contrib.drt.extension.maintenance.services.ServiceCollector;
 import org.matsim.contrib.drt.extension.maintenance.services.params.TimedTriggerParam;
-import org.matsim.contrib.drt.extension.maintenance.services.triggers.AbstractTrigger;
 import org.matsim.contrib.drt.extension.maintenance.services.params.AbstractServiceTriggerParam;
 import org.matsim.contrib.drt.extension.maintenance.services.params.DrtServiceParams;
 import org.matsim.contrib.drt.extension.maintenance.schedule.ServiceTaskScheduler;
 import org.matsim.contrib.drt.extension.maintenance.services.params.DrtServicesParams;
+import org.matsim.contrib.drt.extension.maintenance.services.triggers.ServiceExecutionTracker;
+import org.matsim.contrib.drt.extension.maintenance.services.triggers.ServiceExecutionTrigger;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacility;
 import org.matsim.contrib.drt.extension.operations.operationFacilities.OperationFacilityFinder;
 import org.matsim.contrib.drt.schedule.DrtStayTask;
@@ -38,25 +38,22 @@ public class ServiceTaskDispatcherImpl implements ServiceTaskDispatcher {
 	private final Fleet fleet;
 	private final EventsManager eventsManager;
 	private final ServiceTaskScheduler serviceTaskScheduler;
-	private final ServiceCollector serviceCollector;
 	private final OperationFacilityFinder operationFacilityFinder;
 	private final ServiceTriggerFactory serviceTriggerFactory;
-	private final Map<TriggerKey, AbstractTrigger> serviceConditionMap = new HashMap<>();
+	private final Map<Id<DvrpVehicle>, ServiceExecutionTracker> executors = new HashMap<>();
 	private final Set<Double> timedTriggers = new HashSet<>();
 
 	public ServiceTaskDispatcherImpl(final DrtServicesParams drtServicesParams, Fleet fleet, EventsManager eventsManager,
 									 ServiceTaskScheduler serviceTaskScheduler,
-									 ServiceCollector serviceCollector,
 									 OperationFacilityFinder operationFacilityFinder,
 									 ServiceTriggerFactory serviceTriggerFactory) {
 		this.drtServicesParams = drtServicesParams;
 		this.fleet = fleet;
 		this.eventsManager = eventsManager;
 		this.serviceTaskScheduler = serviceTaskScheduler;
-		this.serviceCollector = serviceCollector;
 		this.operationFacilityFinder = operationFacilityFinder;
 		this.serviceTriggerFactory = serviceTriggerFactory;
-		this.registerTimedTriggers();
+		this.registerServiceExecutors();
 	}
 
 	@Override
@@ -64,21 +61,23 @@ public class ServiceTaskDispatcherImpl implements ServiceTaskDispatcher {
 		//TODO Make this run parallel
 		if (timeStep % drtServicesParams.executionInterval == 0 || this.timedTriggers.contains(timeStep)) {
 			for (DvrpVehicle dvrpVehicle : this.fleet.getVehicles().values()) {
-				for (DrtServiceParams drtServiceParams : this.serviceCollector.getServices()) {
-					String serviceName = drtServiceParams.name;
-					double duration = drtServiceParams.duration;
+				ServiceExecutionTracker tracker = this.executors.get(dvrpVehicle.getId());
+				for (DrtServiceParams drtServiceParams : tracker.getServices()) {
+					int executionLimit = drtServiceParams.executionLimit;
+					int currentExecutions = tracker.getTriggerCount(drtServiceParams);
 
-					Collection<? extends Collection<? extends ConfigGroup>> executionConditions = drtServiceParams.getParameterSets().values();
-					for (Collection<? extends ConfigGroup> executionCondition : executionConditions) {
-						var condition = (AbstractServiceTriggerParam) executionCondition.iterator().next();
-						TriggerKey key = new TriggerKey(dvrpVehicle.getId(), condition);
-						AbstractTrigger abstractTrigger = serviceConditionMap
-							.computeIfAbsent(key, k -> this.serviceTriggerFactory.get(dvrpVehicle.getId(), condition));
-						if (abstractTrigger.requiresService(dvrpVehicle, timeStep)) {
-							this.serviceTaskScheduler.scheduleServiceTask(dvrpVehicle, findServiceFacility(dvrpVehicle), duration);
-							abstractTrigger.incrementTrigger();
-							LOG.info("Triggered service {} for vehicle {} issued by {}", serviceName, dvrpVehicle.getId(), condition.name);
-							break; // Only assign for first matching condition
+					if(currentExecutions == executionLimit)
+					{
+						LOG.debug("Execution limit for vehicle {} and service {} reached.", drtServiceParams.name, dvrpVehicle.getId());
+						continue;
+					}
+
+					for (ServiceExecutionTrigger serviceExecutionTrigger : tracker.getTriggers(drtServiceParams)) {
+						if (serviceExecutionTrigger.requiresService(dvrpVehicle, timeStep)) {
+							this.serviceTaskScheduler.scheduleServiceTask(dvrpVehicle, findServiceFacility(dvrpVehicle), drtServiceParams);
+							tracker.incrementExecutionCounter(drtServiceParams);
+							LOG.debug("{} executed service {} for vehicle {} at {}.", serviceExecutionTrigger.getName(), drtServiceParams.name, dvrpVehicle.getId(), timeStep);
+							break;
 						}
 					}
 				}
@@ -86,20 +85,22 @@ public class ServiceTaskDispatcherImpl implements ServiceTaskDispatcher {
 		}
 	}
 
-	record TriggerKey(Id<DvrpVehicle> vehicleId, AbstractServiceTriggerParam abstractServiceTriggerParam) {
-	}
-
-	private void registerTimedTriggers() {
-		for (DrtServiceParams drtServiceParams : this.serviceCollector.getServices()) {
-			Collection<? extends Collection<? extends ConfigGroup>> executionConditions = drtServiceParams.getParameterSets().values();
-			for (Collection<? extends ConfigGroup> executionCondition : executionConditions) {
-				Verify.verify(executionCondition.size() == 1);
-				var service = (AbstractServiceTriggerParam) executionCondition.iterator().next();
-
-				if (service instanceof TimedTriggerParam timedTrigger) {
-					//Register execution times from params
-					LOG.info("Timed trigger {} for service {} with execution time {} registered", service.name, drtServiceParams.name, timedTrigger.getExecutionTime());
-					this.timedTriggers.add(timedTrigger.getExecutionTime());
+	private void registerServiceExecutors() {
+		for (DvrpVehicle vehicle : this.fleet.getVehicles().values()) {
+			ServiceExecutionTracker serviceExecutionTracker = new ServiceExecutionTracker(vehicle.getId());
+			this.executors.put(vehicle.getId(), serviceExecutionTracker);
+			for (ConfigGroup configGroup : this.drtServicesParams.getParameterSets(DrtServiceParams.SET_TYPE)) {
+				DrtServiceParams drtServiceParams = (DrtServiceParams) configGroup;
+				Collection<? extends Collection<? extends ConfigGroup>> executionConditions = drtServiceParams.getParameterSets().values();
+				for (Collection<? extends ConfigGroup> executionCondition : executionConditions) {
+					Verify.verify(executionCondition.size() == 1);
+					var trigger = (AbstractServiceTriggerParam) executionCondition.iterator().next();
+					serviceExecutionTracker.addTrigger((DrtServiceParams) drtServiceParams, this.serviceTriggerFactory.get(vehicle.getId(), trigger));
+					if (trigger instanceof TimedTriggerParam timedTrigger) {
+						//Register execution times from params
+						LOG.info("Timed trigger {} for service {} with execution time {} registered", trigger.name, drtServiceParams.name, timedTrigger.getExecutionTime());
+						this.timedTriggers.add(timedTrigger.getExecutionTime());
+					}
 				}
 			}
 		}

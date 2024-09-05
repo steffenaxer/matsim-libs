@@ -14,18 +14,22 @@ import org.matsim.contrib.dvrp.schedule.Task;
 /**
  * @author steffenaxer
  */
-public class MileageBaseServiceTrigger extends AbstractTrigger {
+public class MileageBasedServiceTrigger implements ServiceExecutionTrigger {
 	private final MileageBasedTriggerParam mileageBasedConditionParam;
 
-	public MileageBaseServiceTrigger(Id<DvrpVehicle> vehicleId, MileageBasedTriggerParam mileageBasedConditionParam)
+	public MileageBasedServiceTrigger(Id<DvrpVehicle> vehicleId, MileageBasedTriggerParam mileageBasedConditionParam)
 	{
-		super(vehicleId);
 		this.mileageBasedConditionParam = mileageBasedConditionParam;
 	}
 
 	@Override
 	public boolean requiresService(DvrpVehicle dvrpVehicle, double timeStep) {
 		return this.judgeVehicle(dvrpVehicle, timeStep);
+	}
+
+	@Override
+	public String getName() {
+		return mileageBasedConditionParam.name;
 	}
 
 	boolean judgeVehicle(DvrpVehicle dvrpVehicle, double timeStep)

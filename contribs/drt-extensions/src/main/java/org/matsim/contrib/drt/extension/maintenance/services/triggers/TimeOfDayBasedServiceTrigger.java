@@ -8,18 +8,22 @@ import org.matsim.contrib.dvrp.schedule.Schedule;
 /**
  * @author steffenaxer
  */
-public class TimeOfDayBaseServiceAbstractTrigger extends AbstractTrigger {
+public class TimeOfDayBasedServiceTrigger implements ServiceExecutionTrigger {
 	private final TimeOfDayBasedTriggerParam timeOfDayBasedConditionParam;
 
-	public TimeOfDayBaseServiceAbstractTrigger(Id<DvrpVehicle> vehicleId, TimeOfDayBasedTriggerParam timeOfDayBasedConditionParam)
+	public TimeOfDayBasedServiceTrigger(Id<DvrpVehicle> vehicleId, TimeOfDayBasedTriggerParam timeOfDayBasedConditionParam)
 	{
-		super(vehicleId);
 		this.timeOfDayBasedConditionParam = timeOfDayBasedConditionParam;
 	}
 
 	@Override
 	public boolean requiresService(DvrpVehicle dvrpVehicle, double timeStep) {
 		return this.judgeVehicle(dvrpVehicle, timeStep);
+	}
+
+	@Override
+	public String getName() {
+		return timeOfDayBasedConditionParam.name;
 	}
 
 	boolean judgeVehicle(DvrpVehicle dvrpVehicle, double timeStep)

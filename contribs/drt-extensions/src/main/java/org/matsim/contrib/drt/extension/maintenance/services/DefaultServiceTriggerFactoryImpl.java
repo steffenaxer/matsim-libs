@@ -11,12 +11,12 @@ import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 public class DefaultServiceTriggerFactoryImpl implements ServiceTriggerFactory {
 
 	@Override
-	public AbstractTrigger get(Id<DvrpVehicle> vehicleId, AbstractServiceTriggerParam param) {
+	public ServiceExecutionTrigger get(Id<DvrpVehicle> vehicleId, AbstractServiceTriggerParam param) {
 		return switch (param) {
 			case StopBasedTriggerParam stopBasedConditionParam -> new StopBasedServiceTrigger(vehicleId, stopBasedConditionParam);
-			case MileageBasedTriggerParam mileageBasedConditionParam -> new MileageBaseServiceTrigger(vehicleId, mileageBasedConditionParam);
+			case MileageBasedTriggerParam mileageBasedConditionParam -> new MileageBasedServiceTrigger(vehicleId, mileageBasedConditionParam);
 			case ChargingBasedTriggerParam chargingBasedConditionParam -> new ChargingBasedServiceTrigger(vehicleId,chargingBasedConditionParam);
-			case TimeOfDayBasedTriggerParam timeOfDayBasedConditionParam -> new TimeOfDayBaseServiceAbstractTrigger(vehicleId, timeOfDayBasedConditionParam);
+			case TimeOfDayBasedTriggerParam timeOfDayBasedConditionParam -> new TimeOfDayBasedServiceTrigger(vehicleId, timeOfDayBasedConditionParam);
 			default -> throw new IllegalStateException("JobConditionFactory missing for MaintenanceParam " + param.getName());
 		};
 	}

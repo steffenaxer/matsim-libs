@@ -186,25 +186,20 @@ public class RunEDrtMaintenanceScenarioIT {
 
 		{
 			DrtServiceParams clean = new DrtServiceParams("clean");
-			clean.maxTriggerCnt = 1;
+			clean.executionLimit = 1;
 			clean.duration = 900;
 			var condition1 = new TimeOfDayBasedTriggerParam();
-			condition1.executionTime = 12 * 3600 + 1111;
+			condition1.executionTime = 53205;
 			clean.addParameterSet(condition1);
-
-			var condition2 = new StopBasedTriggerParam();
-			condition2.requiredStops = 10;
-			clean.addParameterSet(condition2);
 			drtServicesParams.addParameterSet(clean);
-
 		}
 
 		{
 			DrtServiceParams deepClean = new DrtServiceParams("deep clean");
-			deepClean.maxTriggerCnt = 1;
+			deepClean.executionLimit = 1;
 			deepClean.duration = 1800;
 			var condition1 = new TimeOfDayBasedTriggerParam();
-			condition1.executionTime = 12 * 3600 + 1111;
+			condition1.executionTime = 53205;
 			deepClean.addParameterSet(condition1);
 			drtServicesParams.addParameterSet(deepClean);
 		}
