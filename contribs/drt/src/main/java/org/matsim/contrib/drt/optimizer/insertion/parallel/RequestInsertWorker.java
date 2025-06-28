@@ -16,6 +16,8 @@ import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestRejectedEvent;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestScheduledEvent;
 import org.matsim.core.api.experimental.events.EventsManager;
+import org.matsim.core.mobsim.framework.events.MobsimAfterSimStepEvent;
+import org.matsim.core.mobsim.framework.listeners.MobsimAfterSimStepListener;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -29,7 +31,7 @@ import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequest
 /**
  * @author steffenaxer
  */
-public class RequestInsertWorker implements Runnable {
+public class RequestInsertWorker implements Runnable, MobsimAfterSimStepListener {
 	private static final Logger LOG = LogManager.getLogger(RequestInsertWorker.class);
 	private final VehicleEntry.EntryFactory vehicleEntryFactory;
 	private final DoubleSupplier timeOfDay;
@@ -45,6 +47,7 @@ public class RequestInsertWorker implements Runnable {
 	private final Map<Id<DvrpVehicle>, DvrpVehicle> managedVehicles;
 	private boolean status = true;
 	ForkJoinPool forkJoinPool = new ForkJoinPool(4);
+	private double lastProcessedTime = -1;
 
 	public RequestInsertWorker(VehicleEntry.EntryFactory vehicleEntryFactory,
 							   DoubleSupplier timeOfDay,
@@ -77,9 +80,7 @@ public class RequestInsertWorker implements Runnable {
 
 	private void retryOrReject(DrtRequest req, double now, String cause) {
 		if (!insertionRetryQueue.tryAddFailedRequest(req, now)) {
-			eventsManager.processEvent(
-				new PassengerRequestRejectedEvent(now, mode, req.getId(), req.getPassengerIds(),
-					cause));
+			eventsManager.processEvent(new PassengerRequestRejectedEvent(now, mode, req.getId(), req.getPassengerIds(), cause));
 			LOG.debug("No insertion found for drt request {} with passenger ids={} fromLinkId={}", req, req.getPassengerIds().stream().map(Object::toString).collect(Collectors.joining(",")), req.getFromLink().getId());
 		}
 	}
@@ -138,13 +139,26 @@ public class RequestInsertWorker implements Runnable {
 
 	@Override
 	public void run() {
-		while(this.status)
-		{
+		while (this.status) {
 			double now = this.timeOfDay.getAsDouble();
+
+			// Nur einmal pro Sim-Zeitstempel arbeiten
+			if (now == lastProcessedTime) {
+				try {
+					Thread.sleep(50); // Schonende Wartezeit
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					LOG.warn("Worker interrupted", e);
+					break;
+				}
+				continue;
+			}
+			lastProcessedTime = now;
+
 			List<DrtRequest> requestsToRetry = insertionRetryQueue.getRequestsToRetryNow(now);
 
 			if (unplannedRequests.isEmpty() && requestsToRetry.isEmpty()) {
-				return;
+				continue;
 			}
 
 			var vehicleEntries = forkJoinPool.submit(() -> managedVehicles.values()
@@ -153,13 +167,17 @@ public class RequestInsertWorker implements Runnable {
 				.filter(Objects::nonNull)
 				.collect(Collectors.toMap(e -> e.vehicle.getId(), e -> e))).join();
 
-			//first retry scheduling old requests
 			requestsToRetry.forEach(req -> scheduleUnplannedRequest(req, vehicleEntries, now));
 
-			while (!unplannedRequests.isEmpty()) {
-				DrtRequest req = unplannedRequests.poll(); // removes the head
-				scheduleUnplannedRequest(req, vehicleEntries, now); // your custom processing logic
+			DrtRequest req;
+			while ((req = unplannedRequests.poll()) != null) {
+				scheduleUnplannedRequest(req, vehicleEntries, now);
 			}
 		}
+	}
+
+	@Override
+	public void notifyMobsimAfterSimStep(MobsimAfterSimStepEvent e) {
+
 	}
 }

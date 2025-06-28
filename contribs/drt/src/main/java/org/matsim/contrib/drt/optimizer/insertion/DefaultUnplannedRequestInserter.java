@@ -71,7 +71,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 	private final ForkJoinPool forkJoinPool;
 	private final PassengerStopDurationProvider stopDurationProvider;
 	private final RequestFleetFilter requestFleetFilter;
-	private final static int NUM_THREADS = 2;
+	private final static int NUM_THREADS = 1;
 	private final Thread[] threads = new Thread[NUM_THREADS];
 	private final List<RequestInsertWorker> requestInsertWorkers = new ArrayList<>();
 
@@ -181,7 +181,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 
 	@Override
 	public void notifyMobsimAfterSimStep(MobsimAfterSimStepEvent e) {
-
+		this.requestInsertWorkers.forEach(w -> w.notifyMobsimAfterSimStep(e));
 	}
 
 	@Override
