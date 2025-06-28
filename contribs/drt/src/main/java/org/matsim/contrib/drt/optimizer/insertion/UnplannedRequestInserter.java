@@ -22,11 +22,12 @@ package org.matsim.contrib.drt.optimizer.insertion;
 import java.util.Collection;
 
 import org.matsim.contrib.drt.passenger.DrtRequest;
+import org.matsim.core.mobsim.framework.listeners.MobsimBeforeCleanupListener;
 import org.matsim.core.mobsim.qsim.interfaces.MobsimEngine;
 
 /**
  * @author michalm
  */
-public interface UnplannedRequestInserter extends MobsimEngine {
+public interface UnplannedRequestInserter extends MobsimEngine, MobsimBeforeCleanupListener {
 	void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests);
 }
