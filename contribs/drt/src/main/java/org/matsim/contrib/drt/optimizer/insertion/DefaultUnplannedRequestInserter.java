@@ -19,12 +19,8 @@
 
 package org.matsim.contrib.drt.optimizer.insertion;
 
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
+import java.util.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.DoubleSupplier;
 import java.util.stream.Collectors;
@@ -47,15 +43,21 @@ import org.matsim.core.api.experimental.events.EventsManager;
 import org.matsim.core.mobsim.framework.MobsimTimer;
 
 import com.google.common.annotations.VisibleForTesting;
+import org.matsim.core.mobsim.framework.events.MobsimAfterSimStepEvent;
+import org.matsim.core.mobsim.framework.listeners.MobsimAfterSimStepListener;
+import org.matsim.core.mobsim.qsim.InternalInterface;
+import org.matsim.core.mobsim.qsim.interfaces.MobsimEngine;
 
 /**
  * @author michalm
  */
-public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter {
+public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter, MobsimAfterSimStepListener, MobsimEngine {
 	private static final Logger log = LogManager.getLogger(DefaultUnplannedRequestInserter.class);
 	public static final String NO_INSERTION_FOUND_CAUSE = "no_insertion_found";
 	public static final String OFFER_REJECTED_CAUSE = "offer_rejected";
+	public static final int INTERVAL = 60;
 
+	private Double lastProcessingTime;
 	private final String mode;
 	private final Fleet fleet;
 	private final DoubleSupplier timeOfDay;
@@ -64,6 +66,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 	private final VehicleEntry.EntryFactory vehicleEntryFactory;
 	private final DrtInsertionSearch insertionSearch;
 	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
+	private final Queue<DrtRequest> requestQueue = new ConcurrentLinkedQueue<>();
 	private final DrtOfferAcceptor drtOfferAcceptor;
 	private final ForkJoinPool forkJoinPool;
 	private final PassengerStopDurationProvider stopDurationProvider;
@@ -106,20 +109,31 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 			return;
 		}
 
+		//then schedule new requests
+		for (var reqIter = unplannedRequests.iterator(); reqIter.hasNext(); ) {
+			requestQueue.add(reqIter.next());
+			reqIter.remove();
+		}
+	}
+
+	void process()
+	{
+		double now = this.timeOfDay.getAsDouble();
+		List<DrtRequest> requestsToRetry = insertionRetryQueue.getRequestsToRetryNow(now);
+
 		var vehicleEntries = forkJoinPool.submit(() -> fleet.getVehicles()
-				.values()
-				.parallelStream()
-				.map(v -> vehicleEntryFactory.create(v, now))
-				.filter(Objects::nonNull)
-				.collect(Collectors.toMap(e -> e.vehicle.getId(), e -> e))).join();
+			.values()
+			.parallelStream()
+			.map(v -> vehicleEntryFactory.create(v, now))
+			.filter(Objects::nonNull)
+			.collect(Collectors.toMap(e -> e.vehicle.getId(), e -> e))).join();
 
 		//first retry scheduling old requests
 		requestsToRetry.forEach(req -> scheduleUnplannedRequest(req, vehicleEntries, now));
 
-		//then schedule new requests
-		for (var reqIter = unplannedRequests.iterator(); reqIter.hasNext(); ) {
-			scheduleUnplannedRequest(reqIter.next(), vehicleEntries, now);
-			reqIter.remove();
+		while (!requestQueue.isEmpty()) {
+			DrtRequest req = requestQueue.poll(); // removes the head
+			scheduleUnplannedRequest(req, vehicleEntries, now); // your custom processing logic
 		}
 	}
 
@@ -133,7 +147,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 		} else {
 			InsertionWithDetourData insertion = best.get();
 
-			double dropoffDuration = 
+			double dropoffDuration =
 				insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime -
 				insertion.detourTimeInfo.dropoffDetourInfo.vehicleArrivalTime;
 
@@ -182,5 +196,40 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 					+ " fromLinkId="
 					+ req.getFromLink().getId());
 		}
+	}
+
+	@Override
+	public void notifyMobsimAfterSimStep(MobsimAfterSimStepEvent e) {
+		double now = timeOfDay.getAsDouble();
+
+		if(this.lastProcessingTime==null)
+		{
+			this.lastProcessingTime = timeOfDay.getAsDouble();
+		}
+
+		if ((now - lastProcessingTime) >= INTERVAL) {
+			process();
+			lastProcessingTime = now;
+		}
+	}
+
+	@Override
+	public void onPrepareSim() {
+
+	}
+
+	@Override
+	public void afterSim() {
+
+	}
+
+	@Override
+	public void setInternalInterface(InternalInterface internalInterface) {
+
+	}
+
+	@Override
+	public void doSimStep(double time) {
+
 	}
 }

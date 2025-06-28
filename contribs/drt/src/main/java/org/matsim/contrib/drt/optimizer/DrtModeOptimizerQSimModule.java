@@ -119,6 +119,7 @@ public class DrtModeOptimizerQSimModule extends AbstractDvrpModeQSimModule {
 						getter.getModal(DrtRequestInsertionRetryQueue.class), getter.getModal(DrtOfferAcceptor.class),
 						getter.getModal(QSimScopeForkJoinPoolHolder.class).getPool(),
 						getter.getModal(PassengerStopDurationProvider.class), getter.getModal(RequestFleetFilter.class)))).asEagerSingleton();
+		addModalQSimComponentBinding().to(modalKey(UnplannedRequestInserter.class));
 
 		bindModal(InsertionCostCalculator.class).toProvider(modalProvider(
 				getter -> new DefaultInsertionCostCalculator(getter.getModal(CostCalculationStrategy.class),
