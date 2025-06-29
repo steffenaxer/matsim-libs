@@ -22,6 +22,7 @@ import org.matsim.core.mobsim.framework.listeners.MobsimAfterSimStepListener;
 
 import java.util.*;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.function.DoubleSupplier;
@@ -39,7 +40,7 @@ public class RequestInsertWorker {
 	private final DoubleSupplier timeOfDay;
 	private final RequestFleetFilter requestFleetFilter;
 	private final DrtInsertionSearch insertionSearch;
-	private final BlockingQueue<DrtRequest> unplannedRequests = new LinkedBlockingDeque<>();
+	private final BlockingQueue<RequestRecord> unplannedRequests = new LinkedBlockingDeque<>();
 	private final PassengerStopDurationProvider stopDurationProvider;
 	private final DrtOfferAcceptor drtOfferAcceptor;
 	private final RequestInsertionScheduler insertionScheduler;
@@ -84,8 +85,8 @@ public class RequestInsertWorker {
 		}
 	}
 
-	private void scheduleUnplannedRequest(DrtRequest req, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries,
-										  double now) {
+	private void scheduleUnplannedRequest(RequestRecord reqRecord, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries, double now) {
+		DrtRequest req = reqRecord.getDrtRequest();
 		Collection<VehicleEntry> filteredFleet = requestFleetFilter.filter(req, vehicleEntries, now);
 		Optional<InsertionWithDetourData> best = insertionSearch.findBestInsertion(req,
 			Collections.unmodifiableCollection(filteredFleet));
@@ -122,16 +123,18 @@ public class RequestInsertWorker {
 				double expectedDropoffTime = pickupDropoffTaskPair.dropoffTask.getBeginTime();
 				expectedDropoffTime += stopDurationProvider.calcDropoffDuration(vehicle, req);
 
+				reqRecord.getCf().complete(req);
 				eventsManager.processEvent(
 					new PassengerRequestScheduledEvent(now, mode, req.getId(), req.getPassengerIds(), vehicle.getId(),
 						expectedPickupTime, expectedDropoffTime));
 			} else {
+				//TODO Rethink retry flow
 				retryOrReject(req, now, OFFER_REJECTED_CAUSE);
 			}
 		}
 	}
 
-	public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests)
+	public void scheduleUnplannedRequests(Collection<RequestRecord> unplannedRequests)
 	{
 		this.unplannedRequests.addAll(unplannedRequests);
 	}
@@ -149,12 +152,15 @@ public class RequestInsertWorker {
 			.collect(Collectors.toMap(e -> e.vehicle.getId(), e -> e))).join();
 
 		//first retry scheduling old requests
-		requestsToRetry.forEach(req -> scheduleUnplannedRequest(req, vehicleEntries, now));
+		for (DrtRequest drtRequest : requestsToRetry) {
+			CompletableFuture<DrtRequest> cf = new CompletableFuture<>();
+			new RequestRecord(drtRequest, cf);
+			scheduleUnplannedRequest(new RequestRecord(drtRequest, cf), vehicleEntries, now);
+		}
 
 		while (!this.unplannedRequests.isEmpty()) {
-			DrtRequest req = unplannedRequests.poll(); // removes the head
+			RequestRecord req = unplannedRequests.peek(); // removes the head
 			scheduleUnplannedRequest(req, vehicleEntries, now); // your custom processing logic
 		}
 	}
-
 }

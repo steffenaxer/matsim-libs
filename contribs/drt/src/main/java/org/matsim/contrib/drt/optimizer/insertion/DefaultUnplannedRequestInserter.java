@@ -20,6 +20,7 @@
 package org.matsim.contrib.drt.optimizer.insertion;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
@@ -127,34 +128,15 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 
 	@Override
 	public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
-		distributeRoundRobin(unplannedRequests, this.workers);
+		var records = unplannedRequests.stream().map(request -> {
+			CompletableFuture<DrtRequest> cf = new CompletableFuture<>();
+			return new RequestRecord(request, cf);
+		}).toList();
+
+		for (RequestInsertWorker worker : this.workers) {
+			worker.scheduleUnplannedRequests(records);
+		}
 		unplannedRequests.clear();
-	}
-
-	public static void distributeRoundRobin(Collection<DrtRequest> unplannedRequests, List<RequestInsertWorker> workers) {
-		if (workers == null || workers.isEmpty()) {
-			throw new IllegalArgumentException("Workers could not be empty!");
-		}
-
-		List<List<DrtRequest>> partitions = new ArrayList<>();
-		for (int i = 0; i < workers.size(); i++) {
-			partitions.add(new ArrayList<>());
-		}
-
-		Iterator<DrtRequest> iterator = unplannedRequests.iterator();
-		int index = 0;
-		while (iterator.hasNext()) {
-			DrtRequest req = iterator.next();
-			partitions.get(index % workers.size()).add(req);
-			iterator.remove();
-			index++;
-		}
-
-		for (int i = 0; i < workers.size(); i++) {
-			if (!partitions.get(i).isEmpty()) {
-				workers.get(i).scheduleUnplannedRequests(partitions.get(i));
-			}
-		}
 	}
 
 	public static List<Map<Id<DvrpVehicle>, DvrpVehicle>> splitFleetIntoParts(Fleet fleet, int n) {
