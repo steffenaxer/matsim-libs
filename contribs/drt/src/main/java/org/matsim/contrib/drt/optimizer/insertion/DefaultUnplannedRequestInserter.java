@@ -71,6 +71,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 	private final ForkJoinPool forkJoinPool;
 	private final PassengerStopDurationProvider stopDurationProvider;
 	private final RequestFleetFilter requestFleetFilter;
+	private final RequestInsertWorker worker;
 
 	public DefaultUnplannedRequestInserter(DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
                                            EventsManager eventsManager, RequestInsertionScheduler insertionScheduler,
@@ -98,104 +99,22 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 		this.forkJoinPool = forkJoinPool;
 		this.stopDurationProvider = stopDurationProvider;
         this.requestFleetFilter = requestFleetFilter;
+		this.worker = new RequestInsertWorker(vehicleEntryFactory,
+			timeOfDay,
+			requestFleetFilter,
+			insertionSearch,
+			stopDurationProvider,
+			drtOfferAcceptor,
+			insertionScheduler,
+			eventsManager,
+			insertionRetryQueue,
+			mode, fleet.getVehicles());
     }
 
 	@Override
 	public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
-		double now = timeOfDay.getAsDouble();
-
-		List<DrtRequest> requestsToRetry = insertionRetryQueue.getRequestsToRetryNow(now);
-		if (unplannedRequests.isEmpty() && requestsToRetry.isEmpty()) {
-			return;
-		}
-
-		//then schedule new requests
-		for (var reqIter = unplannedRequests.iterator(); reqIter.hasNext(); ) {
-			requestQueue.add(reqIter.next());
-			reqIter.remove();
-		}
-	}
-
-	void process()
-	{
-		double now = this.timeOfDay.getAsDouble();
-		List<DrtRequest> requestsToRetry = insertionRetryQueue.getRequestsToRetryNow(now);
-
-		var vehicleEntries = forkJoinPool.submit(() -> fleet.getVehicles()
-			.values()
-			.parallelStream()
-			.map(v -> vehicleEntryFactory.create(v, now))
-			.filter(Objects::nonNull)
-			.collect(Collectors.toMap(e -> e.vehicle.getId(), e -> e))).join();
-
-		//first retry scheduling old requests
-		requestsToRetry.forEach(req -> scheduleUnplannedRequest(req, vehicleEntries, now));
-
-		while (!requestQueue.isEmpty()) {
-			DrtRequest req = requestQueue.poll(); // removes the head
-			scheduleUnplannedRequest(req, vehicleEntries, now); // your custom processing logic
-		}
-	}
-
-	private void scheduleUnplannedRequest(DrtRequest req, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries,
-			double now) {
-		Collection<VehicleEntry> filteredFleet = requestFleetFilter.filter(req, vehicleEntries, now);
-		Optional<InsertionWithDetourData> best = insertionSearch.findBestInsertion(req,
-				Collections.unmodifiableCollection(filteredFleet));
-		if (best.isEmpty()) {
-			retryOrReject(req, now, NO_INSERTION_FOUND_CAUSE);
-		} else {
-			InsertionWithDetourData insertion = best.get();
-
-			double dropoffDuration =
-				insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime -
-				insertion.detourTimeInfo.dropoffDetourInfo.vehicleArrivalTime;
-
-			// accept offered drt ride
-			var acceptedRequest = drtOfferAcceptor.acceptDrtOffer(req,
-					insertion.detourTimeInfo.pickupDetourInfo.requestPickupTime,
-					insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime,
-					dropoffDuration);
-
-			if(acceptedRequest.isPresent()) {
-				var vehicle = insertion.insertion.vehicleEntry.vehicle;
-				var pickupDropoffTaskPair = insertionScheduler.scheduleRequest(acceptedRequest.get(), insertion);
-
-				VehicleEntry newVehicleEntry = vehicleEntryFactory.create(vehicle, now);
-				if (newVehicleEntry != null) {
-					vehicleEntries.put(vehicle.getId(), newVehicleEntry);
-				} else {
-					vehicleEntries.remove(vehicle.getId());
-				}
-
-				double expectedPickupTime = pickupDropoffTaskPair.pickupTask.getBeginTime();
-				expectedPickupTime = Math.max(expectedPickupTime, acceptedRequest.get().getEarliestStartTime());
-				expectedPickupTime += stopDurationProvider.calcPickupDuration(vehicle, req);
-
-				double expectedDropoffTime = pickupDropoffTaskPair.dropoffTask.getBeginTime();
-				expectedDropoffTime += stopDurationProvider.calcDropoffDuration(vehicle, req);
-
-				eventsManager.processEvent(
-						new PassengerRequestScheduledEvent(now, mode, req.getId(), req.getPassengerIds(), vehicle.getId(),
-								expectedPickupTime, expectedDropoffTime));
-			} else {
-				retryOrReject(req, now, OFFER_REJECTED_CAUSE);
-			}
-		}
-	}
-
-	private void retryOrReject(DrtRequest req, double now, String cause) {
-		if (!insertionRetryQueue.tryAddFailedRequest(req, now)) {
-			eventsManager.processEvent(
-					new PassengerRequestRejectedEvent(now, mode, req.getId(), req.getPassengerIds(),
-							cause));
-			log.debug("No insertion found for drt request "
-					+ req
-					+ " with passenger ids="
-					+ req.getPassengerIds().stream().map(Object::toString).collect(Collectors.joining(","))
-					+ " fromLinkId="
-					+ req.getFromLink().getId());
-		}
+		worker.scheduleUnplannedRequests(unplannedRequests);
+		unplannedRequests.clear();
 	}
 
 	@Override
@@ -208,7 +127,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 		}
 
 		if ((now - lastProcessingTime) >= INTERVAL) {
-			process();
+			worker.process(now);
 			lastProcessingTime = now;
 		}
 	}
