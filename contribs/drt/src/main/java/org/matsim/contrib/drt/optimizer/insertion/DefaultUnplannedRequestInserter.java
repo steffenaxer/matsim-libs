@@ -23,11 +23,11 @@ import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.DoubleSupplier;
-import java.util.stream.Collectors;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.matsim.api.core.v01.Id;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
@@ -35,10 +35,7 @@ import org.matsim.contrib.drt.passenger.DrtRequest;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.scheduler.RequestInsertionScheduler;
 import org.matsim.contrib.drt.stops.PassengerStopDurationProvider;
-import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.fleet.Fleet;
-import org.matsim.contrib.dvrp.passenger.PassengerRequestRejectedEvent;
-import org.matsim.contrib.dvrp.passenger.PassengerRequestScheduledEvent;
 import org.matsim.core.api.experimental.events.EventsManager;
 import org.matsim.core.mobsim.framework.MobsimTimer;
 
@@ -121,16 +118,16 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 	public void notifyMobsimAfterSimStep(MobsimAfterSimStepEvent e) {
 		double now = timeOfDay.getAsDouble();
 
-		if(this.lastProcessingTime==null)
-		{
-			this.lastProcessingTime = timeOfDay.getAsDouble();
+		if (this.lastProcessingTime == null) {
+			this.lastProcessingTime = now;
 		}
 
 		if ((now - lastProcessingTime) >= INTERVAL) {
-			worker.process(now);
+			forkJoinPool.submit(() -> worker.process(now)).join();
 			lastProcessingTime = now;
 		}
 	}
+
 
 	@Override
 	public void onPrepareSim() {
@@ -139,7 +136,6 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 
 	@Override
 	public void afterSim() {
-
 	}
 
 	@Override
