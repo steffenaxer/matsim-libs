@@ -55,26 +55,27 @@ public class ExtensiveInsertionSearchQSimModule extends AbstractDvrpModeQSimModu
 					getter.getModal(TravelTime.class));
 			return admissibleTimeEstimator;
 		}));
-		
+
 		bindModal(DrtInsertionSearch.class).toProvider(modalProvider(getter -> {
 			var insertionCostCalculator = getter.getModal(InsertionCostCalculator.class);
 			var provider = ExtensiveInsertionProvider.create(drtCfg, insertionCostCalculator,
 					getter.getModal(QSimScopeForkJoinPoolHolder.class).getPool(),
 					getter.getModal(StopTimeCalculator.class), getter.getModal(DetourTimeEstimator.class));
-			return new ExtensiveInsertionSearch(provider, getter.getModal(MultiInsertionDetourPathCalculator.class),
+			return new ExtensiveInsertionSearch(provider, () -> getter.getModal(MultiInsertionDetourPathCalculator.class),
 					insertionCostCalculator, getter.getModal(StopTimeCalculator.class));
-		})).asEagerSingleton();
+		}));
 
-		addModalComponent(MultiInsertionDetourPathCalculator.class,
-				new ModalProviders.AbstractProvider<>(getMode(), DvrpModes::mode) {
-					@Override
-					public MultiInsertionDetourPathCalculator get() {
-						var travelTime = getModalInstance(TravelTime.class);
-						Network network = getModalInstance(Network.class);
-						TravelDisutility travelDisutility = getModalInstance(
-								TravelDisutilityFactory.class).createTravelDisutility(travelTime);
-						return new MultiInsertionDetourPathCalculator(network, travelTime, travelDisutility, drtCfg);
-					}
-				});
+		bindModal(MultiInsertionDetourPathCalculator.class).toProvider(new ModalProviders.AbstractProvider<>(getMode(), DvrpModes::mode) {
+			@Override
+			public MultiInsertionDetourPathCalculator get() {
+				var travelTime = getModalInstance(TravelTime.class);
+				Network network = getModalInstance(Network.class);
+				TravelDisutility travelDisutility = getModalInstance(
+					TravelDisutilityFactory.class).createTravelDisutility(travelTime);
+				return new MultiInsertionDetourPathCalculator(network, travelTime, travelDisutility, drtCfg);
+			}
+		});
+		addModalQSimComponentBinding().to(modalKey(MultiInsertionDetourPathCalculator.class));
+
 	}
 }

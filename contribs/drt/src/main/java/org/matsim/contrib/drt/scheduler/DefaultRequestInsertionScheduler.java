@@ -81,11 +81,15 @@ public class DefaultRequestInsertionScheduler implements RequestInsertionSchedul
 		initSchedules(fleet);
 	}
 
+	//TODO Think on providing FleetParts
 	private void initSchedules(Fleet fleet) {
 		for (DvrpVehicle veh : fleet.getVehicles().values()) {
-			veh.getSchedule()
+			if(veh.getSchedule().getTasks().isEmpty())
+			{
+				veh.getSchedule()
 					.addTask(taskFactory.createInitialTask(veh, veh.getServiceBeginTime(), veh.getServiceEndTime(),
-							veh.getStartLink()));
+						veh.getStartLink()));
+			}
 		}
 	}
 

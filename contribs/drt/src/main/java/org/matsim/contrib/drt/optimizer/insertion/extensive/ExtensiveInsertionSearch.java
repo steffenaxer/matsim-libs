@@ -23,6 +23,7 @@ package org.matsim.contrib.drt.optimizer.insertion.extensive;
 import java.util.Collection;
 import java.util.Optional;
 
+import com.google.inject.Provider;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
 import org.matsim.contrib.drt.optimizer.insertion.*;
 import org.matsim.contrib.drt.passenger.DrtRequest;
@@ -39,10 +40,10 @@ final class ExtensiveInsertionSearch implements DrtInsertionSearch {
 	private final BestInsertionFinder bestInsertionFinder;
 
 	public ExtensiveInsertionSearch(ExtensiveInsertionProvider insertionProvider,
-			MultiInsertionDetourPathCalculator detourPathCalculator, InsertionCostCalculator insertionCostCalculator,
-			StopTimeCalculator stopTimeCalculator) {
+									Provider<MultiInsertionDetourPathCalculator> detourPathCalculator, InsertionCostCalculator insertionCostCalculator,
+									StopTimeCalculator stopTimeCalculator) {
 		this.insertionProvider = insertionProvider;
-		this.detourPathCalculator = detourPathCalculator;
+		this.detourPathCalculator = detourPathCalculator.get();
 		this.detourTimeCalculator = new InsertionDetourTimeCalculator(stopTimeCalculator, null);
 		this.bestInsertionFinder = new BestInsertionFinder(insertionCostCalculator);
 	}

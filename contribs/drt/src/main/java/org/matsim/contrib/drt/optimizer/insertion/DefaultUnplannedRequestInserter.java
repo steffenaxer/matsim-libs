@@ -25,6 +25,7 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.function.DoubleSupplier;
 
+import com.google.inject.Provider;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
@@ -60,9 +61,9 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 	private final Fleet fleet;
 	private final DoubleSupplier timeOfDay;
 	private final EventsManager eventsManager;
-	private final RequestInsertionScheduler insertionScheduler;
+	private final Provider<RequestInsertionScheduler> insertionScheduler;
 	private final VehicleEntry.EntryFactory vehicleEntryFactory;
-	private final DrtInsertionSearch insertionSearch;
+	private final Provider<DrtInsertionSearch> insertionSearch;
 	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
 	private final Queue<DrtRequest> requestQueue = new ConcurrentLinkedQueue<>();
 	private final DrtOfferAcceptor drtOfferAcceptor;
@@ -74,18 +75,18 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 	private final List<Map<Id<DvrpVehicle>, DvrpVehicle>> fleetParts;
 
 	public DefaultUnplannedRequestInserter(DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
-                                           EventsManager eventsManager, RequestInsertionScheduler insertionScheduler,
-                                           VehicleEntry.EntryFactory vehicleEntryFactory, DrtInsertionSearch insertionSearch,
-                                           DrtRequestInsertionRetryQueue insertionRetryQueue, DrtOfferAcceptor drtOfferAcceptor,
-                                           ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
+										   EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionScheduler,
+										   VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
+										   DrtRequestInsertionRetryQueue insertionRetryQueue, DrtOfferAcceptor drtOfferAcceptor,
+										   ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
 		this(drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionScheduler, vehicleEntryFactory,
 				insertionRetryQueue, insertionSearch, drtOfferAcceptor, forkJoinPool, stopDurationProvider, requestFleetFilter);
 	}
 
 	@VisibleForTesting
 	DefaultUnplannedRequestInserter(String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
-                                    RequestInsertionScheduler insertionScheduler, VehicleEntry.EntryFactory vehicleEntryFactory,
-                                    DrtRequestInsertionRetryQueue insertionRetryQueue, DrtInsertionSearch insertionSearch,
+                                    Provider<RequestInsertionScheduler> insertionScheduler, VehicleEntry.EntryFactory vehicleEntryFactory,
+                                    DrtRequestInsertionRetryQueue insertionRetryQueue, Provider<DrtInsertionSearch> insertionSearch,
                                     DrtOfferAcceptor drtOfferAcceptor, ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
 		this.mode = mode;
 		this.fleet = fleet;
@@ -99,9 +100,9 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 		this.forkJoinPool = forkJoinPool;
 		this.stopDurationProvider = stopDurationProvider;
         this.requestFleetFilter = requestFleetFilter;
-		this.threads = new ForkJoinPool(4);;
-		this.fleetParts = splitFleetIntoParts(this.fleet,4);
-		this.workers = getRequestInsertWorker(4);
+		this.threads = new ForkJoinPool(2);;
+		this.fleetParts = splitFleetIntoParts(this.fleet,2);
+		this.workers = getRequestInsertWorker(2);
     }
 
 	List<RequestInsertWorker> getRequestInsertWorker(int n)
@@ -111,10 +112,10 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 			RequestInsertWorker requestInsertWorker = new RequestInsertWorker(vehicleEntryFactory,
 				timeOfDay,
 				requestFleetFilter,
-				insertionSearch,
+				insertionSearch.get(),
 				stopDurationProvider,
 				drtOfferAcceptor,
-				insertionScheduler,
+				insertionScheduler.get(),
 				eventsManager,
 				insertionRetryQueue,
 				mode,

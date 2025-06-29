@@ -20,17 +20,12 @@
 
 package org.matsim.contrib.drt.optimizer;
 
+import com.google.inject.Provider;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsSet;
 import org.matsim.contrib.drt.optimizer.depot.DepotFinder;
 import org.matsim.contrib.drt.optimizer.depot.NearestStartLinkAsDepot;
-import org.matsim.contrib.drt.optimizer.insertion.CostCalculationStrategy;
-import org.matsim.contrib.drt.optimizer.insertion.DefaultInsertionCostCalculator;
-import org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequestInserter;
-import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearch;
-import org.matsim.contrib.drt.optimizer.insertion.InsertionCostCalculator;
-import org.matsim.contrib.drt.optimizer.insertion.RequestFleetFilter;
-import org.matsim.contrib.drt.optimizer.insertion.UnplannedRequestInserter;
+import org.matsim.contrib.drt.optimizer.insertion.*;
 import org.matsim.contrib.drt.optimizer.insertion.extensive.ExtensiveInsertionSearchParams;
 import org.matsim.contrib.drt.optimizer.insertion.extensive.ExtensiveInsertionSearchQSimModule;
 import org.matsim.contrib.drt.optimizer.insertion.repeatedselective.RepeatedSelectiveInsertionSearchParams;
@@ -46,10 +41,7 @@ import org.matsim.contrib.drt.schedule.DrtRoutingDriveTaskUpdater;
 import org.matsim.contrib.drt.schedule.DrtStayTaskEndTimeCalculator;
 import org.matsim.contrib.drt.schedule.DrtTaskFactory;
 import org.matsim.contrib.drt.schedule.DrtTaskFactoryImpl;
-import org.matsim.contrib.drt.scheduler.DefaultRequestInsertionScheduler;
-import org.matsim.contrib.drt.scheduler.DrtScheduleInquiry;
-import org.matsim.contrib.drt.scheduler.EmptyVehicleRelocator;
-import org.matsim.contrib.drt.scheduler.RequestInsertionScheduler;
+import org.matsim.contrib.drt.scheduler.*;
 import org.matsim.contrib.drt.stops.PassengerStopDurationProvider;
 import org.matsim.contrib.drt.stops.StopTimeCalculator;
 import org.matsim.contrib.drt.vrpagent.DrtActionCreator;
@@ -113,12 +105,15 @@ public class DrtModeOptimizerQSimModule extends AbstractDvrpModeQSimModule {
 
 		bindModal(UnplannedRequestInserter.class).toProvider(modalProvider(
 				getter -> new DefaultUnplannedRequestInserter(drtCfg, getter.getModal(Fleet.class),
-						getter.get(MobsimTimer.class), getter.get(EventsManager.class),
-						getter.getModal(RequestInsertionScheduler.class),
-						getter.getModal(VehicleEntry.EntryFactory.class), getter.getModal(DrtInsertionSearch.class),
-						getter.getModal(DrtRequestInsertionRetryQueue.class), getter.getModal(DrtOfferAcceptor.class),
-						getter.getModal(QSimScopeForkJoinPoolHolder.class).getPool(),
-						getter.getModal(PassengerStopDurationProvider.class), getter.getModal(RequestFleetFilter.class)))).asEagerSingleton();
+					getter.get(MobsimTimer.class), getter.get(EventsManager.class),
+					() -> getter.getModal(RequestInsertionScheduler.class),
+					getter.getModal(VehicleEntry.EntryFactory.class),
+					() -> getter.getModal(DrtInsertionSearch.class),
+					getter.getModal(DrtRequestInsertionRetryQueue.class),
+					getter.getModal(DrtOfferAcceptor.class),
+					getter.getModal(QSimScopeForkJoinPoolHolder.class).getPool(),
+					getter.getModal(PassengerStopDurationProvider.class),
+					getter.getModal(RequestFleetFilter.class)))).asEagerSingleton();
 		addModalQSimComponentBinding().to(modalKey(UnplannedRequestInserter.class));
 
 		bindModal(InsertionCostCalculator.class).toProvider(modalProvider(
@@ -166,8 +161,7 @@ public class DrtModeOptimizerQSimModule extends AbstractDvrpModeQSimModule {
 						getter -> new DefaultRequestInsertionScheduler(getter.getModal(Fleet.class),
 								getter.get(MobsimTimer.class), getter.getModal(TravelTime.class),
 								getter.getModal(ScheduleTimingUpdater.class), getter.getModal(DrtTaskFactory.class),
-								getter.getModal(StopTimeCalculator.class), scheduleWaitBeforeDrive)))
-				.asEagerSingleton();
+								getter.getModal(StopTimeCalculator.class), scheduleWaitBeforeDrive)));
 
 		bindModal(DefaultOfferAcceptor.class).toProvider(modalProvider(getter -> new DefaultOfferAcceptor()));
 		bindModal(DrtOfferAcceptor.class).to(modalKey(DefaultOfferAcceptor.class));

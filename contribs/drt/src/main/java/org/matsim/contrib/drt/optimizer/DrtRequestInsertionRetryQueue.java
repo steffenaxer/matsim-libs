@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedDeque;
 
 import org.matsim.contrib.drt.passenger.DrtRequest;
 
@@ -38,7 +39,7 @@ public class DrtRequestInsertionRetryQueue {
 	}
 
 	//priority queue not needed - retry interval is equal for all requests
-	private final Deque<RequestRetryEntry> requestQueue = new LinkedList<>();
+	private final Deque<RequestRetryEntry> requestQueue = new ConcurrentLinkedDeque<>();
 
 	public boolean tryAddFailedRequest(DrtRequest request, double now) {
 		if (request.getSubmissionTime() + params.getMaxRequestAge() < now + params.getRetryInterval()) {
