@@ -139,7 +139,7 @@ public class RequestInsertWorker {
 
 	void process(double now)
 	{
-		List<DrtRequest> requestsToRetry = insertionRetryQueue.getRequestsToRetryNow(now);
+		//List<DrtRequest> requestsToRetry = insertionRetryQueue.getRequestsToRetryNow(now);
 
 		var vehicleEntries = forkJoinPool.submit(() -> this.managedVehicles
 			.values()
@@ -149,7 +149,7 @@ public class RequestInsertWorker {
 			.collect(Collectors.toMap(e -> e.vehicle.getId(), e -> e))).join();
 
 		//first retry scheduling old requests
-		requestsToRetry.forEach(req -> scheduleUnplannedRequest(req, vehicleEntries, now));
+		//requestsToRetry.forEach(req -> scheduleUnplannedRequest(req, vehicleEntries, now));
 
 		while (!this.unplannedRequests.isEmpty()) {
 			DrtRequest req = unplannedRequests.poll(); // removes the head

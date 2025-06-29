@@ -22,12 +22,12 @@ package org.matsim.contrib.drt.optimizer.insertion;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
 import java.util.function.DoubleSupplier;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.matsim.api.core.v01.Id;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
@@ -35,6 +35,7 @@ import org.matsim.contrib.drt.passenger.DrtRequest;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.scheduler.RequestInsertionScheduler;
 import org.matsim.contrib.drt.stops.PassengerStopDurationProvider;
+import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.fleet.Fleet;
 import org.matsim.core.api.experimental.events.EventsManager;
 import org.matsim.core.mobsim.framework.MobsimTimer;
@@ -68,7 +69,9 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 	private final ForkJoinPool forkJoinPool;
 	private final PassengerStopDurationProvider stopDurationProvider;
 	private final RequestFleetFilter requestFleetFilter;
-	private final RequestInsertWorker worker;
+	private final List<RequestInsertWorker> workers;
+	private final ForkJoinPool threads;
+	private final List<Map<Id<DvrpVehicle>, DvrpVehicle>> fleetParts;
 
 	public DefaultUnplannedRequestInserter(DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
                                            EventsManager eventsManager, RequestInsertionScheduler insertionScheduler,
@@ -96,22 +99,80 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 		this.forkJoinPool = forkJoinPool;
 		this.stopDurationProvider = stopDurationProvider;
         this.requestFleetFilter = requestFleetFilter;
-		this.worker = new RequestInsertWorker(vehicleEntryFactory,
-			timeOfDay,
-			requestFleetFilter,
-			insertionSearch,
-			stopDurationProvider,
-			drtOfferAcceptor,
-			insertionScheduler,
-			eventsManager,
-			insertionRetryQueue,
-			mode, fleet.getVehicles());
+		this.threads = new ForkJoinPool(4);;
+		this.fleetParts = splitFleetIntoParts(this.fleet,4);
+		this.workers = getRequestInsertWorker(4);
     }
+
+	List<RequestInsertWorker> getRequestInsertWorker(int n)
+	{
+		List<RequestInsertWorker> workers = new ArrayList<>();
+		for (int i = 0; i < n; i++) {
+			RequestInsertWorker requestInsertWorker = new RequestInsertWorker(vehicleEntryFactory,
+				timeOfDay,
+				requestFleetFilter,
+				insertionSearch,
+				stopDurationProvider,
+				drtOfferAcceptor,
+				insertionScheduler,
+				eventsManager,
+				insertionRetryQueue,
+				mode,
+				fleetParts.get(i));
+			workers.add(requestInsertWorker);
+		}
+		return workers;
+	}
 
 	@Override
 	public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
-		worker.scheduleUnplannedRequests(unplannedRequests);
+		distributeRoundRobin(unplannedRequests, this.workers);
 		unplannedRequests.clear();
+	}
+
+	public static void distributeRoundRobin(Collection<DrtRequest> unplannedRequests, List<RequestInsertWorker> workers) {
+		if (workers == null || workers.isEmpty()) {
+			throw new IllegalArgumentException("Workers could not be empty!");
+		}
+
+		List<List<DrtRequest>> partitions = new ArrayList<>();
+		for (int i = 0; i < workers.size(); i++) {
+			partitions.add(new ArrayList<>());
+		}
+
+		Iterator<DrtRequest> iterator = unplannedRequests.iterator();
+		int index = 0;
+		while (iterator.hasNext()) {
+			DrtRequest req = iterator.next();
+			partitions.get(index % workers.size()).add(req);
+			iterator.remove();
+			index++;
+		}
+
+		for (int i = 0; i < workers.size(); i++) {
+			if (!partitions.get(i).isEmpty()) {
+				workers.get(i).scheduleUnplannedRequests(partitions.get(i));
+			}
+		}
+	}
+
+	public static List<Map<Id<DvrpVehicle>, DvrpVehicle>> splitFleetIntoParts(Fleet fleet, int n) {
+		if (n <= 0) {
+			throw new IllegalArgumentException("Number of fleet parts needs to be larger than 0");
+		}
+
+		List<Map<Id<DvrpVehicle>, DvrpVehicle>> parts = new ArrayList<>();
+		for (int i = 0; i < n; i++) {
+			parts.add(new LinkedHashMap<>());
+		}
+
+		int index = 0;
+		for (Map.Entry<Id<DvrpVehicle>, DvrpVehicle> entry : fleet.getVehicles().entrySet()) {
+			parts.get(index % n).put(entry.getKey(), entry.getValue());
+			index++;
+		}
+
+		return parts;
 	}
 
 	@Override
@@ -123,11 +184,18 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 		}
 
 		if ((now - lastProcessingTime) >= INTERVAL) {
-			forkJoinPool.submit(() -> worker.process(now)).join();
+
+			List<ForkJoinTask<?>> tasks = new ArrayList<>();
+
+			for (RequestInsertWorker worker : this.workers) {
+				tasks.add(forkJoinPool.submit(() -> worker.process(now)));
+			}
+
+			tasks.forEach(ForkJoinTask::join);
+
 			lastProcessingTime = now;
 		}
 	}
-
 
 	@Override
 	public void onPrepareSim() {
@@ -136,6 +204,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 
 	@Override
 	public void afterSim() {
+		threads.shutdown();
 	}
 
 	@Override
