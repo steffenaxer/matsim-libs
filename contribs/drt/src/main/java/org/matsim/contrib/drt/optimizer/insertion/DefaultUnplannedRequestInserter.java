@@ -20,10 +20,7 @@
 package org.matsim.contrib.drt.optimizer.insertion;
 
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ForkJoinTask;
+import java.util.concurrent.*;
 import java.util.function.DoubleSupplier;
 
 import com.google.inject.Provider;
@@ -55,6 +52,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 	private static final Logger log = LogManager.getLogger(DefaultUnplannedRequestInserter.class);
 	public static final String NO_INSERTION_FOUND_CAUSE = "no_insertion_found";
 	public static final String OFFER_REJECTED_CAUSE = "offer_rejected";
+	public static final String INSERTION_ACCEPTED = "offer_accepted";
 	public static final int INTERVAL = 60;
 
 	private Double lastProcessingTime;
@@ -62,7 +60,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 	private final Fleet fleet;
 	private final DoubleSupplier timeOfDay;
 	private final EventsManager eventsManager;
-	private final Provider<RequestInsertionScheduler> insertionScheduler;
+	private final Provider<RequestInsertionScheduler> insertionSchedulerProvider;
 	private final VehicleEntry.EntryFactory vehicleEntryFactory;
 	private final Provider<DrtInsertionSearch> insertionSearch;
 	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
@@ -74,26 +72,28 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 	private final List<RequestInsertWorker> workers;
 	private final ForkJoinPool threads;
 	private final List<Map<Id<DvrpVehicle>, DvrpVehicle>> fleetParts;
+	private final BlockingQueue<RequestData> processQueue = new LinkedBlockingDeque<>();
+	private static final int threadCount = 2;
 
 	public DefaultUnplannedRequestInserter(DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
-										   EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionScheduler,
+										   EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
 										   VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
 										   DrtRequestInsertionRetryQueue insertionRetryQueue, DrtOfferAcceptor drtOfferAcceptor,
 										   ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
-		this(drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionScheduler, vehicleEntryFactory,
+		this(drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
 				insertionRetryQueue, insertionSearch, drtOfferAcceptor, forkJoinPool, stopDurationProvider, requestFleetFilter);
 	}
 
 	@VisibleForTesting
 	DefaultUnplannedRequestInserter(String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
-                                    Provider<RequestInsertionScheduler> insertionScheduler, VehicleEntry.EntryFactory vehicleEntryFactory,
-                                    DrtRequestInsertionRetryQueue insertionRetryQueue, Provider<DrtInsertionSearch> insertionSearch,
-                                    DrtOfferAcceptor drtOfferAcceptor, ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
+									Provider<RequestInsertionScheduler> insertionSchedulerProvider, VehicleEntry.EntryFactory vehicleEntryFactory,
+									DrtRequestInsertionRetryQueue insertionRetryQueue, Provider<DrtInsertionSearch> insertionSearch,
+									DrtOfferAcceptor drtOfferAcceptor, ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
 		this.mode = mode;
 		this.fleet = fleet;
 		this.timeOfDay = timeOfDay;
 		this.eventsManager = eventsManager;
-		this.insertionScheduler = insertionScheduler;
+		this.insertionSchedulerProvider = insertionSchedulerProvider;
 		this.vehicleEntryFactory = vehicleEntryFactory;
 		this.insertionRetryQueue = insertionRetryQueue;
 		this.insertionSearch = insertionSearch;
@@ -101,9 +101,9 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 		this.forkJoinPool = forkJoinPool;
 		this.stopDurationProvider = stopDurationProvider;
         this.requestFleetFilter = requestFleetFilter;
-		this.threads = new ForkJoinPool(2);;
-		this.fleetParts = splitFleetIntoParts(this.fleet,2);
-		this.workers = getRequestInsertWorker(2);
+		this.threads = new ForkJoinPool(threadCount);;
+		this.fleetParts = splitFleetIntoParts(this.fleet,threadCount);
+		this.workers = getRequestInsertWorker(threadCount);
     }
 
 	List<RequestInsertWorker> getRequestInsertWorker(int n)
@@ -116,11 +116,12 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 				insertionSearch.get(),
 				stopDurationProvider,
 				drtOfferAcceptor,
-				insertionScheduler.get(),
+				insertionSchedulerProvider.get(),
 				eventsManager,
 				insertionRetryQueue,
 				mode,
-				fleetParts.get(i));
+				fleetParts.get(i),
+				processQueue);
 			workers.add(requestInsertWorker);
 		}
 		return workers;
@@ -128,14 +129,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 
 	@Override
 	public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
-		var records = unplannedRequests.stream().map(request -> {
-			CompletableFuture<DrtRequest> cf = new CompletableFuture<>();
-			return new RequestRecord(request, cf);
-		}).toList();
-
-		for (RequestInsertWorker worker : this.workers) {
-			worker.scheduleUnplannedRequests(records);
-		}
+		unplannedRequests.stream().map(request -> new RequestData(request, threadCount)).forEach(processQueue::add);
 		unplannedRequests.clear();
 	}
 
