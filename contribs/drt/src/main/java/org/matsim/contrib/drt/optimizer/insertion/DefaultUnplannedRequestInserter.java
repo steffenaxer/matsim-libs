@@ -29,6 +29,7 @@ import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
+import org.matsim.contrib.drt.passenger.AcceptedDrtRequest;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
 import org.matsim.contrib.drt.passenger.DrtRequest;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
@@ -36,6 +37,8 @@ import org.matsim.contrib.drt.scheduler.RequestInsertionScheduler;
 import org.matsim.contrib.drt.stops.PassengerStopDurationProvider;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.fleet.Fleet;
+import org.matsim.contrib.dvrp.passenger.PassengerRequestRejectedEvent;
+import org.matsim.contrib.dvrp.passenger.PassengerRequestScheduledEvent;
 import org.matsim.core.api.experimental.events.EventsManager;
 import org.matsim.core.mobsim.framework.MobsimTimer;
 
@@ -72,8 +75,9 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 	private final List<RequestInsertWorker> workers;
 	private final ForkJoinPool threads;
 	private final List<Map<Id<DvrpVehicle>, DvrpVehicle>> fleetParts;
-	private final BlockingQueue<RequestData> processQueue = new LinkedBlockingDeque<>();
 	private static final int threadCount = 2;
+	private final RequestInsertionScheduler insertionScheduler;
+	private final List<RequestData> candidateSolutions = Collections.synchronizedList(new ArrayList<>());
 
 	public DefaultUnplannedRequestInserter(DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
 										   EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
@@ -104,6 +108,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 		this.threads = new ForkJoinPool(threadCount);;
 		this.fleetParts = splitFleetIntoParts(this.fleet,threadCount);
 		this.workers = getRequestInsertWorker(threadCount);
+		this.insertionScheduler = insertionSchedulerProvider.get();
     }
 
 	List<RequestInsertWorker> getRequestInsertWorker(int n)
@@ -120,8 +125,7 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 				eventsManager,
 				insertionRetryQueue,
 				mode,
-				fleetParts.get(i),
-				processQueue);
+				fleetParts.get(i));
 			workers.add(requestInsertWorker);
 		}
 		return workers;
@@ -129,7 +133,9 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 
 	@Override
 	public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
-		unplannedRequests.stream().map(request -> new RequestData(request, threadCount)).forEach(processQueue::add);
+		var requests = unplannedRequests.stream().map(request -> new RequestData(request, threadCount)).toList();
+		candidateSolutions.addAll(requests);
+		this.workers.forEach(w -> w.scheduleUnplannedRequests(requests));
 		unplannedRequests.clear();
 	}
 
@@ -170,8 +176,14 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 
 			tasks.forEach(ForkJoinTask::join);
 
+			for (RequestData candidateSolution : this.candidateSolutions) {
+				submitInsertion(candidateSolution, now);
+			}
+
+
 			lastProcessingTime = now;
 		}
+
 	}
 
 	@Override
@@ -191,6 +203,36 @@ public class DefaultUnplannedRequestInserter implements UnplannedRequestInserter
 
 	@Override
 	public void doSimStep(double time) {
+
+	}
+
+	void submitInsertion(RequestData requestData, double now) {
+		Optional<RequestData.InsertionRecord> insertionRecord = requestData.getBestInsertion();
+
+		if (insertionRecord.isPresent()) {
+			DrtRequest req = insertionRecord.get().acceptedDrtRequest().getRequest();
+			InsertionWithDetourData insertion = insertionRecord.get().insertion();
+			AcceptedDrtRequest acceptedDrtRequest = insertionRecord.get().acceptedDrtRequest();
+			DvrpVehicle vehicle = insertion.insertion.vehicleEntry.vehicle;
+			var pickupDropoffTaskPair = insertionScheduler.scheduleRequest(acceptedDrtRequest, insertion);
+
+			double expectedPickupTime = pickupDropoffTaskPair.pickupTask.getBeginTime();
+			expectedPickupTime = Math.max(expectedPickupTime, req.getEarliestStartTime());
+			expectedPickupTime += stopDurationProvider.calcPickupDuration(vehicle, req);
+
+			double expectedDropoffTime = pickupDropoffTaskPair.dropoffTask.getBeginTime();
+			expectedDropoffTime += stopDurationProvider.calcDropoffDuration(vehicle, req);
+
+			eventsManager.processEvent(
+				new PassengerRequestScheduledEvent(now, mode, req.getId(), req.getPassengerIds(), vehicle.getId(),
+					expectedPickupTime, expectedDropoffTime));
+
+		} else {
+			var req = requestData.getDrtRequest();
+			eventsManager.processEvent(new PassengerRequestRejectedEvent(now, mode, req.getId(), req.getPassengerIds(), OFFER_REJECTED_CAUSE));
+
+		}
+
 
 	}
 }
