@@ -91,7 +91,7 @@ public class RequestInsertWorker {
 //		}
 	}
 
-	private void scheduleUnplannedRequest(RequestData requestData, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries, double now, BlockingQueue<RequestData> unplannedRequests) {
+	private void scheduleUnplannedRequest(RequestData requestData, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries, double now) {
 		DrtRequest req = requestData.getDrtRequest();
 		Collection<VehicleEntry> filteredFleet = requestFleetFilter.filter(req, vehicleEntries, now);
 		Optional<InsertionWithDetourData> best = insertionSearch.findBestInsertion(req, Collections.unmodifiableCollection(filteredFleet));
@@ -164,9 +164,11 @@ public class RequestInsertWorker {
 			eventsManager.processEvent(
 				new PassengerRequestScheduledEvent(now, mode, req.getId(), req.getPassengerIds(), vehicle.getId(),
 					expectedPickupTime, expectedDropoffTime));
+
 		} else {
 			var req = requestData.getDrtRequest();
 			eventsManager.processEvent(new PassengerRequestRejectedEvent(now, mode, req.getId(), req.getPassengerIds(), OFFER_REJECTED_CAUSE));
+
 		}
 
 
@@ -250,9 +252,16 @@ public class RequestInsertWorker {
 //			scheduleUnplannedRequest(new RequestRecord(drtRequest, cf), vehicleEntries, now);
 //		}
 
+		RequestData lastRequestData = null;
 		while (!this.unplannedRequests.isEmpty()) {
+
 			RequestData req = unplannedRequests.peek();
-			scheduleUnplannedRequest(req, vehicleEntries, now, unplannedRequests);
+			if(lastRequestData!=req && req!=null)
+			{
+				lastRequestData = req;
+				scheduleUnplannedRequest(req, vehicleEntries, now);
+			}
+
 		}
 	}
 }

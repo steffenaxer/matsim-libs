@@ -22,7 +22,7 @@ public class RequestData {
 	public boolean addInsertion(InsertionRecord insertionRecord) {
 		if (this.solutions.size() < maxSolutions) {
 			this.solutions.add(insertionRecord);
-			return true;
+			return this.solutions.size()!=maxSolutions;
 		}
 		return false;
 	}
