@@ -1,5 +1,6 @@
 package org.matsim.contrib.drt.benchmark;
 
+import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsParams;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsSetImpl;
@@ -14,6 +15,7 @@ import org.matsim.contrib.dvrp.run.DvrpConfigGroup;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.config.groups.QSimConfigGroup;
+import org.matsim.core.config.groups.ReplanningConfigGroup;
 import org.matsim.core.controler.Controler;
 import org.matsim.core.controler.OutputDirectoryHierarchy;
 import org.matsim.core.scenario.ScenarioUtils;
@@ -53,6 +55,13 @@ public class BenchmarkGenerator {
 		config.controller().setOutputDirectory("output/drt-scenario");
 		config.controller().setLastIteration(10);
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
+
+
+		ReplanningConfigGroup.StrategySettings strategy = new ReplanningConfigGroup.StrategySettings(Id.create("1", ReplanningConfigGroup.StrategySettings.class));
+		strategy.setStrategyName("ChangeExpBeta");
+		strategy.setWeight(1.0);
+		config.replanning().addStrategySettings(strategy);
+
 
 		// Run the simulation
 		Controler controler = DrtControlerCreator.createControler(scenario.getConfig(), scenario, false);
