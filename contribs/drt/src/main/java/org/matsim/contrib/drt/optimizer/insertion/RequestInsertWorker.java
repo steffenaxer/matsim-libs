@@ -36,7 +36,6 @@ import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequest
 public class RequestInsertWorker {
 	private static final Logger LOG = LogManager.getLogger(RequestInsertWorker.class);
 	private final VehicleEntry.EntryFactory vehicleEntryFactory;
-	private final DoubleSupplier timeOfDay;
 	private final RequestFleetFilter requestFleetFilter;
 	private final DrtInsertionSearch insertionSearch;
 	private final BlockingQueue<DrtRequest> unplannedRequests = new LinkedBlockingDeque<>();
@@ -47,7 +46,7 @@ public class RequestInsertWorker {
 	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
 	private final String mode;
 	private final Map<Id<DvrpVehicle>, DvrpVehicle> managedVehicles;
-	ForkJoinPool forkJoinPool = new ForkJoinPool(4);
+	private final ForkJoinPool forkJoinPool = new ForkJoinPool(4);
 
 	public RequestInsertWorker(VehicleEntry.EntryFactory vehicleEntryFactory,
 							   DoubleSupplier timeOfDay,
@@ -61,7 +60,6 @@ public class RequestInsertWorker {
 							   String mode, Map<Id<DvrpVehicle>, DvrpVehicle> managedVehicles
 	) {
 		this.vehicleEntryFactory = vehicleEntryFactory;
-		this.timeOfDay = timeOfDay;
 		this.requestFleetFilter = requestFleetFilter;
 		this.insertionSearch = insertionSearch;
 		this.stopDurationProvider = stopDurationProvider;
