@@ -115,7 +115,7 @@ public class BenchmarkGenerator {
 		// Run the simulation
 		Controler controler = DrtControlerCreator.createControler(scenario.getConfig(), scenario, false);
 
-		installParallelUnplannedRequestInserter(controler,drtConfig);
+		//installParallelUnplannedRequestInserter(controler,drtConfig);
 
 		controler.run();
 
