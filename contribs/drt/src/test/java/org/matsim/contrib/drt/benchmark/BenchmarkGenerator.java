@@ -42,10 +42,10 @@ import java.nio.file.Path;
 public class BenchmarkGenerator {
 	public static void main(String[] args) {
 
-		int numberOfAgents = 100000;
+		int numberOfAgents = 1000;
 		int expectedRidesPerVehicle = 10;
 		double endTime = 24 * 3600.;
-		int iterations = 2;
+		int iterations = 0;
 		int numberOfVehicles = (int) (numberOfAgents / (endTime/3600) /expectedRidesPerVehicle);
 
 		Config config = ConfigUtils.createConfig();
@@ -134,7 +134,6 @@ public class BenchmarkGenerator {
 						() -> getter.getModal(DrtInsertionSearch.class),
 						getter.getModal(DrtRequestInsertionRetryQueue.class),
 						getter.getModal(DrtOfferAcceptor.class),
-						getter.getModal(QSimScopeForkJoinPoolHolder.class).getPool(),
 						getter.getModal(PassengerStopDurationProvider.class),
 						getter.getModal(RequestFleetFilter.class),
 						getter.getModal(Network.class)))).asEagerSingleton();

@@ -20,7 +20,6 @@
 package org.matsim.contrib.drt.optimizer.insertion;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.ImmutableMap;
 import com.google.inject.Provider;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -39,7 +38,9 @@ import org.matsim.core.api.experimental.events.EventsManager;
 import org.matsim.core.gbl.MatsimRandom;
 import org.matsim.core.mobsim.framework.MobsimTimer;
 import org.matsim.core.mobsim.framework.events.MobsimAfterSimStepEvent;
+import org.matsim.core.mobsim.framework.events.MobsimBeforeCleanupEvent;
 import org.matsim.core.mobsim.framework.listeners.MobsimAfterSimStepListener;
+import org.matsim.core.mobsim.framework.listeners.MobsimBeforeCleanupListener;
 import org.matsim.core.mobsim.qsim.InternalInterface;
 import org.matsim.core.mobsim.qsim.interfaces.MobsimEngine;
 
@@ -47,11 +48,12 @@ import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
+import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleSupplier;
 /**
  * @author michalm
  */
-public class ParallelUnplannedRequestInserter implements UnplannedRequestInserter, MobsimAfterSimStepListener, MobsimEngine {
+public class ParallelUnplannedRequestInserter implements UnplannedRequestInserter, MobsimAfterSimStepListener, MobsimEngine, MobsimBeforeCleanupListener {
 	private static final Logger log = LogManager.getLogger(ParallelUnplannedRequestInserter.class);
 	public static final int INTERVAL = 60;
 
@@ -66,12 +68,11 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
 	private final Queue<DrtRequest> requestQueue = new ConcurrentLinkedQueue<>();
 	private final DrtOfferAcceptor drtOfferAcceptor;
-	private final ForkJoinPool forkJoinPool;
 	private final PassengerStopDurationProvider stopDurationProvider;
 	private final RequestFleetFilter requestFleetFilter;
 	private final Network network;
 	private final List<RequestInsertWorker> workers;
-	private final ForkJoinPool threads;
+	private final ForkJoinPool inserterExecutorService;
 	private final List<Map<Id<DvrpVehicle>, DvrpVehicle>> fleetParts;
 	private final Random rnd = MatsimRandom.getLocalInstance();
 
@@ -79,16 +80,16 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
                                             EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionScheduler,
                                             VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
                                             DrtRequestInsertionRetryQueue insertionRetryQueue, DrtOfferAcceptor drtOfferAcceptor,
-                                            ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, Network network) {
+											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, Network network) {
 		this(drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionScheduler, vehicleEntryFactory,
-				insertionRetryQueue, insertionSearch, drtOfferAcceptor, forkJoinPool, stopDurationProvider, requestFleetFilter, network);
+				insertionRetryQueue, insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter, network);
 	}
 
 	@VisibleForTesting
     ParallelUnplannedRequestInserter(String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
                                      Provider<RequestInsertionScheduler> insertionScheduler, VehicleEntry.EntryFactory vehicleEntryFactory,
                                      DrtRequestInsertionRetryQueue insertionRetryQueue, Provider<DrtInsertionSearch> insertionSearch,
-                                     DrtOfferAcceptor drtOfferAcceptor, ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, Network network) {
+                                     DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, Network network) {
 		this.mode = mode;
 		this.fleet = fleet;
 		this.timeOfDay = timeOfDay;
@@ -98,11 +99,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		this.insertionRetryQueue = insertionRetryQueue;
 		this.insertionSearch = insertionSearch;
 		this.drtOfferAcceptor = drtOfferAcceptor;
-		this.forkJoinPool = forkJoinPool;
 		this.stopDurationProvider = stopDurationProvider;
         this.requestFleetFilter = requestFleetFilter;
 		this.network = network;
-		this.threads = new ForkJoinPool(3);;
+		this.inserterExecutorService = new ForkJoinPool(3);;
 		this.fleetParts = splitFleetIntoParts(this.fleet,3);
 		this.workers = getRequestInsertWorker(3);
     }
@@ -191,7 +191,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			List<ForkJoinTask<?>> tasks = new ArrayList<>();
 
 			for (RequestInsertWorker worker : this.workers) {
-				tasks.add(forkJoinPool.submit(() -> worker.process(now)));
+				tasks.add(inserterExecutorService.submit(() -> worker.process(now)));
 			}
 
 			tasks.forEach(ForkJoinTask::join);
@@ -207,8 +207,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 	@Override
 	public void afterSim() {
-		threads.shutdown();
-		this.workers.forEach(RequestInsertWorker::finish);
+
 	}
 
 	@Override
@@ -220,4 +219,17 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	public void doSimStep(double time) {
 
 	}
+
+	@Override
+	public void notifyMobsimBeforeCleanup(MobsimBeforeCleanupEvent e) {
+		inserterExecutorService.shutdown();
+		try {
+			inserterExecutorService.awaitTermination(5, TimeUnit.SECONDS);
+		} catch (InterruptedException ex) {
+			throw new RuntimeException(ex);
+		}
+		this.workers.forEach(RequestInsertWorker::finish);
+	}
+
+
 }

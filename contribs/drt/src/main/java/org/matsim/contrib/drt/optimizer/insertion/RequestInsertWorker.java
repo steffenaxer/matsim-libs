@@ -5,9 +5,6 @@ import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
-import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearch;
-import org.matsim.contrib.drt.optimizer.insertion.InsertionWithDetourData;
-import org.matsim.contrib.drt.optimizer.insertion.RequestFleetFilter;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
 import org.matsim.contrib.drt.passenger.DrtRequest;
 import org.matsim.contrib.drt.scheduler.RequestInsertionScheduler;
@@ -16,14 +13,12 @@ import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestRejectedEvent;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestScheduledEvent;
 import org.matsim.core.api.experimental.events.EventsManager;
-import org.matsim.core.mobsim.framework.events.MobsimAfterSimStepEvent;
-import org.matsim.core.mobsim.framework.events.MobsimBeforeSimStepEvent;
-import org.matsim.core.mobsim.framework.listeners.MobsimAfterSimStepListener;
 
 import java.util.*;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleSupplier;
 import java.util.stream.Collectors;
 
@@ -72,7 +67,12 @@ public class RequestInsertWorker {
 	}
 
 	public void finish() {
-		this.forkJoinPool.shutdown();
+		forkJoinPool.shutdown();
+		try {
+			forkJoinPool.awaitTermination(5, TimeUnit.SECONDS);
+		} catch (InterruptedException ex) {
+			throw new RuntimeException(ex);
+		}
 	}
 
 	private void retryOrReject(DrtRequest req, double now, String cause) {
