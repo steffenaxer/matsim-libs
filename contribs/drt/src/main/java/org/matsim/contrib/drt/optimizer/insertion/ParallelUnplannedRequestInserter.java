@@ -20,10 +20,12 @@
 package org.matsim.contrib.drt.optimizer.insertion;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableMap;
 import com.google.inject.Provider;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
@@ -34,6 +36,7 @@ import org.matsim.contrib.drt.stops.PassengerStopDurationProvider;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.fleet.Fleet;
 import org.matsim.core.api.experimental.events.EventsManager;
+import org.matsim.core.gbl.MatsimRandom;
 import org.matsim.core.mobsim.framework.MobsimTimer;
 import org.matsim.core.mobsim.framework.events.MobsimAfterSimStepEvent;
 import org.matsim.core.mobsim.framework.listeners.MobsimAfterSimStepListener;
@@ -45,14 +48,11 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.function.DoubleSupplier;
-
 /**
  * @author michalm
  */
 public class ParallelUnplannedRequestInserter implements UnplannedRequestInserter, MobsimAfterSimStepListener, MobsimEngine {
 	private static final Logger log = LogManager.getLogger(ParallelUnplannedRequestInserter.class);
-	public static final String NO_INSERTION_FOUND_CAUSE = "no_insertion_found";
-	public static final String OFFER_REJECTED_CAUSE = "offer_rejected";
 	public static final int INTERVAL = 60;
 
 	private Double lastProcessingTime;
@@ -69,24 +69,26 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final ForkJoinPool forkJoinPool;
 	private final PassengerStopDurationProvider stopDurationProvider;
 	private final RequestFleetFilter requestFleetFilter;
+	private final Network network;
 	private final List<RequestInsertWorker> workers;
 	private final ForkJoinPool threads;
 	private final List<Map<Id<DvrpVehicle>, DvrpVehicle>> fleetParts;
+	private final Random rnd = MatsimRandom.getLocalInstance();
 
 	public ParallelUnplannedRequestInserter(DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
                                             EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionScheduler,
                                             VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
                                             DrtRequestInsertionRetryQueue insertionRetryQueue, DrtOfferAcceptor drtOfferAcceptor,
-                                            ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
+                                            ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, Network network) {
 		this(drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionScheduler, vehicleEntryFactory,
-				insertionRetryQueue, insertionSearch, drtOfferAcceptor, forkJoinPool, stopDurationProvider, requestFleetFilter);
+				insertionRetryQueue, insertionSearch, drtOfferAcceptor, forkJoinPool, stopDurationProvider, requestFleetFilter, network);
 	}
 
 	@VisibleForTesting
     ParallelUnplannedRequestInserter(String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
                                      Provider<RequestInsertionScheduler> insertionScheduler, VehicleEntry.EntryFactory vehicleEntryFactory,
                                      DrtRequestInsertionRetryQueue insertionRetryQueue, Provider<DrtInsertionSearch> insertionSearch,
-                                     DrtOfferAcceptor drtOfferAcceptor, ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
+                                     DrtOfferAcceptor drtOfferAcceptor, ForkJoinPool forkJoinPool, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, Network network) {
 		this.mode = mode;
 		this.fleet = fleet;
 		this.timeOfDay = timeOfDay;
@@ -99,9 +101,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		this.forkJoinPool = forkJoinPool;
 		this.stopDurationProvider = stopDurationProvider;
         this.requestFleetFilter = requestFleetFilter;
-		this.threads = new ForkJoinPool(2);;
-		this.fleetParts = splitFleetIntoParts(this.fleet,2);
-		this.workers = getRequestInsertWorker(2);
+		this.network = network;
+		this.threads = new ForkJoinPool(3);;
+		this.fleetParts = splitFleetIntoParts(this.fleet,3);
+		this.workers = getRequestInsertWorker(3);
     }
 
 	List<RequestInsertWorker> getRequestInsertWorker(int n)
@@ -205,6 +208,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	@Override
 	public void afterSim() {
 		threads.shutdown();
+		this.workers.forEach(RequestInsertWorker::finish);
 	}
 
 	@Override
