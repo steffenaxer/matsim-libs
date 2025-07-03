@@ -44,11 +44,11 @@ import java.nio.file.Path;
 public class BenchmarkGenerator {
 	public static void main(String[] args) {
 
-		int numberOfAgents = 1000;
-		int expectedRidesPerVehicle = 10;
+		int numberOfAgents = 100000;
+		int expectedRidesPerVehicle = 3;
 		double endTime = 24 * 3600.;
 		int iterations = 0;
-		int numberOfVehicles = (int) (numberOfAgents / (endTime/3600) /expectedRidesPerVehicle);
+		int numberOfVehicles = (int) (numberOfAgents / (endTime/3600.) /expectedRidesPerVehicle);
 
 		Config config = ConfigUtils.createConfig();
 
@@ -96,10 +96,7 @@ public class BenchmarkGenerator {
 
 		config.addModule(multiModeDrtConfigGroup);
 
-		// Optional: set output directory and iterations
-		config.controller().setOutputDirectory("output/drt-scenario-parallel");
-		config.controller().setLastIteration(iterations);
-		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
+
 
 
 		ReplanningConfigGroup.StrategySettings strategy = new ReplanningConfigGroup.StrategySettings(Id.create("1", ReplanningConfigGroup.StrategySettings.class));
@@ -117,28 +114,33 @@ public class BenchmarkGenerator {
 		// Run the simulation
 		Controler controler = DrtControlerCreator.createControler(scenario.getConfig(), scenario, false);
 
-		installParallelUnplannedRequestInserter(controler,drtConfig);
+		// Optional: set output directory and iterations
+		int threads = 1;
+		config.controller().setOutputDirectory("output/drt-scenario-parallel-"+threads);
+		config.controller().setLastIteration(iterations);
+		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
+		installParallelUnplannedRequestInserter(controler,drtConfig, threads);
 
 		controler.run();
 
 	}
 
-	static void installParallelUnplannedRequestInserter(Controler controler, DrtConfigGroup drtConfigGroup) {
+	static void installParallelUnplannedRequestInserter(Controler controler, DrtConfigGroup drtConfigGroup, int threads) {
 
 		controler.addOverridingQSimModule(new AbstractDvrpModeQSimModule(drtConfigGroup.getMode()) {
 			@Override
 			protected void configureQSim() {
 				bindModal(UnplannedRequestInserter.class).toProvider(modalProvider(
-					getter -> new ParallelUnplannedRequestInserter(drtConfigGroup, getter.getModal(Fleet.class),
-						getter.get(MobsimTimer.class), getter.get(EventsManager.class),
-						() -> getter.getModal(RequestInsertionScheduler.class),
-						getter.getModal(VehicleEntry.EntryFactory.class),
-						() -> getter.getModal(DrtInsertionSearch.class),
-						getter.getModal(DrtRequestInsertionRetryQueue.class),
-						getter.getModal(DrtOfferAcceptor.class),
-						getter.getModal(PassengerStopDurationProvider.class),
-						getter.getModal(RequestFleetFilter.class),
-						getter.getModal(Network.class)))).asEagerSingleton();
+						getter -> new ParallelUnplannedRequestInserter(threads, drtConfigGroup, getter.getModal(Fleet.class),
+								getter.get(MobsimTimer.class), getter.get(EventsManager.class),
+								() -> getter.getModal(RequestInsertionScheduler.class),
+								getter.getModal(VehicleEntry.EntryFactory.class),
+								() -> getter.getModal(DrtInsertionSearch.class),
+								getter.getModal(DrtRequestInsertionRetryQueue.class),
+								getter.getModal(DrtOfferAcceptor.class),
+								getter.getModal(PassengerStopDurationProvider.class),
+								getter.getModal(RequestFleetFilter.class),
+								getter.getModal(Network.class)))).asEagerSingleton();
 			}
 		});
 	}

@@ -50,7 +50,7 @@ import static org.matsim.contrib.drt.optimizer.insertion.InsertionDetourTimeCalc
 /**
  * @author steffenaxer
  */
-final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch, MobsimBeforeCleanupListener {
+final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch {
 	private final RepeatedSelectiveInsertionProvider insertionProvider;
 	private final SingleInsertionDetourPathCalculator detourPathCalculator;
 	private final InsertionDetourTimeCalculator detourTimeCalculator;
@@ -95,7 +95,7 @@ final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch, Mobs
             var insertionWithDetourData = new InsertionWithDetourData(insertion, insertionDetourData,
                     detourTimeCalculator.calculateDetourTimeInfo(insertion, insertionDetourData, drtRequest));
 
-            collectDifferences(drtRequest, selectedInsertion.detourTimeInfo, insertionWithDetourData.detourTimeInfo);
+            //collectDifferences(drtRequest, selectedInsertion.detourTimeInfo, insertionWithDetourData.detourTimeInfo);
 
             double insertionCost = insertionCostCalculator.calculate(drtRequest, insertion,
                     insertionWithDetourData.detourTimeInfo);
@@ -150,19 +150,19 @@ final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch, Mobs
 		}
 	}
 
-	@Override
-	public void notifyMobsimBeforeCleanup(@SuppressWarnings("rawtypes") MobsimBeforeCleanupEvent event) {
-		String filename = matsimServices.getControlerIO()
-				.getIterationFilename(matsimServices.getIterationNumber(),
-						mode + "_selective_insertion_detour_time_estimation_errors.csv");
-		try (CSVWriter writer = new CSVWriter(Files.newBufferedWriter(Paths.get(filename)), ';', '"', '"', "\n");) {
-			writer.writeNext(new String[] { "type", "hour", "count", "mean", "std_dev", "min", "max" }, false);
-			pickupTimeLossStats.forEach((hour, stats) -> printStats(writer, "pickup", hour, stats));
-			dropoffTimeLossStats.forEach((hour, stats) -> printStats(writer, "dropoff", hour, stats));
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-	}
+//	@Override
+//	public void notifyMobsimBeforeCleanup(@SuppressWarnings("rawtypes") MobsimBeforeCleanupEvent event) {
+//		String filename = matsimServices.getControlerIO()
+//				.getIterationFilename(matsimServices.getIterationNumber(),
+//						mode + "_selective_insertion_detour_time_estimation_errors.csv");
+//		try (CSVWriter writer = new CSVWriter(Files.newBufferedWriter(Paths.get(filename)), ';', '"', '"', "\n");) {
+//			writer.writeNext(new String[] { "type", "hour", "count", "mean", "std_dev", "min", "max" }, false);
+//			pickupTimeLossStats.forEach((hour, stats) -> printStats(writer, "pickup", hour, stats));
+//			dropoffTimeLossStats.forEach((hour, stats) -> printStats(writer, "dropoff", hour, stats));
+//		} catch (IOException e) {
+//			e.printStackTrace();
+//		}
+//	}
 
 	private void printStats(CSVWriter writer, String type, int hour, SummaryStatistics stats) {
 		writer.writeNext(new String[] { type, hour + "", stats.getN() + "", stats.getMean() + "",

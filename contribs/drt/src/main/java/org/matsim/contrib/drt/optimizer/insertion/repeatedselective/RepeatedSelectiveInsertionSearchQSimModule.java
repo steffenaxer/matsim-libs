@@ -60,7 +60,7 @@ public class RepeatedSelectiveInsertionSearchQSimModule extends AbstractDvrpMode
 			return detourTimeEstimatorWithUpdatedTravelTimes;
 		}));
 
-        addModalComponent(RepeatedSelectiveInsertionSearch.class, modalProvider(getter -> {
+		bindModal(DrtInsertionSearch.class).toProvider(modalProvider( getter -> {
 			RepeatedSelectiveInsertionProvider provider = RepeatedSelectiveInsertionProvider.create(
 					getter.getModal(InsertionCostCalculator.class),
 					getter.getModal(QSimScopeForkJoinPoolHolder.class).getPool(),
@@ -72,7 +72,7 @@ public class RepeatedSelectiveInsertionSearchQSimModule extends AbstractDvrpMode
                     getter.getModal(StopTimeCalculator.class), getter.getModal(TravelTimeMatrix.class),
                     getter.getModal(AdaptiveTravelTimeMatrix.class));
         }));
-        bindModal(DrtInsertionSearch.class).to(modalKey(RepeatedSelectiveInsertionSearch.class));
+        //bindModal(DrtInsertionSearch.class).to(modalKey(RepeatedSelectiveInsertionSearch.class));
 
         addModalComponent(SingleInsertionDetourPathCalculatorManager.class,
                 new ModalProviders.AbstractProvider<>(getMode(), DvrpModes::mode) {
