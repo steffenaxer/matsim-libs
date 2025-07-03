@@ -44,7 +44,7 @@ import java.nio.file.Path;
 public class BenchmarkGenerator {
 	public static void main(String[] args) {
 
-		int numberOfAgents = 100000;
+		int numberOfAgents = 1000;
 		int expectedRidesPerVehicle = 3;
 		double endTime = 24 * 3600.;
 		int iterations = 0;
@@ -115,7 +115,7 @@ public class BenchmarkGenerator {
 		Controler controler = DrtControlerCreator.createControler(scenario.getConfig(), scenario, false);
 
 		// Optional: set output directory and iterations
-		int threads = 1;
+		int threads = 2;
 		config.controller().setOutputDirectory("output/drt-scenario-parallel-"+threads);
 		config.controller().setLastIteration(iterations);
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
