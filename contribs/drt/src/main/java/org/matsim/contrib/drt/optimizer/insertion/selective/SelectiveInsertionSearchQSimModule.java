@@ -56,7 +56,7 @@ public class SelectiveInsertionSearchQSimModule extends AbstractDvrpModeQSimModu
 					getter.getModal(TravelTime.class));
 			return restrictiveDetourTimeEstimator;
 		}));
-		
+
 		addModalComponent(SelectiveInsertionSearch.class, modalProvider(getter -> {
 			SelectiveInsertionProvider provider = SelectiveInsertionProvider.create(
 					getter.getModal(InsertionCostCalculator.class),
@@ -69,20 +69,20 @@ public class SelectiveInsertionSearchQSimModule extends AbstractDvrpModeQSimModu
 			//   so we do not want to check for time window violations
 			//  Re (*) currently, free-speed travel times are quite accurate. We still need to adjust them to different times of day.
 			InsertionCostCalculator zeroCostInsertionCostCalculator = (drtRequest, insertion, detourTimeInfo) -> 0;
-			return new SelectiveInsertionSearch(provider, getter.getModal(SingleInsertionDetourPathCalculator.class),
+			return new SelectiveInsertionSearch(provider, getter.getModal(SingleInsertionDetourPathCalculatorManager.class).create(),
 					zeroCostInsertionCostCalculator, drtCfg, getter.get(MatsimServices.class), getter.getModal(StopTimeCalculator.class));
 		}));
 		bindModal(DrtInsertionSearch.class).to(modalKey(SelectiveInsertionSearch.class));
 
-		addModalComponent(SingleInsertionDetourPathCalculator.class,
+		addModalComponent(SingleInsertionDetourPathCalculatorManager.class,
 				new ModalProviders.AbstractProvider<>(getMode(), DvrpModes::mode) {
 					@Override
-					public SingleInsertionDetourPathCalculator get() {
+					public SingleInsertionDetourPathCalculatorManager get() {
 						var travelTime = getModalInstance(TravelTime.class);
 						Network network = getModalInstance(Network.class);
 						TravelDisutility travelDisutility = getModalInstance(
 								TravelDisutilityFactory.class).createTravelDisutility(travelTime);
-						return new SingleInsertionDetourPathCalculator(network, travelTime, travelDisutility, drtCfg);
+						return new SingleInsertionDetourPathCalculatorManager(network, travelTime, travelDisutility, drtCfg);
 					}
 				});
 	}
