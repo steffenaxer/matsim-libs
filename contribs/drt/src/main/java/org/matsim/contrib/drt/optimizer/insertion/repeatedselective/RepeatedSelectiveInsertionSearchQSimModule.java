@@ -26,6 +26,7 @@ import org.matsim.contrib.drt.optimizer.insertion.DetourTimeEstimator;
 import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearch;
 import org.matsim.contrib.drt.optimizer.insertion.InsertionCostCalculator;
 import org.matsim.contrib.drt.optimizer.insertion.selective.SingleInsertionDetourPathCalculator;
+import org.matsim.contrib.drt.optimizer.insertion.selective.SingleInsertionDetourPathCalculatorManager;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.stops.StopTimeCalculator;
 import org.matsim.contrib.dvrp.run.AbstractDvrpModeQSimModule;
@@ -43,7 +44,7 @@ import org.matsim.core.router.util.TravelTime;
  */
 public class RepeatedSelectiveInsertionSearchQSimModule extends AbstractDvrpModeQSimModule {
     private static final double SPEED_FACTOR = 1.;
-    
+
     private final DrtConfigGroup drtCfg;
 
     public RepeatedSelectiveInsertionSearchQSimModule(DrtConfigGroup drtCfg) {
@@ -58,7 +59,7 @@ public class RepeatedSelectiveInsertionSearchQSimModule extends AbstractDvrpMode
 					SPEED_FACTOR, getter.getModal(AdaptiveTravelTimeMatrix.class), getter.getModal(TravelTime.class));
 			return detourTimeEstimatorWithUpdatedTravelTimes;
 		}));
-    	
+
         addModalComponent(RepeatedSelectiveInsertionSearch.class, modalProvider(getter -> {
 			RepeatedSelectiveInsertionProvider provider = RepeatedSelectiveInsertionProvider.create(
 					getter.getModal(InsertionCostCalculator.class),
@@ -66,22 +67,22 @@ public class RepeatedSelectiveInsertionSearchQSimModule extends AbstractDvrpMode
 					getter.getModal(StopTimeCalculator.class), getter.getModal(DetourTimeEstimator.class));
             var insertionCostCalculator = getter.getModal(InsertionCostCalculator.class);
             return new RepeatedSelectiveInsertionSearch(provider,
-                    getter.getModal(SingleInsertionDetourPathCalculator.class),
+                    getter.getModal(SingleInsertionDetourPathCalculatorManager.class).create(),
                     insertionCostCalculator, drtCfg, getter.get(MatsimServices.class),
                     getter.getModal(StopTimeCalculator.class), getter.getModal(TravelTimeMatrix.class),
                     getter.getModal(AdaptiveTravelTimeMatrix.class));
         }));
         bindModal(DrtInsertionSearch.class).to(modalKey(RepeatedSelectiveInsertionSearch.class));
 
-        addModalComponent(SingleInsertionDetourPathCalculator.class,
+        addModalComponent(SingleInsertionDetourPathCalculatorManager.class,
                 new ModalProviders.AbstractProvider<>(getMode(), DvrpModes::mode) {
                     @Override
-                    public SingleInsertionDetourPathCalculator get() {
+                    public SingleInsertionDetourPathCalculatorManager get() {
                         var travelTime = getModalInstance(TravelTime.class);
                         Network network = getModalInstance(Network.class);
                         TravelDisutility travelDisutility = getModalInstance(
                                 TravelDisutilityFactory.class).createTravelDisutility(travelTime);
-                        return new SingleInsertionDetourPathCalculator(network, travelTime, travelDisutility, drtCfg);
+                        return new SingleInsertionDetourPathCalculatorManager(network, travelTime, travelDisutility, drtCfg);
                     }
                 });
     }

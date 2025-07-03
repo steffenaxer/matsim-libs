@@ -1,3 +1,4 @@
+
 /*
  * *********************************************************************** *
  * project: org.matsim.*
@@ -51,29 +52,29 @@ public class ExtensiveInsertionSearchQSimModule extends AbstractDvrpModeQSimModu
 		bindModal(DetourTimeEstimator.class).toProvider(modalProvider(getter -> {
 			var insertionParams = (ExtensiveInsertionSearchParams) drtCfg.getDrtInsertionSearchParams();
 			var admissibleTimeEstimator = DetourTimeEstimator.createMatrixBasedEstimator(
-                    insertionParams.getAdmissibleBeelineSpeedFactor(), getter.getModal(TravelTimeMatrix.class),
-					getter.getModal(TravelTime.class));
+				insertionParams.getAdmissibleBeelineSpeedFactor(), getter.getModal(TravelTimeMatrix.class),
+				getter.getModal(TravelTime.class));
 			return admissibleTimeEstimator;
 		}));
-		
+
 		bindModal(DrtInsertionSearch.class).toProvider(modalProvider(getter -> {
 			var insertionCostCalculator = getter.getModal(InsertionCostCalculator.class);
 			var provider = ExtensiveInsertionProvider.create(drtCfg, insertionCostCalculator,
-					getter.getModal(QSimScopeForkJoinPoolHolder.class).getPool(),
-					getter.getModal(StopTimeCalculator.class), getter.getModal(DetourTimeEstimator.class));
-			return new ExtensiveInsertionSearch(provider, getter.getModal(MultiInsertionDetourPathCalculator.class),
-					insertionCostCalculator, getter.getModal(StopTimeCalculator.class));
-		})).asEagerSingleton();
+				getter.getModal(QSimScopeForkJoinPoolHolder.class).getPool(),
+				getter.getModal(StopTimeCalculator.class), getter.getModal(DetourTimeEstimator.class));
+			return new ExtensiveInsertionSearch(provider, getter.getModal(MultiInsertionDetourPathCalculatorManager.class).create(),
+				insertionCostCalculator, getter.getModal(StopTimeCalculator.class));
+		}));
 
-		addModalComponent(MultiInsertionDetourPathCalculator.class,
+		addModalComponent(MultiInsertionDetourPathCalculatorManager.class,
 				new ModalProviders.AbstractProvider<>(getMode(), DvrpModes::mode) {
 					@Override
-					public MultiInsertionDetourPathCalculator get() {
+					public MultiInsertionDetourPathCalculatorManager get() {
 						var travelTime = getModalInstance(TravelTime.class);
 						Network network = getModalInstance(Network.class);
 						TravelDisutility travelDisutility = getModalInstance(
 								TravelDisutilityFactory.class).createTravelDisutility(travelTime);
-						return new MultiInsertionDetourPathCalculator(network, travelTime, travelDisutility, drtCfg);
+						return new MultiInsertionDetourPathCalculatorManager(network, travelTime, travelDisutility, drtCfg);
 					}
 				});
 	}
