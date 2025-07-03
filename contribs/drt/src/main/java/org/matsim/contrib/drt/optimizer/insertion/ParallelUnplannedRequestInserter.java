@@ -50,186 +50,187 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleSupplier;
+
 /**
  * @author michalm
  */
 public class ParallelUnplannedRequestInserter implements UnplannedRequestInserter, MobsimAfterSimStepListener, MobsimEngine, MobsimBeforeCleanupListener {
-	private static final Logger log = LogManager.getLogger(ParallelUnplannedRequestInserter.class);
-	public static final int INTERVAL = 60;
+    private static final Logger log = LogManager.getLogger(ParallelUnplannedRequestInserter.class);
+    public static final int INTERVAL = 60;
 
-	private Double lastProcessingTime;
-	private final String mode;
-	private final Fleet fleet;
-	private final DoubleSupplier timeOfDay;
-	private final EventsManager eventsManager;
-	private final Provider<RequestInsertionScheduler> insertionScheduler;
-	private final VehicleEntry.EntryFactory vehicleEntryFactory;
-	private final Provider<DrtInsertionSearch> insertionSearch;
-	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
-	private final Queue<DrtRequest> requestQueue = new ConcurrentLinkedQueue<>();
-	private final DrtOfferAcceptor drtOfferAcceptor;
-	private final PassengerStopDurationProvider stopDurationProvider;
-	private final RequestFleetFilter requestFleetFilter;
-	private final Network network;
-	private final List<RequestInsertWorker> workers;
-	private final ForkJoinPool inserterExecutorService;
-	private final List<Map<Id<DvrpVehicle>, DvrpVehicle>> fleetParts;
-	private final Random rnd = MatsimRandom.getLocalInstance();
+    private Double lastProcessingTime;
+    private final String mode;
+    private final Fleet fleet;
+    private final DoubleSupplier timeOfDay;
+    private final EventsManager eventsManager;
+    private final Provider<RequestInsertionScheduler> insertionScheduler;
+    private final VehicleEntry.EntryFactory vehicleEntryFactory;
+    private final Provider<DrtInsertionSearch> insertionSearch;
+    private final DrtRequestInsertionRetryQueue insertionRetryQueue;
+    private final Queue<DrtRequest> requestQueue = new ConcurrentLinkedQueue<>();
+    private final DrtOfferAcceptor drtOfferAcceptor;
+    private final PassengerStopDurationProvider stopDurationProvider;
+    private final RequestFleetFilter requestFleetFilter;
+    private final Network network;
+    private final List<RequestInsertWorker> workers;
+    private final ForkJoinPool inserterExecutorService;
+    private final List<Map<Id<DvrpVehicle>, DvrpVehicle>> fleetParts;
+    private final Random rnd = MatsimRandom.getLocalInstance();
 
-	public ParallelUnplannedRequestInserter(DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
+    public ParallelUnplannedRequestInserter(int threadCount, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
                                             EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionScheduler,
                                             VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
                                             DrtRequestInsertionRetryQueue insertionRetryQueue, DrtOfferAcceptor drtOfferAcceptor,
-											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, Network network) {
-		this(drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionScheduler, vehicleEntryFactory,
-				insertionRetryQueue, insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter, network);
-	}
+                                            PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, Network network) {
+        this(threadCount, drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionScheduler, vehicleEntryFactory,
+                insertionRetryQueue, insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter, network);
+    }
 
-	@VisibleForTesting
-    ParallelUnplannedRequestInserter(String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
+    @VisibleForTesting
+    ParallelUnplannedRequestInserter(int threadCount, String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
                                      Provider<RequestInsertionScheduler> insertionScheduler, VehicleEntry.EntryFactory vehicleEntryFactory,
                                      DrtRequestInsertionRetryQueue insertionRetryQueue, Provider<DrtInsertionSearch> insertionSearch,
                                      DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, Network network) {
-		this.mode = mode;
-		this.fleet = fleet;
-		this.timeOfDay = timeOfDay;
-		this.eventsManager = eventsManager;
-		this.insertionScheduler = insertionScheduler;
-		this.vehicleEntryFactory = vehicleEntryFactory;
-		this.insertionRetryQueue = insertionRetryQueue;
-		this.insertionSearch = insertionSearch;
-		this.drtOfferAcceptor = drtOfferAcceptor;
-		this.stopDurationProvider = stopDurationProvider;
+        this.mode = mode;
+        this.fleet = fleet;
+        this.timeOfDay = timeOfDay;
+        this.eventsManager = eventsManager;
+        this.insertionScheduler = insertionScheduler;
+        this.vehicleEntryFactory = vehicleEntryFactory;
+        this.insertionRetryQueue = insertionRetryQueue;
+        this.insertionSearch = insertionSearch;
+        this.drtOfferAcceptor = drtOfferAcceptor;
+        this.stopDurationProvider = stopDurationProvider;
         this.requestFleetFilter = requestFleetFilter;
-		this.network = network;
-		this.inserterExecutorService = new ForkJoinPool(3);;
-		this.fleetParts = splitFleetIntoParts(this.fleet,3);
-		this.workers = getRequestInsertWorker(3);
+        this.network = network;
+        this.inserterExecutorService = new ForkJoinPool(threadCount);
+        ;
+        this.fleetParts = splitFleetIntoParts(this.fleet, threadCount);
+        this.workers = getRequestInsertWorker(threadCount);
     }
 
-	List<RequestInsertWorker> getRequestInsertWorker(int n)
-	{
-		List<RequestInsertWorker> workers = new ArrayList<>();
-		for (int i = 0; i < n; i++) {
-			RequestInsertWorker requestInsertWorker = new RequestInsertWorker(vehicleEntryFactory,
-				timeOfDay,
-				requestFleetFilter,
-				insertionSearch.get(),
-				stopDurationProvider,
-				drtOfferAcceptor,
-				insertionScheduler.get(),
-				eventsManager,
-				insertionRetryQueue,
-				mode,
-				fleetParts.get(i));
-			workers.add(requestInsertWorker);
-		}
-		return workers;
-	}
+    List<RequestInsertWorker> getRequestInsertWorker(int n) {
+        List<RequestInsertWorker> workers = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            RequestInsertWorker requestInsertWorker = new RequestInsertWorker(vehicleEntryFactory,
+                    timeOfDay,
+                    requestFleetFilter,
+                    insertionSearch.get(),
+                    stopDurationProvider,
+                    drtOfferAcceptor,
+                    insertionScheduler.get(),
+                    eventsManager,
+                    insertionRetryQueue,
+                    mode,
+                    fleetParts.get(i));
+            workers.add(requestInsertWorker);
+        }
+        return workers;
+    }
 
-	@Override
-	public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
-		distributeRoundRobin(unplannedRequests, this.workers);
-		unplannedRequests.clear();
-	}
+    @Override
+    public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
+        distributeRoundRobin(unplannedRequests, this.workers);
+        unplannedRequests.clear();
+    }
 
-	public static void distributeRoundRobin(Collection<DrtRequest> unplannedRequests, List<RequestInsertWorker> workers) {
-		if (workers == null || workers.isEmpty()) {
-			throw new IllegalArgumentException("Workers could not be empty!");
-		}
+    public static void distributeRoundRobin(Collection<DrtRequest> unplannedRequests, List<RequestInsertWorker> workers) {
+        if (workers == null || workers.isEmpty()) {
+            throw new IllegalArgumentException("Workers could not be empty!");
+        }
 
-		List<List<DrtRequest>> partitions = new ArrayList<>();
-		for (int i = 0; i < workers.size(); i++) {
-			partitions.add(new ArrayList<>());
-		}
+        List<List<DrtRequest>> partitions = new ArrayList<>();
+        for (int i = 0; i < workers.size(); i++) {
+            partitions.add(new ArrayList<>());
+        }
 
-		Iterator<DrtRequest> iterator = unplannedRequests.iterator();
-		int index = 0;
-		while (iterator.hasNext()) {
-			DrtRequest req = iterator.next();
-			partitions.get(index % workers.size()).add(req);
-			iterator.remove();
-			index++;
-		}
+        Iterator<DrtRequest> iterator = unplannedRequests.iterator();
+        int index = 0;
+        while (iterator.hasNext()) {
+            DrtRequest req = iterator.next();
+            partitions.get(index % workers.size()).add(req);
+            iterator.remove();
+            index++;
+        }
 
-		for (int i = 0; i < workers.size(); i++) {
-			if (!partitions.get(i).isEmpty()) {
-				workers.get(i).scheduleUnplannedRequests(partitions.get(i));
-			}
-		}
-	}
+        for (int i = 0; i < workers.size(); i++) {
+            if (!partitions.get(i).isEmpty()) {
+                workers.get(i).scheduleUnplannedRequests(partitions.get(i));
+            }
+        }
+    }
 
-	public static List<Map<Id<DvrpVehicle>, DvrpVehicle>> splitFleetIntoParts(Fleet fleet, int n) {
-		if (n <= 0) {
-			throw new IllegalArgumentException("Number of fleet parts needs to be larger than 0");
-		}
+    public static List<Map<Id<DvrpVehicle>, DvrpVehicle>> splitFleetIntoParts(Fleet fleet, int n) {
+        if (n <= 0) {
+            throw new IllegalArgumentException("Number of fleet parts needs to be larger than 0");
+        }
 
-		List<Map<Id<DvrpVehicle>, DvrpVehicle>> parts = new ArrayList<>();
-		for (int i = 0; i < n; i++) {
-			parts.add(new LinkedHashMap<>());
-		}
+        List<Map<Id<DvrpVehicle>, DvrpVehicle>> parts = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            parts.add(new LinkedHashMap<>());
+        }
 
-		int index = 0;
-		for (Map.Entry<Id<DvrpVehicle>, DvrpVehicle> entry : fleet.getVehicles().entrySet()) {
-			parts.get(index % n).put(entry.getKey(), entry.getValue());
-			index++;
-		}
+        int index = 0;
+        for (Map.Entry<Id<DvrpVehicle>, DvrpVehicle> entry : fleet.getVehicles().entrySet()) {
+            parts.get(index % n).put(entry.getKey(), entry.getValue());
+            index++;
+        }
 
-		return parts;
-	}
+        return parts;
+    }
 
-	@Override
-	public void notifyMobsimAfterSimStep(MobsimAfterSimStepEvent e) {
-		double now = timeOfDay.getAsDouble();
+    @Override
+    public void notifyMobsimAfterSimStep(MobsimAfterSimStepEvent e) {
+        double now = timeOfDay.getAsDouble();
 
-		if (this.lastProcessingTime == null) {
-			this.lastProcessingTime = now;
-		}
+        if (this.lastProcessingTime == null) {
+            this.lastProcessingTime = now;
+        }
 
-		if ((now - lastProcessingTime) >= INTERVAL) {
+        if ((now - lastProcessingTime) >= INTERVAL) {
 
-			List<ForkJoinTask<?>> tasks = new ArrayList<>();
+            List<ForkJoinTask<?>> tasks = new ArrayList<>();
 
-			for (RequestInsertWorker worker : this.workers) {
-				tasks.add(inserterExecutorService.submit(() -> worker.process(now)));
-			}
+            for (RequestInsertWorker worker : this.workers) {
+                tasks.add(inserterExecutorService.submit(() -> worker.process(now)));
+            }
 
-			tasks.forEach(ForkJoinTask::join);
+            tasks.forEach(ForkJoinTask::join);
 
-			lastProcessingTime = now;
-		}
-	}
+            lastProcessingTime = now;
+        }
+    }
 
-	@Override
-	public void onPrepareSim() {
+    @Override
+    public void onPrepareSim() {
 
-	}
+    }
 
-	@Override
-	public void afterSim() {
+    @Override
+    public void afterSim() {
 
-	}
+    }
 
-	@Override
-	public void setInternalInterface(InternalInterface internalInterface) {
+    @Override
+    public void setInternalInterface(InternalInterface internalInterface) {
 
-	}
+    }
 
-	@Override
-	public void doSimStep(double time) {
+    @Override
+    public void doSimStep(double time) {
 
-	}
+    }
 
-	@Override
-	public void notifyMobsimBeforeCleanup(MobsimBeforeCleanupEvent e) {
-		inserterExecutorService.shutdown();
-		try {
-			inserterExecutorService.awaitTermination(5, TimeUnit.SECONDS);
-		} catch (InterruptedException ex) {
-			throw new RuntimeException(ex);
-		}
-		this.workers.forEach(RequestInsertWorker::finish);
-	}
+    @Override
+    public void notifyMobsimBeforeCleanup(MobsimBeforeCleanupEvent e) {
+        inserterExecutorService.shutdown();
+        try {
+            inserterExecutorService.awaitTermination(5, TimeUnit.SECONDS);
+        } catch (InterruptedException ex) {
+            throw new RuntimeException(ex);
+        }
+        this.workers.forEach(RequestInsertWorker::finish);
+    }
 
 
 }
