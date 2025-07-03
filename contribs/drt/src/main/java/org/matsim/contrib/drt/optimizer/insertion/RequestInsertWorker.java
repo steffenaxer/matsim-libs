@@ -11,7 +11,6 @@ import org.matsim.contrib.drt.scheduler.RequestInsertionScheduler;
 import org.matsim.contrib.drt.stops.PassengerStopDurationProvider;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestRejectedEvent;
-import org.matsim.contrib.dvrp.passenger.PassengerRequestScheduledEvent;
 import org.matsim.core.api.experimental.events.EventsManager;
 
 import java.util.*;
@@ -105,6 +104,14 @@ public class RequestInsertWorker {
 					dropoffDuration);
 
 			if (acceptedRequest.isPresent()) {
+				var vehicle = insertion.insertion.vehicleEntry.vehicle;
+				VehicleEntry newVehicleEntry = vehicleEntryFactory.create(vehicle, now);
+				if (newVehicleEntry != null) {
+					vehicleEntries.put(vehicle.getId(), newVehicleEntry);
+				} else {
+					vehicleEntries.remove(vehicle.getId());
+				}
+
 				requestData.setSolution(new RequestData.InsertionRecord(best, acceptedRequest, OFFER_ACCEPTED));
 				Id<DvrpVehicle> vehicleId = insertion.insertion.vehicleEntry.vehicle.getId();
 				if (usedVehicles.contains(vehicleId)) {
@@ -127,7 +134,7 @@ public class RequestInsertWorker {
 	}
 
 
-	public void scheduleUnplannedRequests(Collection<RequestData> unplannedRequests) {
+	public void addRequests(Collection<RequestData> unplannedRequests) {
         this.unplannedRequests.addAll(unplannedRequests);
     }
 

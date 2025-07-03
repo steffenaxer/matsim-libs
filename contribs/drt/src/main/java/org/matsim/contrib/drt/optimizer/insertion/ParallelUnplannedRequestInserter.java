@@ -35,6 +35,7 @@ import org.matsim.contrib.drt.scheduler.RequestInsertionScheduler;
 import org.matsim.contrib.drt.stops.PassengerStopDurationProvider;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.fleet.Fleet;
+import org.matsim.contrib.dvrp.optimizer.Request;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestRejectedEvent;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestScheduledEvent;
 import org.matsim.core.api.experimental.events.EventsManager;
@@ -48,12 +49,13 @@ import org.matsim.core.mobsim.qsim.InternalInterface;
 import org.matsim.core.mobsim.qsim.interfaces.MobsimEngine;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleSupplier;
 import java.util.stream.Collectors;
+
+import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequestInserter.NO_INSERTION_FOUND_CAUSE;
 
 /**
  * @author michalm
@@ -72,7 +74,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
     private final VehicleEntry.EntryFactory vehicleEntryFactory;
     private final Provider<DrtInsertionSearch> insertionSearch;
     private final DrtRequestInsertionRetryQueue insertionRetryQueue;
-    private final Queue<DrtRequest> requestQueue = new ConcurrentLinkedQueue<>();
+    private final List<RequestData> temp = Collections.synchronizedList(new ArrayList<>());
     private final DrtOfferAcceptor drtOfferAcceptor;
     private final PassengerStopDurationProvider stopDurationProvider;
     private final RequestFleetFilter requestFleetFilter;
@@ -80,8 +82,8 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
     private final List<RequestInsertWorker> workers;
     private final ForkJoinPool inserterExecutorService;
     private final int maxIter = 3;
-    List<String> REJECTION_REASONS = List.of("NO_SOLUTION", "VEHICLE_ALREADY_ASSIGNED", "SOLUTION_WITHOUT_ACCEPTANCE");
-    private final Random rnd = MatsimRandom.getLocalInstance();
+    private final static List<String> REJECTION_REASONS = List.of("NO_SOLUTION", "VEHICLE_ALREADY_ASSIGNED", "SOLUTION_WITHOUT_ACCEPTANCE");
+	private final Set<Id<Request>> scheduled = new HashSet<>();
 
     public ParallelUnplannedRequestInserter(int threadCount, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
                                             EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
@@ -135,21 +137,21 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
     @Override
     public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
-
-        List<List<RequestData>> parts = splitIntoFixedParts(unplannedRequests.stream()
-                .map(RequestData::new)
-                .collect(Collectors.toCollection(ArrayList::new)), this.workers.size());
-
-
-        Verify.verify(parts.size() == this.workers.size(), "More parts then workers!");
-
-        for (int i = 0; i < parts.size(); i++) {
-            var part = parts.get(i);
-            workers.get(i).scheduleUnplannedRequests(part);
-        }
-
-        unplannedRequests.clear();
+		unplannedRequests.forEach(r ->temp.add(new RequestData((r))));
+		unplannedRequests.clear();
     }
+
+	private void assignToWorkers()
+	{
+		List<List<RequestData>> parts = splitIntoFixedParts(temp, this.workers.size());
+		Verify.verify(parts.size() == this.workers.size(), "More parts then workers!");
+
+		for (int i = 0; i < parts.size(); i++) {
+			var part = parts.get(i);
+			workers.get(i).addRequests(part);
+		}
+		temp.clear();
+	}
 
 
     public static <T> List<List<T>> splitIntoFixedParts(List<T> input, int n) {
@@ -182,24 +184,24 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
             lastProcessingTime = now;
 
             // Retry conflicts
-            Integer unsolvedConflicts = null;
+            Integer lastUnsolvedConflicts = null;
             for (int i = 0; i < this.maxIter; i++) {
                 List<DrtRequest> retryList = consolidate(now, i);
 
-                if (retryList.isEmpty() ||  (unsolvedConflicts!= null && retryList.size() == unsolvedConflicts)) {
-                    consolidate(now, maxIter);
+                if (retryList.isEmpty() ||  (lastUnsolvedConflicts!= null && retryList.size() == lastUnsolvedConflicts)) {
+					retryList.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
                     break;
                 }
-                unsolvedConflicts = retryList.size();
+                lastUnsolvedConflicts = retryList.size();
                 this.scheduleUnplannedRequests(retryList);
                 solve(now);
             }
-
         }
     }
 
     private void solve(double now) {
-        List<ForkJoinTask<?>> tasks = new ArrayList<>();
+		assignToWorkers();
+		List<ForkJoinTask<?>> tasks = new ArrayList<>();
 
         for (RequestInsertWorker worker : this.workers) {
             tasks.add(inserterExecutorService.submit(() -> worker.process(now)));
@@ -210,44 +212,54 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
     List<DrtRequest> consolidate(double now, int iteration) {
 
-        List<RequestData> conflictFreeSolution = new ArrayList<>(); // Per worker
-        List<RequestData> rejectedSolutions = new ArrayList<>(); // Per worker
+        List<RequestData> localConflictFree = new ArrayList<>(); // Per worker
+        Set<DrtRequest> allRejection = new HashSet<>();
 
         for (RequestInsertWorker worker : this.workers) {
             Map<String, List<RequestData>> insertions = worker.getCategorizedInsertions();
             List<RequestData> solutions = insertions.getOrDefault("CONFLICT_FREE_SOLUTIONS", Collections.emptyList());
-            conflictFreeSolution.addAll(solutions);
+            localConflictFree.addAll(solutions);
 
             for (String rejectionReason : REJECTION_REASONS) {
-                List<RequestData> r = worker.getCategorizedInsertions().getOrDefault(rejectionReason, Collections.emptyList());
-                rejectedSolutions.addAll(r);
+                List<RequestData> rejection = worker.getCategorizedInsertions().getOrDefault(rejectionReason, Collections.emptyList());
+				rejection.forEach(req -> allRejection.add(req.getDrtRequest()));
             }
             worker.clean();
         }
 
-        Solution solutions = findConflictFreeSolutions(conflictFreeSolution);
+		for (RequestData requestData : localConflictFree) {
+			Verify.verify(requestData.getSolution().acceptedDrtRequest().isPresent(),requestData.getSolution().toString()); //TODO Understand why we have non accepted solutions
+		}
+
+
+        ResolvedConflicts solutions = getConflictFreeInsertions(localConflictFree);
         solutions.noConflicts.forEach(s -> schedule(s, now));
 
         //Collect all conflicting solutions
-        rejectedSolutions.addAll(solutions.conflicts);
+		solutions.conflicts.forEach(r -> allRejection.add(r.getDrtRequest()));
 
-        if (iteration == maxIter) {
-            rejectedSolutions.forEach(s -> reject(s, now, "REJECTED"));
-            return Collections.emptyList();
-        }
+		//Remove if already found a global solutions
+		solutions.noConflicts.forEach(done -> allRejection.remove(done.getDrtRequest()));
 
-        return rejectedSolutions.stream().map(RequestData::getDrtRequest).collect(Collectors.toCollection(ArrayList::new));
+        return new ArrayList<>(allRejection);
     }
 
-    record Solution(List<RequestData> noConflicts, List<RequestData> conflicts) {
+    record ResolvedConflicts(List<RequestData> noConflicts, List<RequestData> conflicts) {
     }
 
     //TODO: Prefer solutions with a better score
-    Solution findConflictFreeSolutions(List<RequestData> requestData) {
-        List<RequestData> noConflicts = new ArrayList<>();
+    ResolvedConflicts getConflictFreeInsertions(List<RequestData> requestData) {
+        Set<DrtRequest> seenRequest = new HashSet<>();
+		List<RequestData> noConflicts = new ArrayList<>();
         List<RequestData> conflicts = new ArrayList<>();
         Set<Id<DvrpVehicle>> usedVehicles = new HashSet<>();
         for (RequestData requestDatum : requestData) {
+
+			if(seenRequest.contains(requestDatum.getDrtRequest()))
+			{
+				continue;
+			}
+			seenRequest.add(requestDatum.getDrtRequest());
             var vehicleId = requestDatum.getSolution().insertion().get().insertion.vehicleEntry.vehicle.getId();
             if (!usedVehicles.contains(vehicleId)) {
                 noConflicts.add(requestDatum);
@@ -257,11 +269,14 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
             }
         }
 
-        return new Solution(noConflicts, conflicts);
+        return new ResolvedConflicts(noConflicts, conflicts);
     }
 
     void schedule(RequestData requestData, double now) {
-        var req = requestData.getDrtRequest();
+		Verify.verify(!this.scheduled.contains(requestData.getDrtRequest().getId()),"Request already scheduled! " + requestData.getDrtRequest().getId());
+		this.scheduled.add(requestData.getDrtRequest().getId());
+
+		var req = requestData.getDrtRequest();
         var insertion = requestData.getSolution().insertion().get();
         var acceptedRequest = requestData.getSolution().acceptedDrtRequest();
         var vehicle = insertion.insertion.vehicleEntry.vehicle;
@@ -280,8 +295,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
     }
 
-    void reject(RequestData requestData, double now, String text) {
-        var req = requestData.getDrtRequest();
+    void reject(DrtRequest req, double now, String text) {
         eventsManager.processEvent(new PassengerRequestRejectedEvent(now, mode, req.getId(), req.getPassengerIds(), text));
     }
 

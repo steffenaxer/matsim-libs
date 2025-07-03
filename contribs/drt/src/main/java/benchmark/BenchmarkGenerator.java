@@ -44,7 +44,7 @@ import java.nio.file.Path;
 public class BenchmarkGenerator {
 	public static void main(String[] args) {
 
-		int numberOfAgents = 1000;
+		int numberOfAgents = 100000;
 		int expectedRidesPerVehicle = 3;
 		double endTime = 24 * 3600.;
 		int iterations = 0;
