@@ -72,7 +72,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final VehicleEntry.EntryFactory vehicleEntryFactory;
 	private final Provider<DrtInsertionSearch> insertionSearch;
 	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
-	private final List<RequestData> temp = Collections.synchronizedList(new ArrayList<>());
 	private final DrtOfferAcceptor drtOfferAcceptor;
 	private final PassengerStopDurationProvider stopDurationProvider;
 	private final RequestFleetFilter requestFleetFilter;
@@ -116,16 +115,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	List<RequestInsertWorker> getRequestInsertWorker(int n) {
 		List<RequestInsertWorker> workers = new ArrayList<>();
 		for (int i = 0; i < n; i++) {
-			RequestInsertWorker requestInsertWorker = new RequestInsertWorker(vehicleEntryFactory,
-				timeOfDay,
+			RequestInsertWorker requestInsertWorker = new RequestInsertWorker(
 				requestFleetFilter,
 				insertionSearch.get(),
-				stopDurationProvider,
-				drtOfferAcceptor,
-				insertionSchedulerProvider.get(),
-				eventsManager,
-				mode,
-				fleet.getVehicles());
+				drtOfferAcceptor);
 			workers.add(requestInsertWorker);
 		}
 		return workers;
@@ -156,9 +149,9 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		if ((now - lastProcessingTime) >= INTERVAL) {
 
 			// Solve requests the first time
-			// At this point, we need to generate entries for all vehicles
-			Map<Id<DvrpVehicle>, VehicleEntry> entries = calculateVehicleEntries(now, this.fleet.getVehicles().values());
-			solve(now, entries);
+			// At this point, we need to generate vehicleEntries for all vehicles
+			Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries = calculateVehicleEntries(now, this.fleet.getVehicles().values());
+			solve(now, vehicleEntries);
 
 			lastProcessingTime = now;
 
@@ -213,7 +206,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		);
 	}
 
-	record ConsolidationResult(Set<DvrpVehicle> scheduledVehicles, Collection<DrtRequest> rejectedRequests) {
+	record ConsolidationResult(List<DvrpVehicle> scheduledVehicles, Collection<DrtRequest> rejectedRequests) {
 	}
 
 	ConsolidationResult consolidate(double now) {
@@ -250,8 +243,15 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 		this.workers.forEach(RequestInsertWorker::clean);
 
-		var scheduledVehicle = resolvedConflicts.noConflicts.stream().map(r -> r.getSolution().insertion().get().insertion.vehicleEntry.vehicle).collect(Collectors.toSet());
-		return new ConsolidationResult(scheduledVehicle, allRejection);
+		// Ensure to keep allways the same order
+		// May be required for determinism
+		List<DvrpVehicle> scheduledVehicles = resolvedConflicts.noConflicts.stream()
+			.map(r -> r.getSolution().insertion().get().insertion.vehicleEntry.vehicle)
+			.distinct()
+			.sorted(Comparator.comparing(DvrpVehicle::getId))
+			.toList();
+
+		return new ConsolidationResult(scheduledVehicles, allRejection);
 	}
 
 	record ResolvedConflicts(List<RequestData> noConflicts, List<RequestData> conflicts) {

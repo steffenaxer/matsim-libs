@@ -23,53 +23,34 @@ import java.util.stream.Collectors;
  * @author steffenaxer
  */
 public class RequestInsertWorker {
-    private static final Logger LOG = LogManager.getLogger(RequestInsertWorker.class);
-    private static final String OFFER_ACCEPTED = "accepted";
-    private final VehicleEntry.EntryFactory vehicleEntryFactory;
-    private final RequestFleetFilter requestFleetFilter;
-    private final DrtInsertionSearch insertionSearch;
-    private final Queue<RequestData> unplannedRequests = new ConcurrentLinkedQueue<>();
-    private final PassengerStopDurationProvider stopDurationProvider;
-    private final DrtOfferAcceptor drtOfferAcceptor;
-    private final RequestInsertionScheduler insertionScheduler;
-    private final EventsManager eventsManager;
-    private final String mode;
-    private final Map<Id<DvrpVehicle>, DvrpVehicle> managedVehicles;
-    private final ForkJoinPool forkJoinPool = new ForkJoinPool(4);
-	private final Map<String, List<RequestData>> categorizedInsertions = new ConcurrentHashMap<>();
-	private final Map<Id<DvrpVehicle>,List<RequestData>> solutions = new HashMap<>();
+	private static final Logger LOG = LogManager.getLogger(RequestInsertWorker.class);
+	private static final String OFFER_ACCEPTED = "accepted";
+	private final RequestFleetFilter requestFleetFilter;
+	private final DrtInsertionSearch insertionSearch;
+	private final Queue<RequestData> unplannedRequests = new ConcurrentLinkedQueue<>();
+	private final DrtOfferAcceptor drtOfferAcceptor;
+	private final ForkJoinPool forkJoinPool = new ForkJoinPool(4);
+	private final Map<Id<DvrpVehicle>, List<RequestData>> solutions = new HashMap<>();
 	private final List<DrtRequest> noSolutions = new ArrayList<>();
 
+	public RequestInsertWorker(
+		RequestFleetFilter requestFleetFilter,
+		DrtInsertionSearch insertionSearch,
+		DrtOfferAcceptor drtOfferAcceptor
+	) {
+		this.requestFleetFilter = requestFleetFilter;
+		this.insertionSearch = insertionSearch;
+		this.drtOfferAcceptor = drtOfferAcceptor;
+	}
 
-	public RequestInsertWorker(VehicleEntry.EntryFactory vehicleEntryFactory,
-                               DoubleSupplier timeOfDay,
-                               RequestFleetFilter requestFleetFilter,
-                               DrtInsertionSearch insertionSearch,
-                               PassengerStopDurationProvider stopDurationProvider,
-                               DrtOfferAcceptor drtOfferAcceptor,
-                               RequestInsertionScheduler insertionScheduler,
-                               EventsManager eventsManager,
-                               String mode, Map<Id<DvrpVehicle>, DvrpVehicle> managedVehicles
-    ) {
-        this.vehicleEntryFactory = vehicleEntryFactory;
-        this.requestFleetFilter = requestFleetFilter;
-        this.insertionSearch = insertionSearch;
-        this.stopDurationProvider = stopDurationProvider;
-        this.drtOfferAcceptor = drtOfferAcceptor;
-        this.insertionScheduler = insertionScheduler;
-        this.eventsManager = eventsManager;
-        this.mode = mode;
-        this.managedVehicles = managedVehicles;
-    }
-
-    public void finish() {
-        forkJoinPool.shutdown();
-        try {
-            forkJoinPool.awaitTermination(5, TimeUnit.SECONDS);
-        } catch (InterruptedException ex) {
-            throw new RuntimeException(ex);
-        }
-    }
+	public void finish() {
+		forkJoinPool.shutdown();
+		try {
+			forkJoinPool.awaitTermination(5, TimeUnit.SECONDS);
+		} catch (InterruptedException ex) {
+			throw new RuntimeException(ex);
+		}
+	}
 
 
 	private void findInsertion(RequestData requestData, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries, double now) {
@@ -82,12 +63,12 @@ public class RequestInsertWorker {
 		} else {
 			InsertionWithDetourData insertion = best.get();
 			double dropoffDuration = insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime -
-					insertion.detourTimeInfo.dropoffDetourInfo.vehicleArrivalTime;
+				insertion.detourTimeInfo.dropoffDetourInfo.vehicleArrivalTime;
 
 			var acceptedRequest = drtOfferAcceptor.acceptDrtOffer(req,
-					insertion.detourTimeInfo.pickupDetourInfo.requestPickupTime,
-					insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime,
-					dropoffDuration);
+				insertion.detourTimeInfo.pickupDetourInfo.requestPickupTime,
+				insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime,
+				dropoffDuration);
 
 			if (acceptedRequest.isPresent()) {
 				var vehicle = insertion.insertion.vehicleEntry.vehicle;
@@ -105,18 +86,17 @@ public class RequestInsertWorker {
 	}
 
 
-    void process(double now, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries) {
+	void process(double now, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries) {
 
-		while(!unplannedRequests.isEmpty())
-		{
+		while (!unplannedRequests.isEmpty()) {
 			findInsertion(unplannedRequests.poll(), vehicleEntries, now);
 		}
 
-    }
+	}
 
 
 	public ParallelUnplannedRequestInserter.WorkerResult getWorkerResult() {
-		return new ParallelUnplannedRequestInserter.WorkerResult(this.solutions,this.noSolutions);
+		return new ParallelUnplannedRequestInserter.WorkerResult(this.solutions, this.noSolutions);
 	}
 
 
