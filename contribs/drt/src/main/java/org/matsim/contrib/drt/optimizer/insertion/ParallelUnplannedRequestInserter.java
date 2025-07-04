@@ -243,10 +243,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
         // Remaining conflicts, add up into allRejection
 		resolvedConflicts.conflicts.forEach(r -> allRejection.add(r.getDrtRequest()));
 
-		//Remove from allRejection if we already found a solution
-		//TODO Do we need this?
-		resolvedConflicts.noConflicts.forEach(done -> allRejection.remove(done.getDrtRequest()));
-
 		this.workers.forEach(RequestInsertWorker::clean);
         return allRejection;
     }
