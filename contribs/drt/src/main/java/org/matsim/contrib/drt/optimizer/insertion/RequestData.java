@@ -1,6 +1,7 @@
 package org.matsim.contrib.drt.optimizer.insertion;
 
 
+import com.google.common.base.Verify;
 import org.matsim.contrib.drt.passenger.AcceptedDrtRequest;
 import org.matsim.contrib.drt.passenger.DrtRequest;
 
@@ -23,6 +24,7 @@ public class RequestData {
 	}
 
 	public void setSolution(InsertionRecord solution) {
+		Verify.verify(this.solution==null);
 		this.solution = solution;
 	}
 

@@ -1,5 +1,6 @@
 package org.matsim.contrib.drt.optimizer.insertion;
 
+import com.google.common.base.Verify;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
@@ -14,6 +15,8 @@ import org.matsim.contrib.dvrp.passenger.PassengerRequestRejectedEvent;
 import org.matsim.core.api.experimental.events.EventsManager;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleSupplier;
@@ -31,7 +34,7 @@ public class RequestInsertWorker {
     private final VehicleEntry.EntryFactory vehicleEntryFactory;
     private final RequestFleetFilter requestFleetFilter;
     private final DrtInsertionSearch insertionSearch;
-    private final List<RequestData> unplannedRequests = new ArrayList<>();
+    private final Queue<RequestData> unplannedRequests = new ConcurrentLinkedQueue<>();
     private final PassengerStopDurationProvider stopDurationProvider;
     private final DrtOfferAcceptor drtOfferAcceptor;
     private final RequestInsertionScheduler insertionScheduler;
@@ -40,7 +43,7 @@ public class RequestInsertWorker {
     private final String mode;
     private final Map<Id<DvrpVehicle>, DvrpVehicle> managedVehicles;
     private final ForkJoinPool forkJoinPool = new ForkJoinPool(4);
-	private final Map<String, List<RequestData>> categorizedInsertions = new LinkedHashMap<>();
+	private final Map<String, List<RequestData>> categorizedInsertions = new ConcurrentHashMap<>();
 
 
 	public RequestInsertWorker(VehicleEntry.EntryFactory vehicleEntryFactory,
@@ -75,12 +78,6 @@ public class RequestInsertWorker {
         }
     }
 
-    private void retryOrReject(DrtRequest req, double now, String cause) {
-        if (!insertionRetryQueue.tryAddFailedRequest(req, now)) {
-            eventsManager.processEvent(new PassengerRequestRejectedEvent(now, mode, req.getId(), req.getPassengerIds(), cause));
-            LOG.debug("No insertion found for drt request {} with passenger ids={} fromLinkId={}", req, req.getPassengerIds().stream().map(Object::toString).collect(Collectors.joining(",")), req.getFromLink().getId());
-        }
-    }
 
 	private void findInsertion(RequestData requestData, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries, double now) {
 		DrtRequest req = requestData.getDrtRequest();
@@ -125,9 +122,9 @@ public class RequestInsertWorker {
 	}
 
 
-	public void addRequests(Collection<RequestData> unplannedRequests) {
-        this.unplannedRequests.addAll(unplannedRequests);
-    }
+	public void addRequest(RequestData unplannedRequest) {
+		this.unplannedRequests.add(unplannedRequest);
+	}
 
 
     void process(double now) {
@@ -143,9 +140,11 @@ public class RequestInsertWorker {
         //first retry scheduling old requests
         //requestsToRetry.forEach(req -> scheduleUnplannedRequest(req, vehicleEntries, now));
 
-		for (RequestData req : unplannedRequests) {
-			findInsertion(req, vehicleEntries, now);
+		while(!unplannedRequests.isEmpty())
+		{
+			findInsertion(unplannedRequests.poll(), vehicleEntries, now);
 		}
+
     }
 
 

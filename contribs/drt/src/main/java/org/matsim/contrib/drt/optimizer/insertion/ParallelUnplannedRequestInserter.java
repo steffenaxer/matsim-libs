@@ -39,7 +39,6 @@ import org.matsim.contrib.dvrp.optimizer.Request;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestRejectedEvent;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestScheduledEvent;
 import org.matsim.core.api.experimental.events.EventsManager;
-import org.matsim.core.gbl.MatsimRandom;
 import org.matsim.core.mobsim.framework.MobsimTimer;
 import org.matsim.core.mobsim.framework.events.MobsimAfterSimStepEvent;
 import org.matsim.core.mobsim.framework.events.MobsimBeforeCleanupEvent;
@@ -53,7 +52,6 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleSupplier;
-import java.util.stream.Collectors;
 
 import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequestInserter.NO_INSERTION_FOUND_CAUSE;
 
@@ -84,6 +82,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
     private final int maxIter = 3;
     private final static List<String> REJECTION_REASONS = List.of("NO_SOLUTION", "SOLUTION_WITHOUT_ACCEPTANCE");
 	private final Set<Id<Request>> scheduled = new HashSet<>();
+	private long counter = 0;
 
     public ParallelUnplannedRequestInserter(int threadCount, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
                                             EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
@@ -137,34 +136,16 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
     @Override
     public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
-		unplannedRequests.forEach(r ->temp.add(new RequestData((r))));
-		unplannedRequests.clear();
-    }
 
-	private void assignToWorkers()
-	{
-		List<List<RequestData>> parts = splitIntoFixedParts(temp, this.workers.size());
-		Verify.verify(parts.size() == this.workers.size(), "More parts then workers!");
-
-		for (int i = 0; i < parts.size(); i++) {
-			var part = parts.get(i);
-			workers.get(i).addRequests(part);
+		var it = unplannedRequests.iterator();
+		while(it.hasNext())
+		{
+			this.workers.get((int) (counter % this.workers.size())).addRequest(new RequestData(it.next()));
+			it.remove();
+			this.counter++;
 		}
-		temp.clear();
-	}
 
-
-    public static <T> List<List<T>> splitIntoFixedParts(List<T> input, int n) {
-        List<List<T>> result = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            result.add(new ArrayList<>());
-        }
-
-        for (int i = 0; i < input.size(); i++) {
-            result.get(i % n).add(input.get(i));
-        }
-
-        return result;
+		Verify.verify(unplannedRequests.isEmpty());
     }
 
 
@@ -183,24 +164,30 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
             lastProcessingTime = now;
 
-            // Retry conflicts
-            Integer lastUnsolvedConflicts = null;
-            for (int i = 0; i < this.maxIter; i++) {
-                List<DrtRequest> retryList = consolidate(now);
-
-                if (retryList.isEmpty() ||  (lastUnsolvedConflicts!= null && retryList.size() == lastUnsolvedConflicts)) {
+			List<DrtRequest> retryList = null;
+			// Retry conflicts
+			Integer lastUnsolvedConflicts = null;
+			for (int i = 0; i < this.maxIter; i++) {
+				retryList = consolidate(now);
+				// System.out.println("Iteration #"+i + " at time "+ now);
+				if (retryList.isEmpty() || (lastUnsolvedConflicts != null && retryList.size() == lastUnsolvedConflicts)) {
 					retryList.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
-                    break;
-                }
-                lastUnsolvedConflicts = retryList.size();
-                this.scheduleUnplannedRequests(retryList);
-                solve(now);
-            }
-        }
+					break;
+				}
+				lastUnsolvedConflicts = retryList.size();
+				this.scheduleUnplannedRequests(retryList);
+				solve(now);
+				// Clean workers after each iteration
+				this.workers.forEach(RequestInsertWorker::clean);
+			}
+			// Clean workers ultimately
+			retryList.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
+
+			this.workers.forEach(RequestInsertWorker::clean);
+		}
     }
 
     private void solve(double now) {
-		assignToWorkers();
 		List<ForkJoinTask<?>> tasks = new ArrayList<>();
 
         for (RequestInsertWorker worker : this.workers) {
@@ -212,18 +199,15 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
     List<DrtRequest> consolidate(double now) {
 
-        List<RequestData> mergeLocalConflictFree = new ArrayList<>(); // Per worker
+        List<RequestData> localConflictFree = new ArrayList<>(); // Per worker
         Set<DrtRequest> allRejection = new HashSet<>();
 
         for (RequestInsertWorker worker : this.workers) {
             Map<String, List<RequestData>> insertions = worker.getCategorizedInsertions();
             List<RequestData> solutions = insertions.getOrDefault("CONFLICT_FREE_SOLUTIONS", Collections.emptyList());
-            mergeLocalConflictFree.addAll(solutions);
+            localConflictFree.addAll(solutions);
 
-			for (RequestData requestData : solutions) {
-				Verify.verify(requestData.getSolution().acceptedDrtRequest().isPresent(),requestData.getSolution().toString()); //TODO Understand why we have non accepted solutions
-			}
-
+			// All reject reasons
             for (String rejectionReason : REJECTION_REASONS) {
                 List<RequestData> rejection = worker.getCategorizedInsertions().getOrDefault(rejectionReason, Collections.emptyList());
 				rejection.forEach(req -> allRejection.add(req.getDrtRequest()));
@@ -231,19 +215,16 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
             worker.clean();
         }
 
-		for (RequestData requestData : mergeLocalConflictFree) {
-			Verify.verify(requestData.getSolution().acceptedDrtRequest().isPresent(),requestData.getSolution().toString()); //TODO Understand why we have non accepted solutions
-		}
+        ResolvedConflicts resolvedConflicts = resolve(localConflictFree);
 
+		// Resolved could be submitted
+        resolvedConflicts.noConflicts.forEach(s -> schedule(s, now));
 
-        ResolvedConflicts solutions = getConflictFreeInsertions(mergeLocalConflictFree);
-        solutions.noConflicts.forEach(s -> schedule(s, now));
+        // Remaining conflicts, add up into allRejection
+		resolvedConflicts.conflicts.forEach(r -> allRejection.add(r.getDrtRequest()));
 
-        //Collect all conflicting solutions
-		solutions.conflicts.forEach(r -> allRejection.add(r.getDrtRequest()));
-
-		//Remove if already found a global solutions
-		solutions.noConflicts.forEach(done -> allRejection.remove(done.getDrtRequest()));
+		//Remove from allRejection if we already found a solution
+		resolvedConflicts.noConflicts.forEach(done -> allRejection.remove(done.getDrtRequest()));
 
         return new ArrayList<>(allRejection);
     }
@@ -252,7 +233,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
     }
 
     //TODO: Prefer solutions with a better score
-    ResolvedConflicts getConflictFreeInsertions(List<RequestData> requestData) {
+    ResolvedConflicts resolve(List<RequestData> requestData) {
         Set<DrtRequest> seenRequest = new HashSet<>();
 		List<RequestData> noConflicts = new ArrayList<>();
         List<RequestData> conflicts = new ArrayList<>();
@@ -296,6 +277,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
         eventsManager.processEvent(
                 new PassengerRequestScheduledEvent(now, mode, req.getId(), req.getPassengerIds(), vehicle.getId(),
                         expectedPickupTime, expectedDropoffTime));
+		//2System.out.println("Scheduled # "+ requestData.getDrtRequest().getId());
 
     }
 
