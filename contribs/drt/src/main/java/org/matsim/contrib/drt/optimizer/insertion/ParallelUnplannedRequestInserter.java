@@ -82,7 +82,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
     private final List<RequestInsertWorker> workers;
     private final ForkJoinPool inserterExecutorService;
     private final int maxIter = 3;
-    private final static List<String> REJECTION_REASONS = List.of("NO_SOLUTION", "VEHICLE_ALREADY_ASSIGNED", "SOLUTION_WITHOUT_ACCEPTANCE");
+    private final static List<String> REJECTION_REASONS = List.of("NO_SOLUTION", "SOLUTION_WITHOUT_ACCEPTANCE");
 	private final Set<Id<Request>> scheduled = new HashSet<>();
 
     public ParallelUnplannedRequestInserter(int threadCount, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
@@ -212,13 +212,13 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
     List<DrtRequest> consolidate(double now, int iteration) {
 
-        List<RequestData> localConflictFree = new ArrayList<>(); // Per worker
+        List<RequestData> mergeLocalConflictFree = new ArrayList<>(); // Per worker
         Set<DrtRequest> allRejection = new HashSet<>();
 
         for (RequestInsertWorker worker : this.workers) {
             Map<String, List<RequestData>> insertions = worker.getCategorizedInsertions();
             List<RequestData> solutions = insertions.getOrDefault("CONFLICT_FREE_SOLUTIONS", Collections.emptyList());
-            localConflictFree.addAll(solutions);
+            mergeLocalConflictFree.addAll(solutions);
 
             for (String rejectionReason : REJECTION_REASONS) {
                 List<RequestData> rejection = worker.getCategorizedInsertions().getOrDefault(rejectionReason, Collections.emptyList());
@@ -227,12 +227,12 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
             worker.clean();
         }
 
-		for (RequestData requestData : localConflictFree) {
+		for (RequestData requestData : mergeLocalConflictFree) {
 			Verify.verify(requestData.getSolution().acceptedDrtRequest().isPresent(),requestData.getSolution().toString()); //TODO Understand why we have non accepted solutions
 		}
 
 
-        ResolvedConflicts solutions = getConflictFreeInsertions(localConflictFree);
+        ResolvedConflicts solutions = getConflictFreeInsertions(mergeLocalConflictFree);
         solutions.noConflicts.forEach(s -> schedule(s, now));
 
         //Collect all conflicting solutions

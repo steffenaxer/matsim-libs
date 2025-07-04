@@ -41,7 +41,6 @@ public class RequestInsertWorker {
     private final Map<Id<DvrpVehicle>, DvrpVehicle> managedVehicles;
     private final ForkJoinPool forkJoinPool = new ForkJoinPool(4);
 	private final Map<String, List<RequestData>> categorizedInsertions = new LinkedHashMap<>();
-	private final Set<Id<DvrpVehicle>> usedVehicles = new HashSet<>();
 
 
 	public RequestInsertWorker(VehicleEntry.EntryFactory vehicleEntryFactory,
@@ -113,17 +112,9 @@ public class RequestInsertWorker {
 				}
 
 				requestData.setSolution(new RequestData.InsertionRecord(best, acceptedRequest, OFFER_ACCEPTED));
-				Id<DvrpVehicle> vehicleId = insertion.insertion.vehicleEntry.vehicle.getId();
-				if (usedVehicles.contains(vehicleId)) {
-					categorizedInsertions
-							.computeIfAbsent("VEHICLE_ALREADY_ASSIGNED", k -> new ArrayList<>())
-							.add(requestData);
-				} else {
-					categorizedInsertions
-							.computeIfAbsent("CONFLICT_FREE_SOLUTIONS", k -> new ArrayList<>())
-							.add(requestData);
-					usedVehicles.add(vehicleId);
-				}
+				categorizedInsertions
+						.computeIfAbsent("CONFLICT_FREE_SOLUTIONS", k -> new ArrayList<>())
+						.add(requestData);
 			} else {
 				requestData.setSolution(new RequestData.InsertionRecord(best, Optional.empty(), OFFER_REJECTED_CAUSE));
 				categorizedInsertions
@@ -164,7 +155,6 @@ public class RequestInsertWorker {
 
 
 	public void clean() {
-		this.usedVehicles.clear();
 		this.categorizedInsertions.clear();
 		this.unplannedRequests.clear();
 	}
