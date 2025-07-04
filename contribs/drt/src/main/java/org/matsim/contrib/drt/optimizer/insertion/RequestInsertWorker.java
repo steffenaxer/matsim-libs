@@ -110,7 +110,7 @@ public class RequestInsertWorker {
 
 				requestData.setSolution(new RequestData.InsertionRecord(best, acceptedRequest, OFFER_ACCEPTED));
 				categorizedInsertions
-						.computeIfAbsent("CONFLICT_FREE_SOLUTIONS", k -> new ArrayList<>())
+						.computeIfAbsent("SOLUTION", k -> new ArrayList<>())
 						.add(requestData);
 			} else {
 				requestData.setSolution(new RequestData.InsertionRecord(best, Optional.empty(), OFFER_REJECTED_CAUSE));

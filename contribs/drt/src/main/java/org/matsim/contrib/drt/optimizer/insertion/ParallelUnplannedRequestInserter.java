@@ -204,7 +204,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
         for (RequestInsertWorker worker : this.workers) {
             Map<String, List<RequestData>> insertions = worker.getCategorizedInsertions();
-            List<RequestData> solutions = insertions.getOrDefault("CONFLICT_FREE_SOLUTIONS", Collections.emptyList());
+            List<RequestData> solutions = insertions.getOrDefault("SOLUTION", Collections.emptyList());
             localConflictFree.addAll(solutions);
 
 			// All reject reasons
@@ -224,6 +224,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		resolvedConflicts.conflicts.forEach(r -> allRejection.add(r.getDrtRequest()));
 
 		//Remove from allRejection if we already found a solution
+		//TODO Do we need this?
 		resolvedConflicts.noConflicts.forEach(done -> allRejection.remove(done.getDrtRequest()));
 
         return new ArrayList<>(allRejection);
