@@ -267,9 +267,9 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 		for (Id<DvrpVehicle> dvrpVehicleId : data.keySet()) {
 			var requestData = data.get(dvrpVehicleId);
-			requestData.sort(Comparator.comparingDouble(r ->
-				r.getSolution().insertion().get().detourTimeInfo.getTotalTimeLoss()
-			));
+			requestData.sort(Comparator.comparingDouble((RequestData r) ->
+					r.getSolution().insertion().get().detourTimeInfo.getTotalTimeLoss())
+				.thenComparing(r -> r.getDrtRequest().getId().toString()));
 
 			// Take the best
 			var bestSolution = requestData.getFirst();
