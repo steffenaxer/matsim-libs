@@ -1,17 +1,14 @@
 package org.matsim.contrib.drt.optimizer.insertion;
 
-import com.google.common.base.Verify;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
-import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
 import org.matsim.contrib.drt.passenger.DrtRequest;
 import org.matsim.contrib.drt.scheduler.RequestInsertionScheduler;
 import org.matsim.contrib.drt.stops.PassengerStopDurationProvider;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
-import org.matsim.contrib.dvrp.passenger.PassengerRequestRejectedEvent;
 import org.matsim.core.api.experimental.events.EventsManager;
 
 import java.util.*;
@@ -21,9 +18,6 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleSupplier;
 import java.util.stream.Collectors;
-
-import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequestInserter.NO_INSERTION_FOUND_CAUSE;
-import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequestInserter.OFFER_REJECTED_CAUSE;
 
 /**
  * @author steffenaxer
@@ -39,11 +33,12 @@ public class RequestInsertWorker {
     private final DrtOfferAcceptor drtOfferAcceptor;
     private final RequestInsertionScheduler insertionScheduler;
     private final EventsManager eventsManager;
-    private final DrtRequestInsertionRetryQueue insertionRetryQueue;
     private final String mode;
     private final Map<Id<DvrpVehicle>, DvrpVehicle> managedVehicles;
     private final ForkJoinPool forkJoinPool = new ForkJoinPool(4);
 	private final Map<String, List<RequestData>> categorizedInsertions = new ConcurrentHashMap<>();
+	private final Map<Id<DvrpVehicle>,List<RequestData>> solutions = new HashMap<>();
+	private final List<DrtRequest> noSolutions = new ArrayList<>();
 
 
 	public RequestInsertWorker(VehicleEntry.EntryFactory vehicleEntryFactory,
@@ -54,7 +49,6 @@ public class RequestInsertWorker {
                                DrtOfferAcceptor drtOfferAcceptor,
                                RequestInsertionScheduler insertionScheduler,
                                EventsManager eventsManager,
-                               DrtRequestInsertionRetryQueue insertionRetryQueue,
                                String mode, Map<Id<DvrpVehicle>, DvrpVehicle> managedVehicles
     ) {
         this.vehicleEntryFactory = vehicleEntryFactory;
@@ -64,7 +58,6 @@ public class RequestInsertWorker {
         this.drtOfferAcceptor = drtOfferAcceptor;
         this.insertionScheduler = insertionScheduler;
         this.eventsManager = eventsManager;
-        this.insertionRetryQueue = insertionRetryQueue;
         this.mode = mode;
         this.managedVehicles = managedVehicles;
     }
@@ -85,10 +78,7 @@ public class RequestInsertWorker {
 		Optional<InsertionWithDetourData> best = insertionSearch.findBestInsertion(req, Collections.unmodifiableCollection(filteredFleet));
 
 		if (best.isEmpty()) {
-			requestData.setSolution(new RequestData.InsertionRecord(best, Optional.empty(), NO_INSERTION_FOUND_CAUSE));
-			categorizedInsertions
-					.computeIfAbsent("NO_SOLUTION", k -> new ArrayList<>())
-					.add(requestData);
+			this.noSolutions.add(requestData.getDrtRequest());
 		} else {
 			InsertionWithDetourData insertion = best.get();
 			double dropoffDuration = insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime -
@@ -109,14 +99,9 @@ public class RequestInsertWorker {
 				}
 
 				requestData.setSolution(new RequestData.InsertionRecord(best, acceptedRequest, OFFER_ACCEPTED));
-				categorizedInsertions
-						.computeIfAbsent("SOLUTION", k -> new ArrayList<>())
-						.add(requestData);
+				this.solutions.computeIfAbsent(vehicle.getId(), k -> new ArrayList<>()).add(requestData);
 			} else {
-				requestData.setSolution(new RequestData.InsertionRecord(best, Optional.empty(), OFFER_REJECTED_CAUSE));
-				categorizedInsertions
-						.computeIfAbsent("SOLUTION_WITHOUT_ACCEPTANCE", k -> new ArrayList<>())
-						.add(requestData);
+				this.noSolutions.add(requestData.getDrtRequest());
 			}
 		}
 	}
@@ -128,17 +113,12 @@ public class RequestInsertWorker {
 
 
     void process(double now) {
-        List<DrtRequest> requestsToRetry = insertionRetryQueue.getRequestsToRetryNow(now);
-
         var vehicleEntries = forkJoinPool.submit(() -> this.managedVehicles
                 .values()
                 .parallelStream()
                 .map(v -> vehicleEntryFactory.create(v, now))
                 .filter(Objects::nonNull)
                 .collect(Collectors.toMap(e -> e.vehicle.getId(), e -> e))).join();
-
-        //first retry scheduling old requests
-        //requestsToRetry.forEach(req -> scheduleUnplannedRequest(req, vehicleEntries, now));
 
 		while(!unplannedRequests.isEmpty())
 		{
@@ -148,13 +128,14 @@ public class RequestInsertWorker {
     }
 
 
-	public Map<String, List<RequestData>> getCategorizedInsertions() {
-		return categorizedInsertions;
+	public ParallelUnplannedRequestInserter.WorkerResult getWorkerResult() {
+		return new ParallelUnplannedRequestInserter.WorkerResult(this.solutions,this.noSolutions);
 	}
 
 
 	public void clean() {
-		this.categorizedInsertions.clear();
+		this.solutions.clear();
+		this.noSolutions.clear();
 		this.unplannedRequests.clear();
 	}
 }
