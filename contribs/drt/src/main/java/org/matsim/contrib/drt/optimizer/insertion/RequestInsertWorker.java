@@ -91,13 +91,6 @@ public class RequestInsertWorker {
 
 			if (acceptedRequest.isPresent()) {
 				var vehicle = insertion.insertion.vehicleEntry.vehicle;
-				VehicleEntry newVehicleEntry = vehicleEntryFactory.create(vehicle, now);
-				if (newVehicleEntry != null) {
-					vehicleEntries.put(vehicle.getId(), newVehicleEntry);
-				} else {
-					vehicleEntries.remove(vehicle.getId());
-				}
-
 				requestData.setSolution(new RequestData.InsertionRecord(best, acceptedRequest, OFFER_ACCEPTED));
 				this.solutions.computeIfAbsent(vehicle.getId(), k -> new ArrayList<>()).add(requestData);
 			} else {
@@ -112,13 +105,7 @@ public class RequestInsertWorker {
 	}
 
 
-    void process(double now) {
-        var vehicleEntries = forkJoinPool.submit(() -> this.managedVehicles
-                .values()
-                .parallelStream()
-                .map(v -> vehicleEntryFactory.create(v, now))
-                .filter(Objects::nonNull)
-                .collect(Collectors.toMap(e -> e.vehicle.getId(), e -> e))).join();
+    void process(double now, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries) {
 
 		while(!unplannedRequests.isEmpty())
 		{

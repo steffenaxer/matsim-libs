@@ -51,6 +51,7 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.TimeUnit;
 import java.util.function.DoubleSupplier;
+import java.util.stream.Collectors;
 
 import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequestInserter.NO_INSERTION_FOUND_CAUSE;
 
@@ -186,14 +187,31 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
     private void solve(double now) {
 		List<ForkJoinTask<?>> tasks = new ArrayList<>();
 
+		Map<Id<DvrpVehicle>, VehicleEntry> entries = calculateVehicleEntries(now);
         for (RequestInsertWorker worker : this.workers) {
-            tasks.add(inserterExecutorService.submit(() -> worker.process(now)));
+            tasks.add(inserterExecutorService.submit(() -> worker.process(now, entries)));
         }
 
         tasks.forEach(ForkJoinTask::join);
     }
 
-    Collection<DrtRequest> consolidate(double now) {
+	private Map<Id<DvrpVehicle>, VehicleEntry> calculateVehicleEntries(double now) {
+		return Collections.unmodifiableMap(
+			inserterExecutorService.submit(() ->
+				this.fleet.getVehicles()
+					.values()
+					.parallelStream()
+					.map(v -> vehicleEntryFactory.create(v, now))
+					.filter(Objects::nonNull)
+					.collect(Collectors.toMap(
+						e -> e.vehicle.getId(), e -> e
+					))
+			).join()
+		);
+	}
+
+
+	Collection<DrtRequest> consolidate(double now) {
 
 		Map<Id<DvrpVehicle>,List<RequestData>> needResolve = new HashMap<>(); // Per worker
         Set<DrtRequest> allRejection = new HashSet<>();
