@@ -186,7 +186,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
             // Retry conflicts
             Integer lastUnsolvedConflicts = null;
             for (int i = 0; i < this.maxIter; i++) {
-                List<DrtRequest> retryList = consolidate(now, i);
+                List<DrtRequest> retryList = consolidate(now);
 
                 if (retryList.isEmpty() ||  (lastUnsolvedConflicts!= null && retryList.size() == lastUnsolvedConflicts)) {
 					retryList.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
@@ -210,7 +210,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
         tasks.forEach(ForkJoinTask::join);
     }
 
-    List<DrtRequest> consolidate(double now, int iteration) {
+    List<DrtRequest> consolidate(double now) {
 
         List<RequestData> mergeLocalConflictFree = new ArrayList<>(); // Per worker
         Set<DrtRequest> allRejection = new HashSet<>();
