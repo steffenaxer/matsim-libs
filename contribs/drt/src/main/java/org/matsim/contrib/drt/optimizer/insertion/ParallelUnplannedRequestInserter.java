@@ -220,6 +220,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
             List<RequestData> solutions = insertions.getOrDefault("CONFLICT_FREE_SOLUTIONS", Collections.emptyList());
             mergeLocalConflictFree.addAll(solutions);
 
+			for (RequestData requestData : solutions) {
+				Verify.verify(requestData.getSolution().acceptedDrtRequest().isPresent(),requestData.getSolution().toString()); //TODO Understand why we have non accepted solutions
+			}
+
             for (String rejectionReason : REJECTION_REASONS) {
                 List<RequestData> rejection = worker.getCategorizedInsertions().getOrDefault(rejectionReason, Collections.emptyList());
 				rejection.forEach(req -> allRejection.add(req.getDrtRequest()));
