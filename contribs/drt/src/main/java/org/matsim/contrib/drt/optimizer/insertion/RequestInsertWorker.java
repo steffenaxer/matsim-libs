@@ -10,6 +10,7 @@ import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 
@@ -58,12 +59,12 @@ public class RequestInsertWorker {
 
 	public int getPlannedRequestCount()
 	{
-		return this.noSolutions.size() + solutions.values().stream().mapToInt(i -> i.size()).sum();
+		return this.noSolutions.size() + solutions.values().stream().mapToInt(Set::size).sum();
 	}
 
 	SortedSet<RequestData> createTreeSet()
 	{
-		return Collections.synchronizedSortedSet(new TreeSet<>(REQUEST_DATA_COMPARATOR));
+		return new ConcurrentSkipListSet<>(new TreeSet<>(REQUEST_DATA_COMPARATOR));
 	}
 
 	private void findInsertion(RequestData requestData, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries, double now) {

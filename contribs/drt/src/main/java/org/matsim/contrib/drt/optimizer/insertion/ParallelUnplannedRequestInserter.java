@@ -80,7 +80,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final ForkJoinPool inserterExecutorService;
 	private final int maxIter;
 	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions = new ConcurrentHashMap<>();
-	private final Set<DrtRequest> noSolutions = Collections.synchronizedSet(new HashSet<>());
+	private final Set<DrtRequest> noSolutions = ConcurrentHashMap.newKeySet();
 
 
 	public ParallelUnplannedRequestInserter(int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
@@ -275,7 +275,12 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		ResolvedConflicts resolvedConflicts = resolve(this.solutions);
 
 		// Remaining conflicts, add up into allRejection
-		resolvedConflicts.conflicts.forEach(r -> allRejection.add(r.getDrtRequest()));
+		allRejection.addAll(
+			resolvedConflicts.conflicts.stream()
+				.map(RequestData::getDrtRequest)
+				.toList()
+		);
+
 
 		this.workers.forEach(RequestInsertWorker::clean);
 		return new ConsolidationResult(resolvedConflicts.noConflicts, allRejection);
@@ -291,20 +296,21 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		List<RequestData> noConflicts = new ArrayList<>();
 		List<RequestData> conflicts = new ArrayList<>();
 
-		for (Id<DvrpVehicle> dvrpVehicleId : data.keySet()) {
-			var requestData = data.get(dvrpVehicleId);
+		for (var requestDataList : data.values()) {
+			if (requestDataList.isEmpty()) continue;
 
-			// Take the best
-			var bestSolution = requestData.getFirst();
+			var iterator = requestDataList.iterator();
+			var bestSolution = iterator.next();
 			noConflicts.add(bestSolution);
 
-			// Reject the rest
-			requestData.remove(bestSolution);
-			conflicts.addAll(requestData);
+			while (iterator.hasNext()) {
+				conflicts.add(iterator.next());
+			}
 		}
 
 		return new ResolvedConflicts(noConflicts, conflicts);
 	}
+
 
 
 	void schedule(RequestData requestData, double now) {
