@@ -174,7 +174,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 				// Schedule and clear
 				List<RequestData> toBeScheduled = consolidationResult.toBeScheduled;
 				toBeScheduled.forEach(r -> schedule(r, now));
-				List<DvrpVehicle> scheduledVehicles = getScheduledVehicles(toBeScheduled);
+				Set<DvrpVehicle> scheduledVehicles = getScheduledVehicles(toBeScheduled);
 				this.solutions.clear(); // Clean after having them scheduled!
 				scheduled += toBeScheduled.size();
 
@@ -203,15 +203,11 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		}
 	}
 
-	private static List<DvrpVehicle> getScheduledVehicles(List<RequestData> toBeScheduled) {
-		// Ensure to keep allways the same order
-		// May be required for determinism
-		List<DvrpVehicle> scheduledVehicles = toBeScheduled.stream()
+	private static Set<DvrpVehicle> getScheduledVehicles(List<RequestData> toBeScheduled) {
+		return toBeScheduled.stream()
 			.map(r -> r.getSolution().insertion().get().insertion.vehicleEntry.vehicle)
-			.distinct()
-			.sorted(Comparator.comparing(DvrpVehicle::getId))
-			.toList();
-		return scheduledVehicles;
+			.collect(Collectors.toSet());
+
 	}
 
 	private void solve(double now, Map<Id<DvrpVehicle>, VehicleEntry> entries) {
@@ -227,7 +223,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private Map<Id<DvrpVehicle>, VehicleEntry> updateVehicleEntries(
 		double now,
 		Map<Id<DvrpVehicle>, VehicleEntry> currentVehicleEntries,
-		List<DvrpVehicle> toBeUpdated) {
+		Set<DvrpVehicle> toBeUpdated) {
 
 		Set<Id<DvrpVehicle>> toBeDeleted = toBeUpdated.stream()
 			.map(Identifiable::getId)
