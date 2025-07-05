@@ -6,18 +6,14 @@ import org.matsim.api.core.v01.Id;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
 import org.matsim.contrib.drt.passenger.DrtRequest;
-import org.matsim.contrib.drt.scheduler.RequestInsertionScheduler;
-import org.matsim.contrib.drt.stops.PassengerStopDurationProvider;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
-import org.matsim.core.api.experimental.events.EventsManager;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
-import java.util.function.DoubleSupplier;
-import java.util.stream.Collectors;
+
+import static org.matsim.contrib.drt.optimizer.insertion.selective.RequestDataComparators.REQUEST_DATA_COMPARATOR;
 
 /**
  * @author steffenaxer
@@ -30,17 +26,19 @@ public class RequestInsertWorker {
 	private final Queue<RequestData> unplannedRequests = new ConcurrentLinkedQueue<>();
 	private final DrtOfferAcceptor drtOfferAcceptor;
 	private final ForkJoinPool forkJoinPool = new ForkJoinPool(4);
-	private final Map<Id<DvrpVehicle>, List<RequestData>> solutions = new HashMap<>();
-	private final List<DrtRequest> noSolutions = new ArrayList<>();
+	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions;
+	private final Set<DrtRequest> noSolutions;
 
 	public RequestInsertWorker(
 		RequestFleetFilter requestFleetFilter,
 		DrtInsertionSearch insertionSearch,
-		DrtOfferAcceptor drtOfferAcceptor
-	) {
+		DrtOfferAcceptor drtOfferAcceptor,
+		Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions, Set<DrtRequest> noSolutions) {
 		this.requestFleetFilter = requestFleetFilter;
 		this.insertionSearch = insertionSearch;
 		this.drtOfferAcceptor = drtOfferAcceptor;
+		this.solutions = solutions;
+		this.noSolutions = noSolutions;
 	}
 
 	public void finish() {
@@ -63,6 +61,10 @@ public class RequestInsertWorker {
 		return this.noSolutions.size() + solutions.values().stream().mapToInt(i -> i.size()).sum();
 	}
 
+	SortedSet<RequestData> createTreeSet()
+	{
+		return Collections.synchronizedSortedSet(new TreeSet<>(REQUEST_DATA_COMPARATOR));
+	}
 
 	private void findInsertion(RequestData requestData, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries, double now) {
 		DrtRequest req = requestData.getDrtRequest();
@@ -84,7 +86,7 @@ public class RequestInsertWorker {
 			if (acceptedRequest.isPresent()) {
 				var vehicle = insertion.insertion.vehicleEntry.vehicle;
 				requestData.setSolution(new RequestData.InsertionRecord(best, acceptedRequest, OFFER_ACCEPTED));
-				this.solutions.computeIfAbsent(vehicle.getId(), k -> new ArrayList<>()).add(requestData);
+				this.solutions.computeIfAbsent(vehicle.getId(), k -> createTreeSet()).add(requestData);
 			} else {
 				this.noSolutions.add(requestData.getDrtRequest());
 			}
@@ -112,8 +114,6 @@ public class RequestInsertWorker {
 
 
 	public void clean() {
-		this.solutions.clear();
-		this.noSolutions.clear();
 		this.unplannedRequests.clear();
 	}
 }
