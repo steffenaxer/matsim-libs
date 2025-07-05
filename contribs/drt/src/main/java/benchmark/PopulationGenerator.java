@@ -26,13 +26,14 @@ public class PopulationGenerator {
 			new ScoringConfigGroup.ActivityParams("work").setTypicalDuration(8*3600)
 		);
 
-
+		int size = links.size();
 		for (int i = 0; i < numberOfAgents; i++) {
 			// Random origin and destination links
-			Link originLink = links.get(random.nextInt(links.size()));
+
+			Link originLink = links.get(random.nextInt(size));
 			Link destinationLink;
 			do {
-				destinationLink = links.get(random.nextInt(links.size()));
+				destinationLink = links.get(random.nextInt(size));
 			} while (destinationLink.equals(originLink));
 
 			// Random departure time (0 - 86400 seconds)

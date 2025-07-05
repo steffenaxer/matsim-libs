@@ -41,21 +41,23 @@ import org.matsim.core.replanning.strategies.DefaultPlanStrategiesModule;
 import org.matsim.core.scenario.ScenarioUtils;
 
 import java.nio.file.Path;
+import java.util.List;
 
 public class BenchmarkGenerator {
 	static int numberOfAgents = 100000;
 	static int expectedRidesPerVehicle = 3;
 	static double endTime = 24 * 3600.;
-	static int iterations = 0;
+	static int iterations = 3;
 	static int numberOfVehicles = (int) (numberOfAgents / (endTime / 3600.) / expectedRidesPerVehicle);
 
-	public static Scenario configureScenario()
-	{
+	public static Scenario configureScenario() {
 		MatsimRandom.reset();
 		Config config = ConfigUtils.createConfig();
 
 		config.addModule(new DvrpConfigGroup());
 		config.qsim().setSimStarttimeInterpretation(QSimConfigGroup.StarttimeInterpretation.onlyUseStarttime);
+		config.global().setNumberOfThreads(4);
+		config.qsim().setNumberOfThreads(2);
 
 
 		config.qsim().setEndTime(endTime);
@@ -84,20 +86,9 @@ public class BenchmarkGenerator {
 
 		SquareGridZoneSystemParams squareGridZoneSystemParams = new SquareGridZoneSystemParams();
 		squareGridZoneSystemParams.setCellSize(500);
-		RebalancingParams rebalancingParams = new RebalancingParams();
-		rebalancingParams.addParameterSet(squareGridZoneSystemParams);
-		MinCostFlowRebalancingStrategyParams minCostFlowRebalancingStrategyParams = new MinCostFlowRebalancingStrategyParams();
-		minCostFlowRebalancingStrategyParams.setTargetAlpha(0.3);
-		minCostFlowRebalancingStrategyParams.setTargetBeta(0.5);
-		rebalancingParams.addParameterSet(minCostFlowRebalancingStrategyParams);
-		drtConfig.addParameterSet(rebalancingParams);
-
-
+		drtConfig.setNumberOfThreads(4);
 		drtConfig.setOperationalScheme(DrtConfigGroup.OperationalScheme.door2door);
-
-
 		config.addModule(multiModeDrtConfigGroup);
-
 
 		ReplanningConfigGroup.StrategySettings strategy = new ReplanningConfigGroup.StrategySettings(Id.create("1", ReplanningConfigGroup.StrategySettings.class));
 		strategy.setStrategyName(DefaultPlanStrategiesModule.DefaultSelector.KeepLastSelected);
@@ -119,6 +110,8 @@ public class BenchmarkGenerator {
 
 		// Optional: set output directory and iterations
 		config.controller().setOutputDirectory("output/drt-scenario-baseline");
+		config.controller().setWriteEventsInterval(0);
+		config.controller().setWritePlansInterval(0);
 		config.controller().setLastIteration(iterations);
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
 
@@ -127,12 +120,12 @@ public class BenchmarkGenerator {
 		controler.run();
 	}
 
-	public static void runParallelInserter(int threads) {
+	public static void runParallelInserter(int threads, double collectionPeriod) {
 		Scenario scenario = configureScenario();
 		Config config = scenario.getConfig();
 
 		// Optional: set output directory and iterations
-		config.controller().setOutputDirectory("output/drt-scenario-parallel-"+threads);
+		config.controller().setOutputDirectory("output/drt-scenario-parallel-threads-" + threads + "-period-" + collectionPeriod);
 		config.controller().setLastIteration(iterations);
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
 
@@ -140,23 +133,30 @@ public class BenchmarkGenerator {
 
 		// Run the simulation
 		Controler controler = DrtControlerCreator.createControler(scenario.getConfig(), scenario, false);
-		installParallelUnplannedRequestInserter(controler, drtConfig, threads);
+		installParallelUnplannedRequestInserter(controler, drtConfig, threads, collectionPeriod);
 		controler.run();
 	}
 
 	public static void main(String[] args) {
-		// runBaseline();
-		// runParallelInserter(2);
-		runParallelInserter(4);
+		runBaseline();
+
+		var collectionPeriods = List.of(5, 15, 30, 60);
+		var threads = List.of(1, 2, 4, 6);
+
+		for (Integer collectionPeriod : collectionPeriods) {
+			for (Integer thread : threads) {
+				runParallelInserter(thread, collectionPeriod);
+			}
+		}
 	}
 
-	static void installParallelUnplannedRequestInserter(Controler controler, DrtConfigGroup drtConfigGroup, int threads) {
+	static void installParallelUnplannedRequestInserter(Controler controler, DrtConfigGroup drtConfigGroup, int threads, double collectionPeriod) {
 
 		controler.addOverridingQSimModule(new AbstractDvrpModeQSimModule(drtConfigGroup.getMode()) {
 			@Override
 			protected void configureQSim() {
 				bindModal(UnplannedRequestInserter.class).toProvider(modalProvider(
-					getter -> new ParallelUnplannedRequestInserter(threads, drtConfigGroup, getter.getModal(Fleet.class),
+					getter -> new ParallelUnplannedRequestInserter(threads, collectionPeriod, drtConfigGroup, getter.getModal(Fleet.class),
 						getter.get(MobsimTimer.class), getter.get(EventsManager.class),
 						() -> getter.getModal(RequestInsertionScheduler.class),
 						getter.getModal(VehicleEntry.EntryFactory.class),
@@ -164,8 +164,8 @@ public class BenchmarkGenerator {
 						getter.getModal(DrtRequestInsertionRetryQueue.class),
 						getter.getModal(DrtOfferAcceptor.class),
 						getter.getModal(PassengerStopDurationProvider.class),
-						getter.getModal(RequestFleetFilter.class),
-						getter.getModal(Network.class)))).asEagerSingleton();
+						getter.getModal(RequestFleetFilter.class)
+					))).asEagerSingleton();
 			}
 		});
 	}

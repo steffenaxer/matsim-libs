@@ -10,8 +10,8 @@ public class GridNetworkGenerator {
         Network network = scenario.getNetwork();
 
         // Grid and link parameters
-        double cellSize = 500.0; // meters
-        int gridSize = 100; // 100 x 500m = 50 km
+        double cellSize = 100.0; // meters
+        int gridSize = 100; // 100 nodes x 100 m = 50.000 m
         double freespeed = 50.0 / 3.6; // 50 km/h in m/s
         double capacity = 1800.0; // vehicles per hour
         double lanes = 2.0;

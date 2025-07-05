@@ -61,9 +61,8 @@ import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequest
  */
 public class ParallelUnplannedRequestInserter implements UnplannedRequestInserter, MobsimAfterSimStepListener, MobsimEngine, MobsimBeforeCleanupListener {
 	private static final Logger LOG = LogManager.getLogger(ParallelUnplannedRequestInserter.class);
-	public static final int INTERVAL = 60;
-
 	private Double lastProcessingTime;
+	private final double collectionPeriod;
 	private final String mode;
 	private final Fleet fleet;
 	private final DoubleSupplier timeOfDay;
@@ -76,7 +75,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final DrtOfferAcceptor drtOfferAcceptor;
 	private final PassengerStopDurationProvider stopDurationProvider;
 	private final RequestFleetFilter requestFleetFilter;
-	private final Network network;
 	private final List<RequestInsertWorker> workers;
 	private final ForkJoinPool inserterExecutorService;
 	private final int maxIter = 3;
@@ -84,20 +82,21 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final Set<DrtRequest> noSolutions = Collections.synchronizedSet(new HashSet<>());
 
 
-	public ParallelUnplannedRequestInserter(int threadCount, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
+	public ParallelUnplannedRequestInserter(int threadCount, double collectionPeriod, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
 											EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
 											VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
 											DrtRequestInsertionRetryQueue insertionRetryQueue, DrtOfferAcceptor drtOfferAcceptor,
-											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, Network network) {
-		this(threadCount, drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
-			insertionRetryQueue, insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter, network);
+											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
+		this(threadCount, collectionPeriod, drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
+			insertionRetryQueue, insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter);
 	}
 
 	@VisibleForTesting
-	ParallelUnplannedRequestInserter(int threadCount, String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
+	ParallelUnplannedRequestInserter(int threadCount, double collectionPeriod, String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
 									 Provider<RequestInsertionScheduler> insertionSchedulerProvider, VehicleEntry.EntryFactory vehicleEntryFactory,
 									 DrtRequestInsertionRetryQueue insertionRetryQueue, Provider<DrtInsertionSearch> insertionSearch,
-									 DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, Network network) {
+									 DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
+		this.collectionPeriod = collectionPeriod;
 		this.mode = mode;
 		this.fleet = fleet;
 		this.timeOfDay = timeOfDay;
@@ -110,7 +109,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		this.drtOfferAcceptor = drtOfferAcceptor;
 		this.stopDurationProvider = stopDurationProvider;
 		this.requestFleetFilter = requestFleetFilter;
-		this.network = network;
 		this.inserterExecutorService = new ForkJoinPool(threadCount);
 		this.workers = getRequestInsertWorker(threadCount);
 	}
@@ -151,7 +149,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			this.lastProcessingTime = now;
 		}
 
-		if ((now - lastProcessingTime) >= INTERVAL) {
+		if ((now - lastProcessingTime) >= collectionPeriod) {
 
 			int w = this.workers.stream().mapToInt(RequestInsertWorker::getUnplannedRequestCount).sum();
 			LOG.debug("Unplanned requests #{} ",w);
@@ -182,8 +180,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 				toBeRejected.addAll(consolidationResult.toBeRejected);
 				this.noSolutions.clear(); // Clean after having them added for next iterations!
 
-				if (i == this.maxIter - 1  ||toBeRejected.isEmpty() || (lastUnsolvedConflicts != null && toBeRejected.size() == lastUnsolvedConflicts)) {
-					LOG.debug("Stopped with rejections #{} ",toBeRejected.size());
+				if (toBeRejected.isEmpty()
+					|| (lastUnsolvedConflicts != null && toBeRejected.size() == lastUnsolvedConflicts) // not getting better
+					|| i == this.maxIter - 1 ) { // reached iter limit
+					LOG.debug("Stopped with rejections #{} ", toBeRejected.size());
 					toBeRejected.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
 					break;
 				}
