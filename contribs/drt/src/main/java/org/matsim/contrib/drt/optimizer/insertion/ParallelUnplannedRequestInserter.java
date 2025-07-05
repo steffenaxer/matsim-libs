@@ -149,12 +149,12 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		if ((now - lastProcessingTime) >= INTERVAL) {
 
 			int w = this.workers.stream().mapToInt(RequestInsertWorker::getUnplannedRequestCount).sum();
-			LOG.info("Unplanned requests #{} ",w);
+			LOG.debug("Unplanned requests #{} ",w);
 
 			// Solve requests the first time
 			// At this point, we need to generate vehicleEntries for all vehicles
 			Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries = calculateVehicleEntries(now, this.fleet.getVehicles().values());
-			solve(now, vehicleEntries);
+
 
 			lastProcessingTime = now;
 
@@ -163,6 +163,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			Integer lastUnsolvedConflicts = null;
 			int scheduled = 0;
 			for (int i = 0; i < this.maxIter; i++) {
+				solve(now, vehicleEntries);
 				ConsolidationResult consolidationResult = consolidate();
 				List<RequestData> toBeScheduled = consolidationResult.toBeScheduled;
 				toBeRejected = consolidationResult.toBeRejected;
@@ -176,16 +177,14 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 					break;
 				}
 
-				var updatedVehicleEntries = calculateVehicleEntries(now, scheduledVehicles);
+				// Update vehicle entries for next round
+				vehicleEntries = calculateVehicleEntries(now, scheduledVehicles);
 				lastUnsolvedConflicts = toBeRejected.size();
 				this.scheduleUnplannedRequests(toBeRejected);
-				solve(now, updatedVehicleEntries);
-				// Clean workers after each iteration
-				this.workers.forEach(RequestInsertWorker::clean);
 			}
 			// Clean workers ultimately
 			toBeRejected.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
-			LOG.info("Scheduled requests #{} ",scheduled);
+			LOG.debug("Scheduled requests #{} ",scheduled);
 
 			this.workers.forEach(RequestInsertWorker::clean);
 		}
