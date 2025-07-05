@@ -25,6 +25,7 @@ import com.google.inject.Provider;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.Identifiable;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
@@ -77,22 +78,22 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final RequestFleetFilter requestFleetFilter;
 	private final List<RequestInsertWorker> workers;
 	private final ForkJoinPool inserterExecutorService;
-	private final int maxIter = 3;
+	private final int maxIter;
 	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions = new ConcurrentHashMap<>();
 	private final Set<DrtRequest> noSolutions = Collections.synchronizedSet(new HashSet<>());
 
 
-	public ParallelUnplannedRequestInserter(int threadCount, double collectionPeriod, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
+	public ParallelUnplannedRequestInserter(int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
 											EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
 											VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
 											DrtRequestInsertionRetryQueue insertionRetryQueue, DrtOfferAcceptor drtOfferAcceptor,
 											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
-		this(threadCount, collectionPeriod, drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
+		this(threadCount, collectionPeriod, maxIter, drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
 			insertionRetryQueue, insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter);
 	}
 
 	@VisibleForTesting
-	ParallelUnplannedRequestInserter(int threadCount, double collectionPeriod, String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
+	ParallelUnplannedRequestInserter(int threadCount, double collectionPeriod, int maxIter, String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
 									 Provider<RequestInsertionScheduler> insertionSchedulerProvider, VehicleEntry.EntryFactory vehicleEntryFactory,
 									 DrtRequestInsertionRetryQueue insertionRetryQueue, Provider<DrtInsertionSearch> insertionSearch,
 									 DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
@@ -111,6 +112,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		this.requestFleetFilter = requestFleetFilter;
 		this.inserterExecutorService = new ForkJoinPool(threadCount);
 		this.workers = getRequestInsertWorker(threadCount);
+		this.maxIter = maxIter;
 	}
 
 	List<RequestInsertWorker> getRequestInsertWorker(int n) {
@@ -152,7 +154,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		if ((now - lastProcessingTime) >= collectionPeriod) {
 
 			int w = this.workers.stream().mapToInt(RequestInsertWorker::getUnplannedRequestCount).sum();
-			LOG.debug("Unplanned requests #{} ",w);
+			LOG.debug("Unplanned requests #{} ", w);
 
 			// Solve requests the first time
 			// At this point, we need to generate vehicleEntries for all vehicles
@@ -171,10 +173,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 				// Schedule and clear
 				List<RequestData> toBeScheduled = consolidationResult.toBeScheduled;
-				toBeScheduled.forEach(r -> schedule(r,now));
+				toBeScheduled.forEach(r -> schedule(r, now));
 				List<DvrpVehicle> scheduledVehicles = getScheduledVehicles(toBeScheduled);
 				this.solutions.clear(); // Clean after having them scheduled!
-				scheduled+=toBeScheduled.size();
+				scheduled += toBeScheduled.size();
 
 				// Prepare for next round
 				toBeRejected.addAll(consolidationResult.toBeRejected);
@@ -182,20 +184,20 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 				if (toBeRejected.isEmpty()
 					|| (lastUnsolvedConflicts != null && toBeRejected.size() == lastUnsolvedConflicts) // not getting better
-					|| i == this.maxIter - 1 ) { // reached iter limit
+					|| i == this.maxIter - 1) { // reached iter limit
 					LOG.debug("Stopped with rejections #{} ", toBeRejected.size());
 					toBeRejected.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
 					break;
 				}
 
 				// Update vehicle entries for next round
-				vehicleEntries = calculateVehicleEntries(now, scheduledVehicles);
+				vehicleEntries = updateVehicleEntries(now, vehicleEntries, scheduledVehicles);
 				lastUnsolvedConflicts = toBeRejected.size();
 				this.scheduleUnplannedRequests(toBeRejected);
 			}
 			// Clean workers ultimately
 			toBeRejected.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
-			LOG.debug("Scheduled requests #{} ",scheduled);
+			LOG.debug("Scheduled requests #{} ", scheduled);
 
 			this.workers.forEach(RequestInsertWorker::clean);
 		}
@@ -221,6 +223,32 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 		tasks.forEach(ForkJoinTask::join);
 	}
+
+	private Map<Id<DvrpVehicle>, VehicleEntry> updateVehicleEntries(
+		double now,
+		Map<Id<DvrpVehicle>, VehicleEntry> currentVehicleEntries,
+		List<DvrpVehicle> toBeUpdated) {
+
+		Set<Id<DvrpVehicle>> toBeDeleted = toBeUpdated.stream()
+			.map(Identifiable::getId)
+			.collect(Collectors.toSet());
+
+		Map<Id<DvrpVehicle>, VehicleEntry> newlyCreated = calculateVehicleEntries(now, toBeUpdated);
+
+
+		Map<Id<DvrpVehicle>, VehicleEntry> updated = new HashMap<>();
+
+		currentVehicleEntries.forEach((id, entry) -> {
+			if (!toBeDeleted.contains(id)) {
+				updated.put(id, entry);
+			}
+		});
+
+		updated.putAll(newlyCreated);
+
+		return Collections.unmodifiableMap(updated);
+	}
+
 
 	private Map<Id<DvrpVehicle>, VehicleEntry> calculateVehicleEntries(double now, Collection<DvrpVehicle> vehicles) {
 		return Collections.unmodifiableMap(
