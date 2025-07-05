@@ -116,10 +116,10 @@ public class BenchmarkGenerator {
 
 		// Optional: set output directory and iterations
 		int threads = 4;
-		config.controller().setOutputDirectory("output/drt-scenario-single-"+threads);
+		config.controller().setOutputDirectory("output/drt-scenario-parallel-"+threads);
 		config.controller().setLastIteration(iterations);
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
-		//installParallelUnplannedRequestInserter(controler,drtConfig, threads);
+		installParallelUnplannedRequestInserter(controler,drtConfig, threads);
 
 		controler.run();
 

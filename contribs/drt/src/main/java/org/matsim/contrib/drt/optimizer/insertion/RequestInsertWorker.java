@@ -52,6 +52,17 @@ public class RequestInsertWorker {
 		}
 	}
 
+	public int getUnplannedRequestCount()
+	{
+		return this.unplannedRequests.size();
+	}
+
+
+	public int getPlannedRequestCount()
+	{
+		return this.noSolutions.size() + solutions.values().stream().mapToInt(i -> i.size()).sum();
+	}
+
 
 	private void findInsertion(RequestData requestData, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries, double now) {
 		DrtRequest req = requestData.getDrtRequest();

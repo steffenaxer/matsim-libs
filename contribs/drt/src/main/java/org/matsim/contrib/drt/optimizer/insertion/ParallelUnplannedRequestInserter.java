@@ -59,8 +59,8 @@ import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequest
  * @author michalm
  */
 public class ParallelUnplannedRequestInserter implements UnplannedRequestInserter, MobsimAfterSimStepListener, MobsimEngine, MobsimBeforeCleanupListener {
-	private static final Logger log = LogManager.getLogger(ParallelUnplannedRequestInserter.class);
-	public static final int INTERVAL = 30;
+	private static final Logger LOG = LogManager.getLogger(ParallelUnplannedRequestInserter.class);
+	public static final int INTERVAL = 15;
 
 	private Double lastProcessingTime;
 	private final String mode;
@@ -148,6 +148,9 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 		if ((now - lastProcessingTime) >= INTERVAL) {
 
+			int w = this.workers.stream().mapToInt(RequestInsertWorker::getUnplannedRequestCount).sum();
+			LOG.info("Unplanned requests #{} ",w);
+
 			// Solve requests the first time
 			// At this point, we need to generate vehicleEntries for all vehicles
 			Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries = calculateVehicleEntries(now, this.fleet.getVehicles().values());
@@ -155,31 +158,48 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 			lastProcessingTime = now;
 
-			Collection<DrtRequest> retryCollection = null;
+			Collection<DrtRequest> toBeRejected = null;
 			// Retry conflicts
 			Integer lastUnsolvedConflicts = null;
+			int scheduled = 0;
 			for (int i = 0; i < this.maxIter; i++) {
-				ConsolidationResult consolidationResult = consolidate(now);
-				Collection<DvrpVehicle> schedulesVehicles = consolidationResult.scheduledVehicles;
-				retryCollection = consolidationResult.rejectedRequests;
+				ConsolidationResult consolidationResult = consolidate();
+				List<RequestData> toBeScheduled = consolidationResult.toBeScheduled;
+				toBeRejected = consolidationResult.toBeRejected;
+				toBeScheduled.forEach(r -> schedule(r,now));
+				List<DvrpVehicle> scheduledVehicles = getScheduledVehicles(toBeScheduled);
 
-				if (retryCollection.isEmpty() || (lastUnsolvedConflicts != null && retryCollection.size() == lastUnsolvedConflicts)) {
-					retryCollection.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
+				scheduled+=toBeScheduled.size();
+
+				if (toBeRejected.isEmpty() || (lastUnsolvedConflicts != null && toBeRejected.size() == lastUnsolvedConflicts)) {
+					toBeRejected.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
 					break;
 				}
 
-				var updatedVehicleEntries = calculateVehicleEntries(now, schedulesVehicles);
-				lastUnsolvedConflicts = retryCollection.size();
-				this.scheduleUnplannedRequests(retryCollection);
+				var updatedVehicleEntries = calculateVehicleEntries(now, scheduledVehicles);
+				lastUnsolvedConflicts = toBeRejected.size();
+				this.scheduleUnplannedRequests(toBeRejected);
 				solve(now, updatedVehicleEntries);
 				// Clean workers after each iteration
 				this.workers.forEach(RequestInsertWorker::clean);
 			}
 			// Clean workers ultimately
-			retryCollection.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
+			toBeRejected.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
+			LOG.info("Scheduled requests #{} ",scheduled);
 
 			this.workers.forEach(RequestInsertWorker::clean);
 		}
+	}
+
+	private static List<DvrpVehicle> getScheduledVehicles(List<RequestData> toBeScheduled) {
+		// Ensure to keep allways the same order
+		// May be required for determinism
+		List<DvrpVehicle> scheduledVehicles = toBeScheduled.stream()
+			.map(r -> r.getSolution().insertion().get().insertion.vehicleEntry.vehicle)
+			.distinct()
+			.sorted(Comparator.comparing(DvrpVehicle::getId))
+			.toList();
+		return scheduledVehicles;
 	}
 
 	private void solve(double now, Map<Id<DvrpVehicle>, VehicleEntry> entries) {
@@ -206,10 +226,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		);
 	}
 
-	record ConsolidationResult(List<DvrpVehicle> scheduledVehicles, Collection<DrtRequest> rejectedRequests) {
+	record ConsolidationResult(List<RequestData> toBeScheduled, Collection<DrtRequest> toBeRejected) {
 	}
 
-	ConsolidationResult consolidate(double now) {
+	ConsolidationResult consolidate() {
 
 		Map<Id<DvrpVehicle>, List<RequestData>> needResolve = new HashMap<>(); // Per worker
 		Set<DrtRequest> allRejection = new HashSet<>();
@@ -235,29 +255,17 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 		ResolvedConflicts resolvedConflicts = resolve(needResolve);
 
-		// Resolved could be submitted
-		resolvedConflicts.noConflicts.forEach(s -> schedule(s, now));
-
 		// Remaining conflicts, add up into allRejection
 		resolvedConflicts.conflicts.forEach(r -> allRejection.add(r.getDrtRequest()));
 
 		this.workers.forEach(RequestInsertWorker::clean);
-
-		// Ensure to keep allways the same order
-		// May be required for determinism
-		List<DvrpVehicle> scheduledVehicles = resolvedConflicts.noConflicts.stream()
-			.map(r -> r.getSolution().insertion().get().insertion.vehicleEntry.vehicle)
-			.distinct()
-			.sorted(Comparator.comparing(DvrpVehicle::getId))
-			.toList();
-
-		return new ConsolidationResult(scheduledVehicles, allRejection);
+		return new ConsolidationResult(resolvedConflicts.noConflicts, allRejection);
 	}
 
 	record ResolvedConflicts(List<RequestData> noConflicts, List<RequestData> conflicts) {
 	}
 
-	record WorkerResult(Map<Id<DvrpVehicle>, List<RequestData>> solutions, List<DrtRequest> noSolutions) {
+	public record WorkerResult(Map<Id<DvrpVehicle>, List<RequestData>> solutions, List<DrtRequest> noSolutions) {
 	}
 
 	//TODO: Prefer solutions with a better score
