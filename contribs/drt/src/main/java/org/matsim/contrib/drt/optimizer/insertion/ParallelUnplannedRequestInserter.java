@@ -79,7 +79,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final List<RequestInsertWorker> workers;
 	private final ForkJoinPool inserterExecutorService;
 	private final int maxIter = 3;
-	private long counter = 0;
+
 
 	public ParallelUnplannedRequestInserter(int threadCount, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
 											EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
@@ -126,12 +126,12 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 	@Override
 	public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
-
+		int counter = 0;
 		var it = unplannedRequests.iterator();
 		while (it.hasNext()) {
-			this.workers.get((int) (counter % this.workers.size())).addRequest(new RequestData(it.next()));
+			this.workers.get(counter % this.workers.size()).addRequest(new RequestData(it.next()));
 			it.remove();
-			this.counter++;
+			counter++;
 		}
 
 		Verify.verify(unplannedRequests.isEmpty());
