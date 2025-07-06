@@ -26,7 +26,6 @@ public class RequestInsertWorker {
 	private final DrtInsertionSearch insertionSearch;
 	private final Queue<RequestData> unplannedRequests = new ConcurrentLinkedQueue<>();
 	private final DrtOfferAcceptor drtOfferAcceptor;
-	private final ForkJoinPool forkJoinPool = new ForkJoinPool(4);
 	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions;
 	private final Set<DrtRequest> noSolutions;
 
@@ -40,15 +39,6 @@ public class RequestInsertWorker {
 		this.drtOfferAcceptor = drtOfferAcceptor;
 		this.solutions = solutions;
 		this.noSolutions = noSolutions;
-	}
-
-	public void finish() {
-		forkJoinPool.shutdown();
-		try {
-			forkJoinPool.awaitTermination(5, TimeUnit.SECONDS);
-		} catch (InterruptedException ex) {
-			throw new RuntimeException(ex);
-		}
 	}
 
 	public int getUnplannedRequestCount()
@@ -106,11 +96,6 @@ public class RequestInsertWorker {
 			findInsertion(unplannedRequests.poll(), vehicleEntries, now);
 		}
 
-	}
-
-
-	public ParallelUnplannedRequestInserter.WorkerResult getWorkerResult() {
-		return new ParallelUnplannedRequestInserter.WorkerResult(this.solutions, this.noSolutions);
 	}
 
 

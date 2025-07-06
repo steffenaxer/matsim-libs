@@ -20,13 +20,11 @@
 package org.matsim.contrib.drt.optimizer.insertion;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Verify;
 import com.google.inject.Provider;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.Identifiable;
-import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
@@ -138,8 +136,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			it.remove();
 			counter++;
 		}
-
-		Verify.verify(unplannedRequests.isEmpty());
 	}
 
 
@@ -362,7 +358,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		} catch (InterruptedException ex) {
 			throw new RuntimeException(ex);
 		}
-		this.workers.forEach(RequestInsertWorker::finish);
 	}
 
 
