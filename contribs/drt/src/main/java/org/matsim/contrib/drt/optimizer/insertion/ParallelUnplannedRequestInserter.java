@@ -47,10 +47,7 @@ import org.matsim.core.mobsim.qsim.InternalInterface;
 import org.matsim.core.mobsim.qsim.interfaces.MobsimEngine;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ForkJoinTask;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.DoubleSupplier;
 import java.util.stream.Collectors;
@@ -63,6 +60,7 @@ import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequest
 public class ParallelUnplannedRequestInserter implements UnplannedRequestInserter, MobsimAfterSimStepListener, MobsimEngine, MobsimBeforeCleanupListener {
 	private static final Logger LOG = LogManager.getLogger(ParallelUnplannedRequestInserter.class);
 	private Double lastProcessingTime;
+	private static final Comparator<DrtRequest> drtRequestComparator = Comparator.comparingDouble(DrtRequest::getSubmissionTime).thenComparing(req -> req.getId().toString());
 	private final double collectionPeriod;
 	private final String mode;
 	private final Fleet fleet;
@@ -80,7 +78,8 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final ForkJoinPool inserterExecutorService;
 	private final int maxIter;
 	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions = new ConcurrentHashMap<>();
-	private final Set<DrtRequest> noSolutions = ConcurrentHashMap.newKeySet();
+	private final Set<DrtRequest> noSolutions = new ConcurrentSkipListSet<>(drtRequestComparator);
+
 	private final VehicleEntryPartitioner vehicleEntryPartitioner;
 	public int nConflicting = 0;
 	public int nNonConflicting = 0;
@@ -325,7 +324,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 			lastProcessingTime = time;
 
-			Set<DrtRequest> toBeRejected = new HashSet<>();
+			SortedSet<DrtRequest> toBeRejected = new TreeSet<>(drtRequestComparator); // ensure time order
 			// Retry conflicts
 			Integer lastUnsolvedConflicts = null;
 			int scheduled = 0;
