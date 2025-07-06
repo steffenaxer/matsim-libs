@@ -145,62 +145,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 	@Override
 	public void notifyMobsimAfterSimStep(MobsimAfterSimStepEvent e) {
-		double now = timeOfDay.getAsDouble();
 
-		if (this.lastProcessingTime == null) {
-			this.lastProcessingTime = now;
-		}
-
-		if ((now - lastProcessingTime) >= collectionPeriod) {
-
-			int w = this.workers.stream().mapToInt(RequestInsertWorker::getUnplannedRequestCount).sum();
-			LOG.debug("Unplanned requests #{} ", w);
-
-			// Solve requests the first time
-			// At this point, we need to generate vehicleEntries for all vehicles
-			Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries = calculateVehicleEntries(now, this.fleet.getVehicles().values());
-
-
-			lastProcessingTime = now;
-
-			Set<DrtRequest> toBeRejected = new HashSet<>();
-			// Retry conflicts
-			Integer lastUnsolvedConflicts = null;
-			int scheduled = 0;
-			for (int i = 0; i < this.maxIter; i++) {
-				solve(now, vehicleEntries, this.vehicleEntryPartitioner);
-				ConsolidationResult consolidationResult = consolidate();
-
-				// Schedule and clear
-				List<RequestData> toBeScheduled = consolidationResult.toBeScheduled;
-				toBeScheduled.forEach(r -> schedule(r, now));
-				Set<DvrpVehicle> scheduledVehicles = getScheduledVehicles(toBeScheduled);
-				this.solutions.clear(); // Clean after having them scheduled!
-				scheduled += toBeScheduled.size();
-
-				// Prepare for next round
-				toBeRejected.addAll(consolidationResult.toBeRejected);
-				this.noSolutions.clear(); // Clean after having them added for next iterations!
-
-				if (toBeRejected.isEmpty()
-					|| (lastUnsolvedConflicts != null && toBeRejected.size() == lastUnsolvedConflicts) // not getting better
-					|| i == this.maxIter - 1) { // reached iter limit
-					LOG.debug("Stopped with rejections #{} ", toBeRejected.size());
-					toBeRejected.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
-					break;
-				}
-
-				// Update vehicle entries for next round
-				vehicleEntries = updateVehicleEntries(now, vehicleEntries, scheduledVehicles);
-				lastUnsolvedConflicts = toBeRejected.size();
-				this.scheduleUnplannedRequests(toBeRejected);
-			}
-			// Clean workers ultimately
-			toBeRejected.forEach(s -> reject(s, now, NO_INSERTION_FOUND_CAUSE));
-			LOG.debug("Scheduled requests #{} ", scheduled);
-
-			this.workers.forEach(RequestInsertWorker::clean);
-		}
 	}
 
 	private static Set<DvrpVehicle> getScheduledVehicles(List<RequestData> toBeScheduled) {
@@ -297,9 +242,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	record ResolvedConflicts(List<RequestData> noConflicts, List<RequestData> conflicts) {
 	}
 
-	public record WorkerResult(Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions, Set<DrtRequest> noSolutions) {
-	}
-
 	ResolvedConflicts resolve(Map<Id<DvrpVehicle>, SortedSet<RequestData>> data) {
 		List<RequestData> noConflicts = new ArrayList<>();
 		List<RequestData> conflicts = new ArrayList<>();
@@ -364,6 +306,60 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	@Override
 	public void doSimStep(double time) {
 
+		if (this.lastProcessingTime == null) {
+			this.lastProcessingTime = time;
+		}
+
+		if ((time - lastProcessingTime) >= collectionPeriod) {
+
+			int w = this.workers.stream().mapToInt(RequestInsertWorker::getUnplannedRequestCount).sum();
+			LOG.debug("Unplanned requests #{} ", w);
+
+			// Solve requests the first time
+			// At this point, we need to generate vehicleEntries for all vehicles
+			Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries = calculateVehicleEntries(time, this.fleet.getVehicles().values());
+
+
+			lastProcessingTime = time;
+
+			Set<DrtRequest> toBeRejected = new HashSet<>();
+			// Retry conflicts
+			Integer lastUnsolvedConflicts = null;
+			int scheduled = 0;
+			for (int i = 0; i < this.maxIter; i++) {
+				solve(time, vehicleEntries, this.vehicleEntryPartitioner);
+				ConsolidationResult consolidationResult = consolidate();
+
+				// Schedule and clear
+				List<RequestData> toBeScheduled = consolidationResult.toBeScheduled;
+				toBeScheduled.forEach(r -> schedule(r, time));
+				Set<DvrpVehicle> scheduledVehicles = getScheduledVehicles(toBeScheduled);
+				this.solutions.clear(); // Clean after having them scheduled!
+				scheduled += toBeScheduled.size();
+
+				// Prepare for next round
+				toBeRejected.addAll(consolidationResult.toBeRejected);
+				this.noSolutions.clear(); // Clean after having them added for next iterations!
+
+				if (toBeRejected.isEmpty()
+					|| (lastUnsolvedConflicts != null && toBeRejected.size() == lastUnsolvedConflicts) // not getting better
+					|| i == this.maxIter - 1) { // reached iter limit
+					LOG.debug("Stopped with rejections #{} ", toBeRejected.size());
+					toBeRejected.forEach(s -> reject(s, time, NO_INSERTION_FOUND_CAUSE));
+					break;
+				}
+
+				// Update vehicle entries for next round
+				vehicleEntries = updateVehicleEntries(time, vehicleEntries, scheduledVehicles);
+				lastUnsolvedConflicts = toBeRejected.size();
+				this.scheduleUnplannedRequests(toBeRejected);
+			}
+			// Clean workers ultimately
+			toBeRejected.forEach(s -> reject(s, time, NO_INSERTION_FOUND_CAUSE));
+			LOG.debug("Scheduled requests #{} ", scheduled);
+
+			this.workers.forEach(RequestInsertWorker::clean);
+		}
 	}
 
 	@Override
