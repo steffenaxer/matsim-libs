@@ -86,7 +86,7 @@ public class BenchmarkGenerator {
 
 		SquareGridZoneSystemParams squareGridZoneSystemParams = new SquareGridZoneSystemParams();
 		squareGridZoneSystemParams.setCellSize(500);
-		drtConfig.setNumberOfThreads(4);
+		//drtConfig.setNumberOfThreads(6); // Used for insertion search
 		drtConfig.setOperationalScheme(DrtConfigGroup.OperationalScheme.door2door);
 		config.addModule(multiModeDrtConfigGroup);
 
@@ -120,7 +120,7 @@ public class BenchmarkGenerator {
 		controler.run();
 	}
 
-	public static void runParallelInserter(int threads, double collectionPeriod) {
+	public static void runParallelInserter(int threads, double collectionPeriod, int maxIter) {
 		Scenario scenario = configureScenario();
 		Config config = scenario.getConfig();
 
@@ -133,30 +133,31 @@ public class BenchmarkGenerator {
 
 		// Run the simulation
 		Controler controler = DrtControlerCreator.createControler(scenario.getConfig(), scenario, false);
-		installParallelUnplannedRequestInserter(controler, drtConfig, threads, collectionPeriod);
+		installParallelUnplannedRequestInserter(controler, drtConfig, threads, collectionPeriod, maxIter);
 		controler.run();
 	}
 
 	public static void main(String[] args) {
-		runBaseline();
+		// runBaseline();
 
-		var collectionPeriods = List.of(5, 15, 30, 60);
-		var threads = List.of(1, 2, 4, 6);
+		var collectionPeriods = List.of(15);
+		var threads = List.of(6);
+		int maxIter = 2;
 
 		for (Integer collectionPeriod : collectionPeriods) {
 			for (Integer thread : threads) {
-				runParallelInserter(thread, collectionPeriod);
+				runParallelInserter(thread, collectionPeriod, maxIter);
 			}
 		}
 	}
 
-	static void installParallelUnplannedRequestInserter(Controler controler, DrtConfigGroup drtConfigGroup, int threads, double collectionPeriod) {
+	static void installParallelUnplannedRequestInserter(Controler controler, DrtConfigGroup drtConfigGroup, int threads, double collectionPeriod, int maxIter) {
 
 		controler.addOverridingQSimModule(new AbstractDvrpModeQSimModule(drtConfigGroup.getMode()) {
 			@Override
 			protected void configureQSim() {
 				bindModal(UnplannedRequestInserter.class).toProvider(modalProvider(
-					getter -> new ParallelUnplannedRequestInserter(threads, collectionPeriod, drtConfigGroup, getter.getModal(Fleet.class),
+					getter -> new ParallelUnplannedRequestInserter(threads, collectionPeriod, maxIter, drtConfigGroup, getter.getModal(Fleet.class),
 						getter.get(MobsimTimer.class), getter.get(EventsManager.class),
 						() -> getter.getModal(RequestInsertionScheduler.class),
 						getter.getModal(VehicleEntry.EntryFactory.class),
