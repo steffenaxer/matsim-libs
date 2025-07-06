@@ -2,20 +2,14 @@ package benchmark;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.Scenario;
-import org.matsim.api.core.v01.network.Network;
-import org.matsim.contrib.common.zones.ZoneSystemParams;
 import org.matsim.contrib.common.zones.systems.grid.square.SquareGridZoneSystemParams;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
-import org.matsim.contrib.drt.optimizer.QSimScopeForkJoinPoolHolder;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsParams;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsSetImpl;
 import org.matsim.contrib.drt.optimizer.insertion.*;
-import org.matsim.contrib.drt.optimizer.insertion.extensive.ExtensiveInsertionSearchParams;
+import org.matsim.contrib.drt.optimizer.insertion.partitioner.FixedNonOverlappingVehicleEntryPartitioner;
 import org.matsim.contrib.drt.optimizer.insertion.repeatedselective.RepeatedSelectiveInsertionSearchParams;
-import org.matsim.contrib.drt.optimizer.insertion.selective.SelectiveInsertionSearchParams;
-import org.matsim.contrib.drt.optimizer.rebalancing.RebalancingParams;
-import org.matsim.contrib.drt.optimizer.rebalancing.mincostflow.MinCostFlowRebalancingStrategyParams;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
 import org.matsim.contrib.drt.routing.DrtRoute;
 import org.matsim.contrib.drt.routing.DrtRouteFactory;
@@ -44,21 +38,23 @@ import java.nio.file.Path;
 import java.util.List;
 
 public class BenchmarkGenerator {
-	static int numberOfAgents = 100000;
+	static int numberOfAgents = 200000;
 	static int expectedRidesPerVehicle = 3;
 	static double endTime = 24 * 3600.;
-	static int iterations = 3;
+	static int iterations = 2;
 	static int numberOfVehicles = (int) (numberOfAgents / (endTime / 3600.) / expectedRidesPerVehicle);
 
 	public static Scenario configureScenario() {
 		MatsimRandom.reset();
 		Config config = ConfigUtils.createConfig();
 
+		config.controller().setWriteEventsInterval(0);
+		config.controller().setWritePlansInterval(0);
+		config.controller().setLastIteration(iterations);
+
 		config.addModule(new DvrpConfigGroup());
 		config.qsim().setSimStarttimeInterpretation(QSimConfigGroup.StarttimeInterpretation.onlyUseStarttime);
 		config.global().setNumberOfThreads(4);
-		config.qsim().setNumberOfThreads(2);
-
 
 		config.qsim().setEndTime(endTime);
 		config.qsim().setSimEndtimeInterpretation(QSimConfigGroup.EndtimeInterpretation.onlyUseEndtime);
@@ -109,10 +105,7 @@ public class BenchmarkGenerator {
 		Config config = scenario.getConfig();
 
 		// Optional: set output directory and iterations
-		config.controller().setOutputDirectory("output/drt-scenario-baseline");
-		config.controller().setWriteEventsInterval(0);
-		config.controller().setWritePlansInterval(0);
-		config.controller().setLastIteration(iterations);
+		config.controller().setOutputDirectory("output/"+numberOfAgents+"_baseline");
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
 
 		// Run the simulation
@@ -120,44 +113,47 @@ public class BenchmarkGenerator {
 		controler.run();
 	}
 
-	public static void runParallelInserter(int threads, double collectionPeriod, int maxIter) {
+	public static void runParallelInserter(VehicleEntryPartitioner vehicleEntryPartitioner, int threads, double collectionPeriod, int maxIter) {
 		Scenario scenario = configureScenario();
 		Config config = scenario.getConfig();
 
 		// Optional: set output directory and iterations
-		config.controller().setOutputDirectory("output/drt-scenario-parallel-threads-" + threads + "-period-" + collectionPeriod);
-		config.controller().setLastIteration(iterations);
+		config.controller().setOutputDirectory("output/"+numberOfAgents+"_parallel-threads-" + threads + "-period-" + collectionPeriod + "-maxIter-" + maxIter);
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
 
 		var drtConfig = ConfigUtils.addOrGetModule(config, MultiModeDrtConfigGroup.class).getModalElements().iterator().next();
 
 		// Run the simulation
 		Controler controler = DrtControlerCreator.createControler(scenario.getConfig(), scenario, false);
-		installParallelUnplannedRequestInserter(controler, drtConfig, threads, collectionPeriod, maxIter);
+		installParallelUnplannedRequestInserter(controler, drtConfig,vehicleEntryPartitioner , threads, collectionPeriod, maxIter);
 		controler.run();
 	}
 
 	public static void main(String[] args) {
-		// runBaseline();
+		//runBaseline();
 
-		var collectionPeriods = List.of(15);
+		var partitioner = List.of(new FixedNonOverlappingVehicleEntryPartitioner());
+		var collectionPeriods = List.of(30);
 		var threads = List.of(6);
-		int maxIter = 2;
+		int maxIter = 3;
 
-		for (Integer collectionPeriod : collectionPeriods) {
-			for (Integer thread : threads) {
-				runParallelInserter(thread, collectionPeriod, maxIter);
+		for (VehicleEntryPartitioner vehicleEntryPartitioner : partitioner) {
+			for (Integer collectionPeriod : collectionPeriods) {
+				for (Integer thread : threads) {
+					runParallelInserter(vehicleEntryPartitioner, thread, collectionPeriod, maxIter);
+				}
 			}
 		}
+
 	}
 
-	static void installParallelUnplannedRequestInserter(Controler controler, DrtConfigGroup drtConfigGroup, int threads, double collectionPeriod, int maxIter) {
+	static void installParallelUnplannedRequestInserter(Controler controler, DrtConfigGroup drtConfigGroup, VehicleEntryPartitioner vehicleEntryPartitioner, int threads, double collectionPeriod, int maxIter) {
 
 		controler.addOverridingQSimModule(new AbstractDvrpModeQSimModule(drtConfigGroup.getMode()) {
 			@Override
 			protected void configureQSim() {
 				bindModal(UnplannedRequestInserter.class).toProvider(modalProvider(
-					getter -> new ParallelUnplannedRequestInserter(threads, collectionPeriod, maxIter, drtConfigGroup, getter.getModal(Fleet.class),
+					getter -> new ParallelUnplannedRequestInserter(vehicleEntryPartitioner, threads, collectionPeriod, maxIter, drtConfigGroup, getter.getModal(Fleet.class),
 						getter.get(MobsimTimer.class), getter.get(EventsManager.class),
 						() -> getter.getModal(RequestInsertionScheduler.class),
 						getter.getModal(VehicleEntry.EntryFactory.class),

@@ -20,6 +20,7 @@
 package org.matsim.contrib.drt.optimizer.insertion;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Verify;
 import com.google.inject.Provider;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -50,6 +51,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.DoubleSupplier;
 import java.util.stream.Collectors;
 
@@ -79,22 +81,24 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final int maxIter;
 	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions = new ConcurrentHashMap<>();
 	private final Set<DrtRequest> noSolutions = ConcurrentHashMap.newKeySet();
+	private final VehicleEntryPartitioner vehicleEntryPartitioner;
 
 
-	public ParallelUnplannedRequestInserter(int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
+	public ParallelUnplannedRequestInserter(VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
 											EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
 											VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
 											DrtRequestInsertionRetryQueue insertionRetryQueue, DrtOfferAcceptor drtOfferAcceptor,
 											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
-		this(threadCount, collectionPeriod, maxIter, drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
+		this(vehicleEntryPartitioner, threadCount, collectionPeriod, maxIter, drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
 			insertionRetryQueue, insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter);
 	}
 
 	@VisibleForTesting
-	ParallelUnplannedRequestInserter(int threadCount, double collectionPeriod, int maxIter, String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
+	ParallelUnplannedRequestInserter(VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
 									 Provider<RequestInsertionScheduler> insertionSchedulerProvider, VehicleEntry.EntryFactory vehicleEntryFactory,
 									 DrtRequestInsertionRetryQueue insertionRetryQueue, Provider<DrtInsertionSearch> insertionSearch,
 									 DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
+		this.vehicleEntryPartitioner = vehicleEntryPartitioner;
 		this.collectionPeriod = collectionPeriod;
 		this.mode = mode;
 		this.fleet = fleet;
@@ -164,7 +168,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			Integer lastUnsolvedConflicts = null;
 			int scheduled = 0;
 			for (int i = 0; i < this.maxIter; i++) {
-				solve(now, vehicleEntries);
+				solve(now, vehicleEntries, this.vehicleEntryPartitioner);
 				ConsolidationResult consolidationResult = consolidate();
 
 				// Schedule and clear
@@ -206,12 +210,24 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 	}
 
-	private void solve(double now, Map<Id<DvrpVehicle>, VehicleEntry> entries) {
+	private void solve(double now, Map<Id<DvrpVehicle>, VehicleEntry> entries, VehicleEntryPartitioner partitioner) {
 		List<ForkJoinTask<?>> tasks = new ArrayList<>();
+		var partitions = partitioner.partition(entries, this.workers.size());
 
+		Verify.verify(
+			partitions.size() == this.workers.size(),
+			"Mismatch between number of vehicle entry partitions (%s) and number of workers (%s)",
+			partitions.size(), this.workers.size()
+		);
+
+
+		AtomicInteger i = new AtomicInteger(0);
 		for (RequestInsertWorker worker : this.workers) {
-			tasks.add(inserterExecutorService.submit(() -> worker.process(now, entries)));
+			int index = i.getAndIncrement();
+			Map<Id<DvrpVehicle>, VehicleEntry> partition = partitions.get(index);
+			tasks.add(inserterExecutorService.submit(() -> worker.process(now, partition)));
 		}
+
 
 		tasks.forEach(ForkJoinTask::join);
 	}
