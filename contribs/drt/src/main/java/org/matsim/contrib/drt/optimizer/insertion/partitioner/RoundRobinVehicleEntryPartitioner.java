@@ -7,7 +7,7 @@ import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 
 import java.util.*;
 
-public class FixedNonOverlappingVehicleEntryPartitioner implements VehicleEntryPartitioner {
+public class RoundRobinVehicleEntryPartitioner implements VehicleEntryPartitioner {
 
 	@Override
 	public List<Map<Id<DvrpVehicle>, VehicleEntry>> partition(
