@@ -82,6 +82,8 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions = new ConcurrentHashMap<>();
 	private final Set<DrtRequest> noSolutions = ConcurrentHashMap.newKeySet();
 	private final VehicleEntryPartitioner vehicleEntryPartitioner;
+	public int nConflicting = 0;
+	public int nNonConflicting = 0;
 
 
 	public ParallelUnplannedRequestInserter(VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
@@ -223,9 +225,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	ConsolidationResult consolidate() {
 
 		Set<DrtRequest> allRejection = this.noSolutions;
-
-
 		ResolvedConflicts resolvedConflicts = resolve(this.solutions);
+
+		this.nConflicting+=resolvedConflicts.conflicts.size();
+		this.nNonConflicting+=resolvedConflicts.noConflicts.size();
 
 		// Remaining conflicts, add up into allRejection
 		allRejection.addAll(
@@ -370,6 +373,8 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		} catch (InterruptedException ex) {
 			throw new RuntimeException(ex);
 		}
+
+		LOG.info("Avg. conflict share {} ",nConflicting / (double) (nConflicting+nNonConflicting));
 	}
 
 
