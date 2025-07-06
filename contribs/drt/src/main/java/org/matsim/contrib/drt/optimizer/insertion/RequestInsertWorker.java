@@ -62,7 +62,7 @@ public class RequestInsertWorker {
 		return this.noSolutions.size() + solutions.values().stream().mapToInt(Set::size).sum();
 	}
 
-	SortedSet<RequestData> createTreeSet()
+	private static SortedSet<RequestData> createTreeSet()
 	{
 		return new ConcurrentSkipListSet<>(new TreeSet<>(REQUEST_DATA_COMPARATOR));
 	}
