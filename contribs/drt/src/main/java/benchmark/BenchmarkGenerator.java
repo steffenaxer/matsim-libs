@@ -8,7 +8,9 @@ import org.matsim.contrib.drt.optimizer.VehicleEntry;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsParams;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsSetImpl;
 import org.matsim.contrib.drt.optimizer.insertion.*;
-import org.matsim.contrib.drt.optimizer.insertion.partitioner.FixedNonOverlappingVehicleEntryPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.partitioner.ReplicatingVehicleEntryPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.partitioner.RoundRobinVehicleEntryPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.partitioner.ShiftingRoundRobinVehicleEntryPartitioner;
 import org.matsim.contrib.drt.optimizer.insertion.repeatedselective.RepeatedSelectiveInsertionSearchParams;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
 import org.matsim.contrib.drt.routing.DrtRoute;
@@ -38,8 +40,8 @@ import java.nio.file.Path;
 import java.util.List;
 
 public class BenchmarkGenerator {
-	static int numberOfAgents = 200000;
-	static int expectedRidesPerVehicle = 3;
+	static int numberOfAgents = 1_000_000;
+	static int expectedRidesPerVehicle = 7;
 	static double endTime = 24 * 3600.;
 	static int iterations = 2;
 	static int numberOfVehicles = (int) (numberOfAgents / (endTime / 3600.) / expectedRidesPerVehicle);
@@ -82,7 +84,7 @@ public class BenchmarkGenerator {
 
 		SquareGridZoneSystemParams squareGridZoneSystemParams = new SquareGridZoneSystemParams();
 		squareGridZoneSystemParams.setCellSize(500);
-		//drtConfig.setNumberOfThreads(6); // Used for insertion search
+		drtConfig.setNumberOfThreads(4); // Used for insertion search
 		drtConfig.setOperationalScheme(DrtConfigGroup.OperationalScheme.door2door);
 		config.addModule(multiModeDrtConfigGroup);
 
@@ -114,11 +116,12 @@ public class BenchmarkGenerator {
 	}
 
 	public static void runParallelInserter(VehicleEntryPartitioner vehicleEntryPartitioner, int threads, double collectionPeriod, int maxIter) {
+		String partitioner = vehicleEntryPartitioner.getClass().getSimpleName();
 		Scenario scenario = configureScenario();
 		Config config = scenario.getConfig();
 
 		// Optional: set output directory and iterations
-		config.controller().setOutputDirectory("output/"+numberOfAgents+"_parallel-threads-" + threads + "-period-" + collectionPeriod + "-maxIter-" + maxIter);
+		config.controller().setOutputDirectory("output/"+numberOfAgents+"_parallel-threads-" + threads + "-period-" + collectionPeriod + "-maxIter-" + maxIter +"-part-"+partitioner);
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
 
 		var drtConfig = ConfigUtils.addOrGetModule(config, MultiModeDrtConfigGroup.class).getModalElements().iterator().next();
@@ -132,9 +135,9 @@ public class BenchmarkGenerator {
 	public static void main(String[] args) {
 		//runBaseline();
 
-		var partitioner = List.of(new FixedNonOverlappingVehicleEntryPartitioner());
+		var partitioner = List.of(new ShiftingRoundRobinVehicleEntryPartitioner());
 		var collectionPeriods = List.of(30);
-		var threads = List.of(6);
+		var threads = List.of(10);
 		int maxIter = 3;
 
 		for (VehicleEntryPartitioner vehicleEntryPartitioner : partitioner) {
