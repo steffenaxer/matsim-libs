@@ -81,8 +81,9 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final SortedSet<DrtRequest> noSolutions = new ConcurrentSkipListSet<>(drtRequestComparator);
 
 	private final VehicleEntryPartitioner vehicleEntryPartitioner;
-	public int nConflicting = 0;
-	public int nNonConflicting = 0;
+	public long nConflicting = 0;
+	public long nNonConflicting = 0;
+	public long counter = 0;
 
 
 	public ParallelUnplannedRequestInserter(VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
@@ -134,10 +135,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 	@Override
 	public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
-		int counter = 0;
+
 		var it = unplannedRequests.iterator();
 		while (it.hasNext()) {
-			this.workers.get(counter % this.workers.size()).addRequest(new RequestData(it.next()));
+			this.workers.get((int) (counter % this.workers.size())).addRequest(new RequestData(it.next()));
 			it.remove();
 			counter++;
 		}

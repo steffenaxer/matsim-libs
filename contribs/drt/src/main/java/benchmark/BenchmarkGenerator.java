@@ -40,7 +40,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 public class BenchmarkGenerator {
-	static int numberOfAgents = 1_000_000;
+	static int numberOfAgents = 100000;
 	static int expectedRidesPerVehicle = 7;
 	static double endTime = 24 * 3600.;
 	static int iterations = 2;
@@ -137,7 +137,7 @@ public class BenchmarkGenerator {
 
 		var partitioner = List.of(new ShiftingRoundRobinVehicleEntryPartitioner());
 		var collectionPeriods = List.of(30);
-		var threads = List.of(10);
+		var threads = List.of(4);
 		int maxIter = 3;
 
 		for (VehicleEntryPartitioner vehicleEntryPartitioner : partitioner) {
