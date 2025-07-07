@@ -3,13 +3,10 @@ package benchmark;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.contrib.common.zones.systems.grid.square.SquareGridZoneSystemParams;
-import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
-import org.matsim.contrib.drt.optimizer.VehicleEntry;
+import org.matsim.contrib.drt.optimizer.*;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsParams;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsSetImpl;
 import org.matsim.contrib.drt.optimizer.insertion.*;
-import org.matsim.contrib.drt.optimizer.insertion.partitioner.ReplicatingVehicleEntryPartitioner;
-import org.matsim.contrib.drt.optimizer.insertion.partitioner.RoundRobinVehicleEntryPartitioner;
 import org.matsim.contrib.drt.optimizer.insertion.partitioner.ShiftingRoundRobinVehicleEntryPartitioner;
 import org.matsim.contrib.drt.optimizer.insertion.repeatedselective.RepeatedSelectiveInsertionSearchParams;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
@@ -40,7 +37,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 public class BenchmarkGenerator {
-	static int numberOfAgents = 100000;
+	static int numberOfAgents = 400000;
 	static int expectedRidesPerVehicle = 7;
 	static double endTime = 24 * 3600.;
 	static int iterations = 2;
@@ -90,8 +87,11 @@ public class BenchmarkGenerator {
 
 		ReplanningConfigGroup.StrategySettings strategy = new ReplanningConfigGroup.StrategySettings(Id.create("1", ReplanningConfigGroup.StrategySettings.class));
 		strategy.setStrategyName(DefaultPlanStrategiesModule.DefaultSelector.KeepLastSelected);
-		strategy.setWeight(1.0);
+		strategy.setWeight(0.0);
 		config.replanning().addStrategySettings(strategy);
+
+		config.replanning().setMaxAgentPlanMemorySize(1);
+		config.replanning().setFractionOfIterationsToDisableInnovation(0.0);
 
 		ScoringConfigGroup planCalcScore = config.scoring();
 		ScoringConfigGroup.ModeParams drtParams = new ScoringConfigGroup.ModeParams("drt");
@@ -115,7 +115,7 @@ public class BenchmarkGenerator {
 		controler.run();
 	}
 
-	public static void runParallelInserter(VehicleEntryPartitioner vehicleEntryPartitioner, int threads, double collectionPeriod, int maxIter) {
+	public static void runParallelInserter(VehicleEntryPartitioner vehicleEntryPartitioner, int threads, double collectionPeriod, int maxIter, int insertionSearchThreadsPerWorker) {
 		String partitioner = vehicleEntryPartitioner.getClass().getSimpleName();
 		Scenario scenario = configureScenario();
 		Config config = scenario.getConfig();
@@ -128,7 +128,7 @@ public class BenchmarkGenerator {
 
 		// Run the simulation
 		Controler controler = DrtControlerCreator.createControler(scenario.getConfig(), scenario, false);
-		installParallelUnplannedRequestInserter(controler, drtConfig,vehicleEntryPartitioner , threads, collectionPeriod, maxIter);
+		installParallelUnplannedRequestInserter(controler, drtConfig,vehicleEntryPartitioner , threads, collectionPeriod, maxIter, insertionSearchThreadsPerWorker);
 		controler.run();
 	}
 
@@ -137,26 +137,26 @@ public class BenchmarkGenerator {
 
 		var partitioner = List.of(new ShiftingRoundRobinVehicleEntryPartitioner());
 		var collectionPeriods = List.of(30);
-		var threads = List.of(4);
+		var threads = List.of(6);
 		int maxIter = 3;
+		int insertionSearchThreadsPerWorker = 2;
 
 		for (VehicleEntryPartitioner vehicleEntryPartitioner : partitioner) {
 			for (Integer collectionPeriod : collectionPeriods) {
-				for (Integer thread : threads) {
-					runParallelInserter(vehicleEntryPartitioner, thread, collectionPeriod, maxIter);
+				for (Integer worker : threads) {
+					runParallelInserter(vehicleEntryPartitioner, worker, collectionPeriod, maxIter, insertionSearchThreadsPerWorker);
 				}
 			}
 		}
-
 	}
 
-	static void installParallelUnplannedRequestInserter(Controler controler, DrtConfigGroup drtConfigGroup, VehicleEntryPartitioner vehicleEntryPartitioner, int threads, double collectionPeriod, int maxIter) {
+	static void installParallelUnplannedRequestInserter(Controler controler, DrtConfigGroup drtConfigGroup, VehicleEntryPartitioner vehicleEntryPartitioner, int worker, double collectionPeriod, int maxIter, int insertionSearchThreadsPerWorker) {
 
 		controler.addOverridingQSimModule(new AbstractDvrpModeQSimModule(drtConfigGroup.getMode()) {
 			@Override
 			protected void configureQSim() {
 				bindModal(UnplannedRequestInserter.class).toProvider(modalProvider(
-					getter -> new ParallelUnplannedRequestInserter(vehicleEntryPartitioner, threads, collectionPeriod, maxIter, drtConfigGroup, getter.getModal(Fleet.class),
+					getter -> new ParallelUnplannedRequestInserter(vehicleEntryPartitioner, worker, collectionPeriod, maxIter, drtConfigGroup, getter.getModal(Fleet.class),
 						getter.get(MobsimTimer.class), getter.get(EventsManager.class),
 						() -> getter.getModal(RequestInsertionScheduler.class),
 						getter.getModal(VehicleEntry.EntryFactory.class),
@@ -166,6 +166,9 @@ public class BenchmarkGenerator {
 						getter.getModal(PassengerStopDurationProvider.class),
 						getter.getModal(RequestFleetFilter.class)
 					))).asEagerSingleton();
+
+				addModalComponent(QsimScopeForkJoinPool.class,
+					() -> new MultiQSimScopeForkJoinPoolHolder(insertionSearchThreadsPerWorker));
 			}
 		});
 	}
