@@ -21,11 +21,10 @@
 package org.matsim.contrib.drt.optimizer.insertion.repeatedselective;
 
 import org.matsim.api.core.v01.network.Network;
-import org.matsim.contrib.drt.optimizer.QSimScopeForkJoinPoolHolder;
+import org.matsim.contrib.drt.optimizer.QsimScopeForkJoinPool;
 import org.matsim.contrib.drt.optimizer.insertion.DetourTimeEstimator;
 import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearch;
 import org.matsim.contrib.drt.optimizer.insertion.InsertionCostCalculator;
-import org.matsim.contrib.drt.optimizer.insertion.selective.SingleInsertionDetourPathCalculator;
 import org.matsim.contrib.drt.optimizer.insertion.selective.SingleInsertionDetourPathCalculatorManager;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.stops.StopTimeCalculator;
@@ -63,7 +62,7 @@ public class RepeatedSelectiveInsertionSearchQSimModule extends AbstractDvrpMode
 		bindModal(DrtInsertionSearch.class).toProvider(modalProvider( getter -> {
 			RepeatedSelectiveInsertionProvider provider = RepeatedSelectiveInsertionProvider.create(
 					getter.getModal(InsertionCostCalculator.class),
-					getter.getModal(QSimScopeForkJoinPoolHolder.class).getPool(),
+					getter.getModal(QsimScopeForkJoinPool.class).getPool(),
 					getter.getModal(StopTimeCalculator.class), getter.getModal(DetourTimeEstimator.class));
             var insertionCostCalculator = getter.getModal(InsertionCostCalculator.class);
             return new RepeatedSelectiveInsertionSearch(provider,

@@ -21,7 +21,7 @@
 package org.matsim.contrib.drt.optimizer.insertion.selective;
 
 import org.matsim.api.core.v01.network.Network;
-import org.matsim.contrib.drt.optimizer.QSimScopeForkJoinPoolHolder;
+import org.matsim.contrib.drt.optimizer.QsimScopeForkJoinPool;
 import org.matsim.contrib.drt.optimizer.insertion.DetourTimeEstimator;
 import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearch;
 import org.matsim.contrib.drt.optimizer.insertion.InsertionCostCalculator;
@@ -60,7 +60,7 @@ public class SelectiveInsertionSearchQSimModule extends AbstractDvrpModeQSimModu
 		addModalComponent(SelectiveInsertionSearch.class, modalProvider(getter -> {
 			SelectiveInsertionProvider provider = SelectiveInsertionProvider.create(
 					getter.getModal(InsertionCostCalculator.class),
-					getter.getModal(QSimScopeForkJoinPoolHolder.class).getPool(),
+					getter.getModal(QsimScopeForkJoinPool.class).getPool(),
 					getter.getModal(StopTimeCalculator.class), getter.getModal(DetourTimeEstimator.class));
 			// Use 0 as the cost for the selected insertion:
 			// - In the selective strategy, there is at most 1 insertion pre-selected. So no need to compute as there is
