@@ -78,7 +78,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final ForkJoinPool inserterExecutorService;
 	private final int maxIter;
 	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions = new ConcurrentHashMap<>();
-	private final Set<DrtRequest> noSolutions = new ConcurrentSkipListSet<>(drtRequestComparator);
+	private final SortedSet<DrtRequest> noSolutions = new ConcurrentSkipListSet<>(drtRequestComparator);
 
 	private final VehicleEntryPartitioner vehicleEntryPartitioner;
 	public int nConflicting = 0;

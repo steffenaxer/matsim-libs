@@ -27,13 +27,13 @@ public class RequestInsertWorker {
 	private final Queue<RequestData> unplannedRequests = new ConcurrentLinkedQueue<>();
 	private final DrtOfferAcceptor drtOfferAcceptor;
 	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions;
-	private final Set<DrtRequest> noSolutions;
+	private final SortedSet<DrtRequest> noSolutions;
 
 	public RequestInsertWorker(
 		RequestFleetFilter requestFleetFilter,
 		DrtInsertionSearch insertionSearch,
 		DrtOfferAcceptor drtOfferAcceptor,
-		Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions, Set<DrtRequest> noSolutions) {
+		Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions, SortedSet<DrtRequest> noSolutions) {
 		this.requestFleetFilter = requestFleetFilter;
 		this.insertionSearch = insertionSearch;
 		this.drtOfferAcceptor = drtOfferAcceptor;
