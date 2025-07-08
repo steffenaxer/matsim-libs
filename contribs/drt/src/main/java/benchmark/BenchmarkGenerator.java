@@ -48,6 +48,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 public class BenchmarkGenerator {
 	static DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
@@ -55,12 +56,10 @@ public class BenchmarkGenerator {
 	static NumberFormat usFormat = NumberFormat.getNumberInstance(Locale.US);
 	static List<String[]> benchmarkResults = new ArrayList<>();
 	// Scenario Setup
-	static int numberOfAgents = 10_000;
+	static List<Integer> numberOfAgentsList = List.of(10_000, 50_000, 100_000);
 	static int expectedRidesPerVehicle = 7;
 	static double endTime = 24 * 3600.;
 	static int iterations = 1;
-	static int numberOfVehicles = (int) (numberOfAgents / (endTime / 3600.) / expectedRidesPerVehicle);
-	static double requestDensityPerMinute = numberOfAgents / (24.0 * 60.);
 
 
 	// ParallelInsertion Setup
@@ -71,7 +70,8 @@ public class BenchmarkGenerator {
 	static List<Integer> maxIterList = List.of(2, 3);
 	static List<Integer> insertionSearchThreadsPerWorkersList = List.of(1, 2, 4);
 
-	public static Scenario configureScenario() {
+	public static Scenario configureScenario(int numberOfAgents) {
+		int numberOfVehicles = (int) (numberOfAgents / (endTime / 3600.) / expectedRidesPerVehicle);
 		MatsimRandom.reset();
 		Config config = ConfigUtils.createConfig();
 
@@ -130,12 +130,12 @@ public class BenchmarkGenerator {
 		return scenario;
 	}
 
-	public static void runBaseline() {
-		Scenario scenario = configureScenario();
+	public static void runBaseline(String uuid, int numberOfAgents) {
+		Scenario scenario = configureScenario(numberOfAgents);
 		Config config = scenario.getConfig();
 
 		// Optional: set output directory and iterations
-		config.controller().setOutputDirectory("output/" + numberOfAgents + "_baseline");
+		config.controller().setOutputDirectory("output/" + uuid);
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
 
 		// Run the simulation
@@ -148,10 +148,11 @@ public class BenchmarkGenerator {
 		Path outputDir = Path.of(controler.getControlerIO().getOutputPath());
 		String rejectionRate = getValueFromCSV(outputDir.resolve("drt_customer_stats_drt.csv").toString(), "rejectionRate");
 		String emptyRatio = getValueFromCSV(outputDir.resolve("drt_vehicle_stats_drt.csv").toString(), "emptyRatio");
-
+		double requestDensityPerMinute = numberOfAgents / (24.0 * 60.);
 
 		benchmarkResults.add(new String[]{
-			numberOfAgents+"",
+			uuid,
+			numberOfAgents + "",
 			"baseline",
 			"baseline",
 			"",
@@ -169,7 +170,7 @@ public class BenchmarkGenerator {
 	public static void writeBenchmark() {
 
 		try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(Path.of("benchmark_" + benchmarkTime + ".csv")))) {
-			writer.println("trips;requestPartitioner;vehiclePartitioner;Threads;CollectionPeriod;MaxIter;InsertionSearchThreadsPerWorker;DurationSeconds;rejectionRate;emptyRatio;requestDensityPerMinute");
+			writer.println("uuid,agents;requestPartitioner;vehiclePartitioner;Threads;CollectionPeriod;MaxIter;InsertionSearchThreadsPerWorker;DurationSeconds;rejectionRate;emptyRatio;requestDensityPerMinute");
 			for (String[] row : benchmarkResults) {
 				writer.println(String.join(";", row));
 			}
@@ -179,14 +180,14 @@ public class BenchmarkGenerator {
 
 	}
 
-	public static void runParallelInserter(RequestsPartitioner requestsPartitioner ,VehicleEntryPartitioner vehicleEntryPartitioner, int threads, double collectionPeriod, int maxIter, int insertionSearchThreadsPerWorker) {
+	public static void runParallelInserter(String uuid, int numberOfAgents, RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, int threads, double collectionPeriod, int maxIter, int insertionSearchThreadsPerWorker) {
 		String reqPartName = requestsPartitioner.getClass().getSimpleName();
 		String vehiclePartName = vehicleEntryPartitioner.getClass().getSimpleName();
-		Scenario scenario = configureScenario();
+		Scenario scenario = configureScenario(numberOfAgents);
 		Config config = scenario.getConfig();
 
 		// Optional: set output directory and iterations
-		config.controller().setOutputDirectory("output/" + numberOfAgents + "_parallel-threads-" + threads + "-period-" + collectionPeriod + "-maxIter-" + maxIter + "-part-" + vehiclePartName);
+		config.controller().setOutputDirectory("output/" + uuid);
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
 
 		var drtConfig = ConfigUtils.addOrGetModule(config, MultiModeDrtConfigGroup.class).getModalElements().iterator().next();
@@ -203,9 +204,11 @@ public class BenchmarkGenerator {
 		Path outputDir = Path.of(controler.getControlerIO().getOutputPath());
 		String rejectionRate = getValueFromCSV(outputDir.resolve("drt_customer_stats_drt.csv").toString(), "rejectionRate");
 		String emptyRatio = getValueFromCSV(outputDir.resolve("drt_vehicle_stats_drt.csv").toString(), "emptyRatio");
+		double requestDensityPerMinute = numberOfAgents / (24.0 * 60.);
 
 		benchmarkResults.add(new String[]{
-			numberOfAgents+"",
+			uuid,
+			numberOfAgents + "",
 			reqPartName,
 			vehiclePartName,
 			String.valueOf(threads),
@@ -215,23 +218,25 @@ public class BenchmarkGenerator {
 			usFormat.format(durationSeconds),
 			rejectionRate,
 			emptyRatio,
-			requestDensityPerMinute + ""
+			requestDensityPerMinute + "",
+			uuid
 		});
 
 
 	}
 
 	public static void main(String[] args) {
-		runBaseline();
-
-		for (RequestsPartitioner requestsPartitioner : requestsPartitioners) {
-			for (VehicleEntryPartitioner vehicleEntryPartitioner : vehicleEntryPartitioners) {
-				for (Integer collectionPeriod : collectionPeriods) {
-					for (Integer worker : workersList) {
-						for (Integer insertionSearchThreadsPerWorker : insertionSearchThreadsPerWorkersList) {
-							for (Integer iter : maxIterList) {
-								runParallelInserter(requestsPartitioner, vehicleEntryPartitioner, worker, collectionPeriod, iter, insertionSearchThreadsPerWorker);
-								writeBenchmark();
+		for (Integer numberOfAgents : numberOfAgentsList) {
+			runBaseline(UUID.randomUUID().toString(), numberOfAgents);
+			for (RequestsPartitioner requestsPartitioner : requestsPartitioners) {
+				for (VehicleEntryPartitioner vehicleEntryPartitioner : vehicleEntryPartitioners) {
+					for (Integer collectionPeriod : collectionPeriods) {
+						for (Integer worker : workersList) {
+							for (Integer insertionSearchThreadsPerWorker : insertionSearchThreadsPerWorkersList) {
+								for (Integer iter : maxIterList) {
+									runParallelInserter(UUID.randomUUID().toString(), numberOfAgents, requestsPartitioner, vehicleEntryPartitioner, worker, collectionPeriod, iter, insertionSearchThreadsPerWorker);
+									writeBenchmark();
+								}
 							}
 						}
 					}
