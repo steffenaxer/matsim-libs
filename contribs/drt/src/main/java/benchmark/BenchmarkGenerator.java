@@ -37,11 +37,20 @@ import java.nio.file.Path;
 import java.util.List;
 
 public class BenchmarkGenerator {
+	// Scenario Setup
 	static int numberOfAgents = 400000;
 	static int expectedRidesPerVehicle = 7;
 	static double endTime = 24 * 3600.;
-	static int iterations = 2;
+	static int iterations = 1;
 	static int numberOfVehicles = (int) (numberOfAgents / (endTime / 3600.) / expectedRidesPerVehicle);
+
+
+	// ParallelInsertion Setup
+	static List<VehicleEntryPartitioner> partitioner = List.of(new ShiftingRoundRobinVehicleEntryPartitioner());
+	static List<Integer> collectionPeriods = List.of(15,30);
+	static List<Integer> workersList = List.of(2,4,6);
+	static List<Integer> maxIterList = List.of(2,3,4);
+	static List<Integer> insertionSearchThreadsPerWorkersList = List.of(1,2,4);
 
 	public static Scenario configureScenario() {
 		MatsimRandom.reset();
@@ -133,18 +142,16 @@ public class BenchmarkGenerator {
 	}
 
 	public static void main(String[] args) {
-		//runBaseline();
-
-		var partitioner = List.of(new ShiftingRoundRobinVehicleEntryPartitioner());
-		var collectionPeriods = List.of(30);
-		var threads = List.of(6);
-		int maxIter = 3;
-		int insertionSearchThreadsPerWorker = 2;
+		runBaseline();
 
 		for (VehicleEntryPartitioner vehicleEntryPartitioner : partitioner) {
 			for (Integer collectionPeriod : collectionPeriods) {
-				for (Integer worker : threads) {
-					runParallelInserter(vehicleEntryPartitioner, worker, collectionPeriod, maxIter, insertionSearchThreadsPerWorker);
+				for (Integer worker : workersList) {
+					for (Integer insertionSearchThreadsPerWorker : insertionSearchThreadsPerWorkersList) {
+						for (Integer iter : maxIterList) {
+							runParallelInserter(vehicleEntryPartitioner, worker, collectionPeriod, iter, insertionSearchThreadsPerWorker);
+						}
+					}
 				}
 			}
 		}
