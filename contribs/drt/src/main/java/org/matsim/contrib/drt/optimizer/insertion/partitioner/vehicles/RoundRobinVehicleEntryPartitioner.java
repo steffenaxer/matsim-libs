@@ -1,7 +1,8 @@
-package org.matsim.contrib.drt.optimizer.insertion.partitioner;
+package org.matsim.contrib.drt.optimizer.insertion.partitioner.vehicles;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
+import org.matsim.contrib.drt.optimizer.insertion.RequestData;
 import org.matsim.contrib.drt.optimizer.insertion.VehicleEntryPartitioner;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 
@@ -11,11 +12,24 @@ public class RoundRobinVehicleEntryPartitioner implements VehicleEntryPartitione
 
 	@Override
 	public List<Map<Id<DvrpVehicle>, VehicleEntry>> partition(
-		Map<Id<DvrpVehicle>, VehicleEntry> entries, int n) {
+		Map<Id<DvrpVehicle>, VehicleEntry> entries,
+		List<Collection<RequestData>> requestsPartitions) {
 
+		int n = requestsPartitions.size();
 		List<Map<Id<DvrpVehicle>, VehicleEntry>> partitions = new ArrayList<>(n);
 		for (int i = 0; i < n; i++) {
 			partitions.add(new HashMap<>());
+		}
+
+		List<Integer> activePartitionIndices = new ArrayList<>();
+		for (int i = 0; i < n; i++) {
+			if (!requestsPartitions.get(i).isEmpty()) {
+				activePartitionIndices.add(i);
+			}
+		}
+
+		if (activePartitionIndices.isEmpty()) {
+			return partitions;
 		}
 
 		List<Map.Entry<Id<DvrpVehicle>, VehicleEntry>> sortedEntries = new ArrayList<>(entries.entrySet());
@@ -23,11 +37,11 @@ public class RoundRobinVehicleEntryPartitioner implements VehicleEntryPartitione
 
 		int index = 0;
 		for (Map.Entry<Id<DvrpVehicle>, VehicleEntry> entry : sortedEntries) {
-			partitions.get(index % n).put(entry.getKey(), entry.getValue());
+			int partitionIndex = activePartitionIndices.get(index % activePartitionIndices.size());
+			partitions.get(partitionIndex).put(entry.getKey(), entry.getValue());
 			index++;
 		}
 
 		return partitions;
 	}
 }
-

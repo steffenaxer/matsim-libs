@@ -1,5 +1,6 @@
 package org.matsim.contrib.drt.optimizer.insertion;
 
+import com.google.common.base.Verify;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
@@ -85,12 +86,12 @@ public class RequestInsertWorker {
 	}
 
 
-	public void addRequest(RequestData unplannedRequest) {
-		this.unplannedRequests.add(unplannedRequest);
-	}
+	void process(double now, Collection<RequestData> requestDataPartition, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries) {
+		this.unplannedRequests.addAll(requestDataPartition);
 
-
-	void process(double now, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries) {
+		if (!requestDataPartition.isEmpty()) {
+			Verify.verify(!vehicleEntries.isEmpty(), "Requests have been assigned to a worker without vehicleEntries.");
+		}
 
 		while (!unplannedRequests.isEmpty()) {
 			findInsertion(unplannedRequests.poll(), vehicleEntries, now);

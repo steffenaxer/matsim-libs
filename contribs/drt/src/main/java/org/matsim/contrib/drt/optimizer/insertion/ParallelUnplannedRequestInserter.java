@@ -28,6 +28,7 @@ import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.Identifiable;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
+import org.matsim.contrib.drt.optimizer.insertion.partitioner.requests.RequestsPartitioner;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
 import org.matsim.contrib.drt.passenger.DrtRequest;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
@@ -79,27 +80,30 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final int maxIter;
 	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions = new ConcurrentHashMap<>();
 	private final SortedSet<DrtRequest> noSolutions = new ConcurrentSkipListSet<>(drtRequestComparator);
+	private final Queue<DrtRequest> tmpQueue = new ConcurrentLinkedQueue<>();
 
 	private final VehicleEntryPartitioner vehicleEntryPartitioner;
+	private final RequestsPartitioner requestsPartitioner;
 	public long nConflicting = 0;
 	public long nNonConflicting = 0;
 	public long counter = 0;
 
 
-	public ParallelUnplannedRequestInserter(VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
+	public ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
 											EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
 											VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
 											DrtRequestInsertionRetryQueue insertionRetryQueue, DrtOfferAcceptor drtOfferAcceptor,
 											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
-		this(vehicleEntryPartitioner, threadCount, collectionPeriod, maxIter, drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
+		this(requestsPartitioner, vehicleEntryPartitioner, threadCount, collectionPeriod, maxIter, drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
 			insertionRetryQueue, insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter);
 	}
 
 	@VisibleForTesting
-	ParallelUnplannedRequestInserter(VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
+	ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner,VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
 									 Provider<RequestInsertionScheduler> insertionSchedulerProvider, VehicleEntry.EntryFactory vehicleEntryFactory,
 									 DrtRequestInsertionRetryQueue insertionRetryQueue, Provider<DrtInsertionSearch> insertionSearch,
 									 DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
+		this.requestsPartitioner = requestsPartitioner;
 		this.vehicleEntryPartitioner = vehicleEntryPartitioner;
 		this.collectionPeriod = collectionPeriod;
 		this.mode = mode;
@@ -135,12 +139,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 	@Override
 	public void scheduleUnplannedRequests(Collection<DrtRequest> unplannedRequests) {
-
 		var it = unplannedRequests.iterator();
 		while (it.hasNext()) {
-			this.workers.get((int) (counter % this.workers.size())).addRequest(new RequestData(it.next()));
+			this.tmpQueue.add(it.next());
 			it.remove();
-			counter++;
 		}
 	}
 
@@ -157,22 +159,27 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 	}
 
-	private void solve(double now, Map<Id<DvrpVehicle>, VehicleEntry> entries, VehicleEntryPartitioner partitioner) {
+	private void solve(double now, Map<Id<DvrpVehicle>, VehicleEntry> entries, RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner partitioner) {
 		List<ForkJoinTask<?>> tasks = new ArrayList<>();
-		var partitions = partitioner.partition(entries, this.workers.size());
+
+		List<Collection<RequestData>> requestsPartitions = requestsPartitioner.partition(this.tmpQueue, this.workers.size(), this.collectionPeriod);
+
+		// The number of request partitions indicate the number of required vehicle partitions
+		List<Map<Id<DvrpVehicle>, VehicleEntry>> vehiclePartitions = partitioner.partition(entries, requestsPartitions);
 
 		Verify.verify(
-			partitions.size() == this.workers.size(),
-			"Mismatch between number of vehicle entry partitions (%s) and number of workers (%s)",
-			partitions.size(), this.workers.size()
+			vehiclePartitions.size() == this.workers.size(),
+			"Mismatch between number of vehicle entry vehiclePartitions (%s) and number of workers (%s)",
+			vehiclePartitions.size(), this.workers.size()
 		);
 
 
 		AtomicInteger i = new AtomicInteger(0);
 		for (RequestInsertWorker worker : this.workers) {
 			int index = i.getAndIncrement();
-			Map<Id<DvrpVehicle>, VehicleEntry> partition = partitions.get(index);
-			tasks.add(inserterExecutorService.submit(() -> worker.process(now, partition)));
+			Collection<RequestData> requestDataPartition = requestsPartitions.get(index);
+			Map<Id<DvrpVehicle>, VehicleEntry> vehiclePartition = vehiclePartitions.get(index);
+			tasks.add(inserterExecutorService.submit(() -> worker.process(now, requestDataPartition, vehiclePartition)));
 		}
 
 
@@ -330,7 +337,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			Integer lastUnsolvedConflicts = null;
 			int scheduled = 0;
 			for (int i = 0; i < this.maxIter; i++) {
-				solve(time, vehicleEntries, this.vehicleEntryPartitioner);
+				solve(time, vehicleEntries, this.requestsPartitioner, this.vehicleEntryPartitioner);
 				ConsolidationResult consolidationResult = consolidate();
 
 				// Schedule and clear
