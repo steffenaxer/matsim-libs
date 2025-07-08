@@ -222,7 +222,7 @@ public class BenchmarkGenerator {
 	}
 
 	public static void main(String[] args) {
-		//runBaseline();
+		runBaseline();
 
 		for (RequestsPartitioner requestsPartitioner : requestsPartitioners) {
 			for (VehicleEntryPartitioner vehicleEntryPartitioner : vehicleEntryPartitioners) {
