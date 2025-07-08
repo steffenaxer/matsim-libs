@@ -151,7 +151,6 @@ public class BenchmarkGenerator {
 		double requestDensityPerMinute = numberOfAgents / (24.0 * 60.);
 
 		benchmarkResults.add(new String[]{
-			uuid,
 			numberOfAgents + "",
 			"baseline",
 			"baseline",
@@ -162,7 +161,8 @@ public class BenchmarkGenerator {
 			usFormat.format(durationSeconds),
 			rejectionRate,
 			emptyRatio,
-			requestDensityPerMinute + ""
+			requestDensityPerMinute + "",
+			uuid,
 		});
 
 	}
@@ -170,7 +170,7 @@ public class BenchmarkGenerator {
 	public static void writeBenchmark() {
 
 		try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(Path.of("benchmark_" + benchmarkTime + ".csv")))) {
-			writer.println("uuid,agents;requestPartitioner;vehiclePartitioner;Threads;CollectionPeriod;MaxIter;InsertionSearchThreadsPerWorker;DurationSeconds;rejectionRate;emptyRatio;requestDensityPerMinute");
+			writer.println("agents;requestPartitioner;vehiclePartitioner;Threads;CollectionPeriod;MaxIter;InsertionSearchThreadsPerWorker;DurationSeconds;rejectionRate;emptyRatio;requestDensityPerMinute,uuid");
 			for (String[] row : benchmarkResults) {
 				writer.println(String.join(";", row));
 			}
@@ -207,7 +207,6 @@ public class BenchmarkGenerator {
 		double requestDensityPerMinute = numberOfAgents / (24.0 * 60.);
 
 		benchmarkResults.add(new String[]{
-			uuid,
 			numberOfAgents + "",
 			reqPartName,
 			vehiclePartName,
