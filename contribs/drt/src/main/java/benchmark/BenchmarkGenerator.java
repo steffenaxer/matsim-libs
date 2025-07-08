@@ -170,7 +170,7 @@ public class BenchmarkGenerator {
 	public static void writeBenchmark() {
 
 		try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(Path.of("benchmark_" + benchmarkTime + ".csv")))) {
-			writer.println("agents;requestPartitioner;vehiclePartitioner;Threads;CollectionPeriod;MaxIter;InsertionSearchThreadsPerWorker;DurationSeconds;rejectionRate;emptyRatio;requestDensityPerMinute,uuid");
+			writer.println("agents;requestPartitioner;vehiclePartitioner;Threads;CollectionPeriod;MaxIter;InsertionSearchThreadsPerWorker;DurationSeconds;rejectionRate;emptyRatio;requestDensityPerMinute;uuid");
 			for (String[] row : benchmarkResults) {
 				writer.println(String.join(";", row));
 			}
