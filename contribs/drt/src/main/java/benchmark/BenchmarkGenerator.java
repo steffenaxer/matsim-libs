@@ -56,7 +56,7 @@ public class BenchmarkGenerator {
 	static NumberFormat usFormat = NumberFormat.getNumberInstance(Locale.US);
 	static List<String[]> benchmarkResults = new ArrayList<>();
 	// Scenario Setup
-	static List<Integer> numberOfAgentsList = List.of(10_000, 50_000, 100_000);
+	static List<Integer> numberOfAgentsList = List.of(50_000, 100_000, 200_000);
 	static int expectedRidesPerVehicle = 7;
 	static double endTime = 24 * 3600.;
 	static int iterations = 1;
@@ -65,10 +65,10 @@ public class BenchmarkGenerator {
 	// ParallelInsertion Setup
 	static List<RequestsPartitioner> requestsPartitioners = List.of(new LoadAwareRoundRobinRequestsPartitioner(getDefaultPartitionScalingFunction()));
 	static List<VehicleEntryPartitioner> vehicleEntryPartitioners = List.of(new ShiftingRoundRobinVehicleEntryPartitioner());
-	static List<Integer> collectionPeriods = List.of(15);
-	static List<Integer> workersList = List.of(1, 2, 4);
-	static List<Integer> maxIterList = List.of(2, 3);
-	static List<Integer> insertionSearchThreadsPerWorkersList = List.of(1, 2, 4);
+	static List<Integer> collectionPeriods = List.of(15,30);
+	static List<Integer> workersList = List.of(4);
+	static List<Integer> maxIterList = List.of(2);
+	static List<Integer> insertionSearchThreadsPerWorkersList = List.of(4);
 
 	public static Scenario configureScenario(int numberOfAgents) {
 		int numberOfVehicles = (int) (numberOfAgents / (endTime / 3600.) / expectedRidesPerVehicle);
@@ -313,9 +313,7 @@ public class BenchmarkGenerator {
 	static PartitionScalingFunction getDefaultPartitionScalingFunction() {
 		return (total, requests, period) -> {
 			double requestsPerMinute = requests * (60.0 / period);
-			return Math.min(total, Math.max(1, (int) Math.round(
-				1 + (requestsPerMinute - 10) * (total - 1) / 490.0
-			)));
+			return Math.min(total, Math.max(1, (int) (requestsPerMinute / 20) + 1));
 		};
 	}
 
