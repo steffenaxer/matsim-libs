@@ -59,7 +59,7 @@ public class BenchmarkGenerator {
 	static NumberFormat usFormat = NumberFormat.getNumberInstance(Locale.US);
 	static List<String[]> benchmarkResults = new ArrayList<>();
 	// Scenario Setup
-	static List<Integer> numberOfAgentsList = List.of(50_000);
+	static List<Integer> numberOfAgentsList = List.of(200_000);
 	static int expectedRidesPerVehicle = 7;
 	static double endTime = 24 * 3600.;
 	static int iterations = 1;
@@ -68,8 +68,8 @@ public class BenchmarkGenerator {
 	// ParallelInsertion Setup
 	static List<RequestsPartitioner> requestsPartitioners = List.of(new LoadAwareRoundRobinRequestsPartitioner(getDefaultPartitionScalingFunction()));
 	static List<VehicleEntryPartitioner> vehicleEntryPartitioners = List.of(new ShiftingRoundRobinVehicleEntryPartitioner());
-	static List<Integer> collectionPeriods = List.of(15,30);
-	static List<Integer> workersList = List.of(6);
+	static List<Integer> collectionPeriods = List.of(30);
+	static List<Integer> workersList = List.of(4);
 	static List<Integer> maxIterList = List.of(2);
 	static List<Integer> insertionSearchThreadsPerWorkersList = List.of(4);
 
@@ -229,7 +229,7 @@ public class BenchmarkGenerator {
 
 	public static void main(String[] args) {
 		for (Integer numberOfAgents : numberOfAgentsList) {
-			runBaseline(UUID.randomUUID().toString(), numberOfAgents);
+			//runBaseline(UUID.randomUUID().toString(), numberOfAgents);
 			for (RequestsPartitioner requestsPartitioner : requestsPartitioners) {
 				for (VehicleEntryPartitioner vehicleEntryPartitioner : vehicleEntryPartitioners) {
 					for (Integer collectionPeriod : collectionPeriods) {
@@ -267,7 +267,8 @@ public class BenchmarkGenerator {
 						() -> getter.getModal(DrtInsertionSearch.class),
 						getter.getModal(DrtOfferAcceptor.class),
 						getter.getModal(PassengerStopDurationProvider.class),
-						getter.getModal(RequestFleetFilter.class)
+						getter.getModal(RequestFleetFilter.class),
+						getter.getModal(DrtRequestInsertionRetryQueue.class)
 					))).asEagerSingleton();
 
 				addModalComponent(QsimScopeForkJoinPool.class,
