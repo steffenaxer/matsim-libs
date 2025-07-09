@@ -1,6 +1,6 @@
 package org.matsim.contrib.drt.optimizer.insertion.selective;
 
-import org.matsim.contrib.drt.optimizer.insertion.RequestData;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.RequestData;
 
 import java.util.Comparator;
 

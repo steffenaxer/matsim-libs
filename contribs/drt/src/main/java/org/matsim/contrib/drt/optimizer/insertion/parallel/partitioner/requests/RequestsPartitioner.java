@@ -1,6 +1,6 @@
-package org.matsim.contrib.drt.optimizer.insertion.partitioner.requests;
+package org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.requests;
 
-import org.matsim.contrib.drt.optimizer.insertion.RequestData;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.RequestData;
 import org.matsim.contrib.drt.passenger.DrtRequest;
 
 import java.util.Collection;

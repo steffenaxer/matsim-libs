@@ -1,13 +1,25 @@
-package org.matsim.contrib.drt.optimizer.insertion.partitioner.vehicles;
+package org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.vehicles;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
-import org.matsim.contrib.drt.optimizer.insertion.RequestData;
-import org.matsim.contrib.drt.optimizer.insertion.VehicleEntryPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.RequestData;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 
 import java.util.*;
 
+/**
+ * A {@link VehicleEntryPartitioner} implementation that distributes vehicle entries
+ * across request partitions using a round-robin strategy.
+ * <p>
+ * Only partitions with at least one request are considered "active" and included in the distribution.
+ * Vehicles are sorted by their ID to ensure deterministic behavior, and then assigned one by one
+ * to the active partitions in a cyclic manner.
+ * <p>
+ * This approach ensures a balanced and fair distribution of vehicles among partitions that actually
+ * require them, avoiding unnecessary assignment to empty partitions.
+ *
+ * @author Steffen Axer
+ */
 public class RoundRobinVehicleEntryPartitioner implements VehicleEntryPartitioner {
 
 	@Override

@@ -1,10 +1,26 @@
-package org.matsim.contrib.drt.optimizer.insertion.partitioner.requests;
+package org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.requests;
 
-import org.matsim.contrib.drt.optimizer.insertion.RequestData;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.RequestData;
 import org.matsim.contrib.drt.passenger.DrtRequest;
 
 import java.util.*;
 
+/**
+ * A {@link RequestsPartitioner} implementation that distributes DRT requests across partitions
+ * using a load-aware round-robin strategy.
+ * <p>
+ * Unlike the basic round-robin approach, this implementation dynamically adjusts the number
+ * of active partitions based on the current request load and a configurable {@link PartitionScalingFunction}.
+ * This allows the system to scale the number of partitions up or down depending on demand,
+ * improving resource efficiency and responsiveness.
+ * <p>
+ * Requests are wrapped in {@link RequestData} and assigned cyclically to the active partitions.
+ * The internal counter ensures a consistent distribution across multiple invocations.
+ * <p>
+ * After partitioning, the original collection of unplanned requests is cleared.
+ *
+ * @author Steffen Axer
+ */
 public class LoadAwareRoundRobinRequestsPartitioner implements RequestsPartitioner {
 
 	private final PartitionScalingFunction scalingFunction;

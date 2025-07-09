@@ -7,10 +7,11 @@ import org.matsim.contrib.drt.optimizer.*;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsParams;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsSetImpl;
 import org.matsim.contrib.drt.optimizer.insertion.*;
-import org.matsim.contrib.drt.optimizer.insertion.partitioner.requests.LoadAwareRoundRobinRequestsPartitioner;
-import org.matsim.contrib.drt.optimizer.insertion.partitioner.requests.PartitionScalingFunction;
-import org.matsim.contrib.drt.optimizer.insertion.partitioner.requests.RequestsPartitioner;
-import org.matsim.contrib.drt.optimizer.insertion.partitioner.vehicles.ShiftingRoundRobinVehicleEntryPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.ParallelUnplannedRequestInserter;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.requests.LoadAwareRoundRobinRequestsPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.requests.RequestsPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.vehicles.ShiftingRoundRobinVehicleEntryPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.vehicles.VehicleEntryPartitioner;
 import org.matsim.contrib.drt.optimizer.insertion.repeatedselective.RepeatedSelectiveInsertionSearchParams;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
 import org.matsim.contrib.drt.routing.DrtRoute;
@@ -50,13 +51,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
+import static org.matsim.contrib.drt.optimizer.insertion.parallel.ParallelInserterUtils.getDefaultPartitionScalingFunction;
+
 public class BenchmarkGenerator {
 	static DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
 	static String benchmarkTime = LocalDateTime.now().format(formatter);
 	static NumberFormat usFormat = NumberFormat.getNumberInstance(Locale.US);
 	static List<String[]> benchmarkResults = new ArrayList<>();
 	// Scenario Setup
-	static List<Integer> numberOfAgentsList = List.of(50_000, 100_000, 200_000);
+	static List<Integer> numberOfAgentsList = List.of(50_000);
 	static int expectedRidesPerVehicle = 7;
 	static double endTime = 24 * 3600.;
 	static int iterations = 1;
@@ -66,7 +69,7 @@ public class BenchmarkGenerator {
 	static List<RequestsPartitioner> requestsPartitioners = List.of(new LoadAwareRoundRobinRequestsPartitioner(getDefaultPartitionScalingFunction()));
 	static List<VehicleEntryPartitioner> vehicleEntryPartitioners = List.of(new ShiftingRoundRobinVehicleEntryPartitioner());
 	static List<Integer> collectionPeriods = List.of(15,30);
-	static List<Integer> workersList = List.of(4);
+	static List<Integer> workersList = List.of(6);
 	static List<Integer> maxIterList = List.of(2);
 	static List<Integer> insertionSearchThreadsPerWorkersList = List.of(4);
 
@@ -258,11 +261,10 @@ public class BenchmarkGenerator {
 						maxIter,
 						drtConfigGroup,
 						getter.getModal(Fleet.class),
-						getter.get(MobsimTimer.class), getter.get(EventsManager.class),
+						getter.get(EventsManager.class),
 						() -> getter.getModal(RequestInsertionScheduler.class),
 						getter.getModal(VehicleEntry.EntryFactory.class),
 						() -> getter.getModal(DrtInsertionSearch.class),
-						getter.getModal(DrtRequestInsertionRetryQueue.class),
 						getter.getModal(DrtOfferAcceptor.class),
 						getter.getModal(PassengerStopDurationProvider.class),
 						getter.getModal(RequestFleetFilter.class)
@@ -310,11 +312,6 @@ public class BenchmarkGenerator {
 	}
 
 
-	static PartitionScalingFunction getDefaultPartitionScalingFunction() {
-		return (total, requests, period) -> {
-			double requestsPerMinute = requests * (60.0 / period);
-			return Math.min(total, Math.max(1, (int) (requestsPerMinute / 20) + 1));
-		};
-	}
+
 
 }

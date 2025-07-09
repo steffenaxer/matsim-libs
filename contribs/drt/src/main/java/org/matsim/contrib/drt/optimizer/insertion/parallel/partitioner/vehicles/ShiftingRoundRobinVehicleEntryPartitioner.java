@@ -1,14 +1,30 @@
-package org.matsim.contrib.drt.optimizer.insertion.partitioner.vehicles;
+package org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.vehicles;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
-import org.matsim.contrib.drt.optimizer.insertion.RequestData;
-import org.matsim.contrib.drt.optimizer.insertion.VehicleEntryPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.RequestData;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * A {@link VehicleEntryPartitioner} implementation that distributes vehicle entries
+ * across active request partitions using a shifting round-robin strategy.
+ * <p>
+ * Similar to {@link RoundRobinVehicleEntryPartitioner}, this class assigns vehicles
+ * to partitions in a cyclic manner. However, it introduces a dynamic shift in the
+ * starting partition index on each invocation, based on an internal call counter.
+ * <p>
+ * This shifting mechanism helps to avoid systematic biases in vehicle assignment
+ * over time, promoting a more even distribution of vehicles across partitions
+ * in long-running simulations.
+ * <p>
+ * Only partitions with at least one request are considered active and included
+ * in the distribution. Vehicles are sorted by ID to ensure deterministic behavior.
+ *
+ * @author Steffen Axer
+ */
 public class ShiftingRoundRobinVehicleEntryPartitioner implements VehicleEntryPartitioner {
 
 	private final AtomicInteger callCounter = new AtomicInteger(0);

@@ -17,7 +17,7 @@
  *                                                                         *
  * *********************************************************************** */
 
-package org.matsim.contrib.drt.optimizer.insertion;
+package org.matsim.contrib.drt.optimizer.insertion.parallel;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Verify;
@@ -28,7 +28,12 @@ import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.Identifiable;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
-import org.matsim.contrib.drt.optimizer.insertion.partitioner.requests.RequestsPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearch;
+import org.matsim.contrib.drt.optimizer.insertion.RequestFleetFilter;
+import org.matsim.contrib.drt.optimizer.insertion.UnplannedRequestInserter;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.RequestData;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.requests.RequestsPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.vehicles.VehicleEntryPartitioner;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
 import org.matsim.contrib.drt.passenger.DrtRequest;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
@@ -56,8 +61,26 @@ import java.util.stream.Collectors;
 import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequestInserter.NO_INSERTION_FOUND_CAUSE;
 
 /**
- * @author michalm
+ * A parallelized implementation of {@link UnplannedRequestInserter} for dynamic ride-sharing (DRT) systems.
+ * <p>
+ * This class partitions incoming unplanned DRT requests and available vehicle entries into multiple subsets,
+ * which are then processed concurrently by a pool of {@link RequestInsertWorker} threads. The goal is to
+ * efficiently find feasible insertions for ride requests into vehicle schedules while minimizing conflicts.
+ * <p>
+ * Key features:
+ * <ul>
+ *   <li>Uses {@link RequestsPartitioner} and {@link VehicleEntryPartitioner} to divide work across threads.</li>
+ *   <li>Supports configurable collection periods and maximum conflict resolution iterations.</li>
+ *   <li>Handles request retries and conflict resolution across multiple rounds.</li>
+ *   <li>Schedules accepted requests and emits appropriate MATSim events for scheduled and rejected requests.</li>
+ * </ul>
+ * <p>
+ * This inserter is designed for high-performance, large-scale DRT simulations where parallel processing
+ * of insertion logic is essential for scalability.
+ *
+ * @author Steffen Axer
  */
+
 public class ParallelUnplannedRequestInserter implements UnplannedRequestInserter, MobsimAfterSimStepListener, MobsimEngine, MobsimBeforeCleanupListener {
 	private static final Logger LOG = LogManager.getLogger(ParallelUnplannedRequestInserter.class);
 	private Double lastProcessingTime;
@@ -65,13 +88,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final double collectionPeriod;
 	private final String mode;
 	private final Fleet fleet;
-	private final DoubleSupplier timeOfDay;
 	private final EventsManager eventsManager;
-	private final Provider<RequestInsertionScheduler> insertionSchedulerProvider;
 	private final RequestInsertionScheduler insertionScheduler;
 	private final VehicleEntry.EntryFactory vehicleEntryFactory;
 	private final Provider<DrtInsertionSearch> insertionSearch;
-	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
 	private final DrtOfferAcceptor drtOfferAcceptor;
 	private final PassengerStopDurationProvider stopDurationProvider;
 	private final RequestFleetFilter requestFleetFilter;
@@ -81,39 +101,35 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions = new ConcurrentHashMap<>();
 	private final SortedSet<DrtRequest> noSolutions = new ConcurrentSkipListSet<>(drtRequestComparator);
 	private final Queue<DrtRequest> tmpQueue = new ConcurrentLinkedQueue<>();
-
 	private final VehicleEntryPartitioner vehicleEntryPartitioner;
 	private final RequestsPartitioner requestsPartitioner;
+
 	public long nConflicting = 0;
 	public long nNonConflicting = 0;
 	public long counter = 0;
 
 
-	public ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet, MobsimTimer mobsimTimer,
+	public ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet,
 											EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
 											VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
-											DrtRequestInsertionRetryQueue insertionRetryQueue, DrtOfferAcceptor drtOfferAcceptor,
+											DrtOfferAcceptor drtOfferAcceptor,
 											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
-		this(requestsPartitioner, vehicleEntryPartitioner, threadCount, collectionPeriod, maxIter, drtCfg.getMode(), fleet, mobsimTimer::getTimeOfDay, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
-			insertionRetryQueue, insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter);
+		this(requestsPartitioner, vehicleEntryPartitioner, threadCount, collectionPeriod, maxIter, drtCfg.getMode(), fleet, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
+			insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter);
 	}
 
 	@VisibleForTesting
-	ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner,VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, String mode, Fleet fleet, DoubleSupplier timeOfDay, EventsManager eventsManager,
-									 Provider<RequestInsertionScheduler> insertionSchedulerProvider, VehicleEntry.EntryFactory vehicleEntryFactory,
-									 DrtRequestInsertionRetryQueue insertionRetryQueue, Provider<DrtInsertionSearch> insertionSearch,
+	ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, String mode, Fleet fleet, EventsManager eventsManager,
+									 Provider<RequestInsertionScheduler> insertionSchedulerProvider, VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
 									 DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
 		this.requestsPartitioner = requestsPartitioner;
 		this.vehicleEntryPartitioner = vehicleEntryPartitioner;
 		this.collectionPeriod = collectionPeriod;
 		this.mode = mode;
 		this.fleet = fleet;
-		this.timeOfDay = timeOfDay;
 		this.eventsManager = eventsManager;
-		this.insertionSchedulerProvider = insertionSchedulerProvider;
 		this.insertionScheduler = insertionSchedulerProvider.get();
 		this.vehicleEntryFactory = vehicleEntryFactory;
-		this.insertionRetryQueue = insertionRetryQueue;
 		this.insertionSearch = insertionSearch;
 		this.drtOfferAcceptor = drtOfferAcceptor;
 		this.stopDurationProvider = stopDurationProvider;
@@ -234,8 +250,8 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		Set<DrtRequest> allRejection = this.noSolutions;
 		ResolvedConflicts resolvedConflicts = resolve(this.solutions);
 
-		this.nConflicting+=resolvedConflicts.conflicts.size();
-		this.nNonConflicting+=resolvedConflicts.noConflicts.size();
+		this.nConflicting += resolvedConflicts.conflicts.size();
+		this.nNonConflicting += resolvedConflicts.noConflicts.size();
 
 		// Remaining conflicts, add up into allRejection
 		allRejection.addAll(
@@ -270,7 +286,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 		return new ResolvedConflicts(noConflicts, conflicts);
 	}
-
 
 
 	void schedule(RequestData requestData, double now) {
@@ -381,7 +396,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			throw new RuntimeException(ex);
 		}
 
-		LOG.info("Avg. conflict share {} ",nConflicting / (double) (nConflicting+nNonConflicting));
+		LOG.info("Avg. conflict share {} ", nConflicting / (double) (nConflicting + nNonConflicting));
 	}
 
 
