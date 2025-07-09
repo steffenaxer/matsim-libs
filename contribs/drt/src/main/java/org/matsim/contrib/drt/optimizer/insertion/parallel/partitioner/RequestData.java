@@ -3,7 +3,6 @@ package org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner;
 
 import com.google.common.base.Verify;
 import org.matsim.contrib.drt.optimizer.insertion.InsertionWithDetourData;
-import org.matsim.contrib.drt.passenger.AcceptedDrtRequest;
 import org.matsim.contrib.drt.passenger.DrtRequest;
 
 import java.util.*;
@@ -29,6 +28,6 @@ public class RequestData {
 		this.solution = solution;
 	}
 
-	public record InsertionRecord(Optional<InsertionWithDetourData> insertion, Optional<AcceptedDrtRequest> acceptedDrtRequest, String text) {}
+	public record InsertionRecord(Optional<InsertionWithDetourData> insertion) {}
 
 }

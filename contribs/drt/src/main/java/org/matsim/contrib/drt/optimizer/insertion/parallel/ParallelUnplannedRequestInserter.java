@@ -41,10 +41,10 @@ import org.matsim.contrib.drt.scheduler.RequestInsertionScheduler;
 import org.matsim.contrib.drt.stops.PassengerStopDurationProvider;
 import org.matsim.contrib.dvrp.fleet.DvrpVehicle;
 import org.matsim.contrib.dvrp.fleet.Fleet;
+import org.matsim.contrib.dvrp.optimizer.Request;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestRejectedEvent;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestScheduledEvent;
 import org.matsim.core.api.experimental.events.EventsManager;
-import org.matsim.core.mobsim.framework.MobsimTimer;
 import org.matsim.core.mobsim.framework.events.MobsimAfterSimStepEvent;
 import org.matsim.core.mobsim.framework.events.MobsimBeforeCleanupEvent;
 import org.matsim.core.mobsim.framework.listeners.MobsimAfterSimStepListener;
@@ -55,10 +55,10 @@ import org.matsim.core.mobsim.qsim.interfaces.MobsimEngine;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.DoubleSupplier;
 import java.util.stream.Collectors;
 
 import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequestInserter.NO_INSERTION_FOUND_CAUSE;
+import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequestInserter.OFFER_REJECTED_CAUSE;
 
 /**
  * A parallelized implementation of {@link UnplannedRequestInserter} for dynamic ride-sharing (DRT) systems.
@@ -81,7 +81,7 @@ import static org.matsim.contrib.drt.optimizer.insertion.DefaultUnplannedRequest
  * @author Steffen Axer
  */
 
-public class ParallelUnplannedRequestInserter implements UnplannedRequestInserter, MobsimAfterSimStepListener, MobsimEngine, MobsimBeforeCleanupListener {
+public class ParallelUnplannedRequestInserter implements UnplannedRequestInserter, MobsimEngine, MobsimBeforeCleanupListener {
 	private static final Logger LOG = LogManager.getLogger(ParallelUnplannedRequestInserter.class);
 	private Double lastProcessingTime;
 	private static final Comparator<DrtRequest> drtRequestComparator = Comparator.comparingDouble(DrtRequest::getSubmissionTime).thenComparing(req -> req.getId().toString());
@@ -103,25 +103,25 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final Queue<DrtRequest> tmpQueue = new ConcurrentLinkedQueue<>();
 	private final VehicleEntryPartitioner vehicleEntryPartitioner;
 	private final RequestsPartitioner requestsPartitioner;
+	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
 
 	public long nConflicting = 0;
 	public long nNonConflicting = 0;
-	public long counter = 0;
-
 
 	public ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet,
 											EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
 											VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
 											DrtOfferAcceptor drtOfferAcceptor,
-											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
+											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter,
+											DrtRequestInsertionRetryQueue insertionRetryQueue) {
 		this(requestsPartitioner, vehicleEntryPartitioner, threadCount, collectionPeriod, maxIter, drtCfg.getMode(), fleet, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
-			insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter);
+			insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter, insertionRetryQueue);
 	}
 
 	@VisibleForTesting
 	ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, String mode, Fleet fleet, EventsManager eventsManager,
 									 Provider<RequestInsertionScheduler> insertionSchedulerProvider, VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
-									 DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter) {
+									 DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, DrtRequestInsertionRetryQueue insertionRetryQueue) {
 		this.requestsPartitioner = requestsPartitioner;
 		this.vehicleEntryPartitioner = vehicleEntryPartitioner;
 		this.collectionPeriod = collectionPeriod;
@@ -137,6 +137,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		this.inserterExecutorService = new ForkJoinPool(threadCount);
 		this.workers = getRequestInsertWorker(threadCount);
 		this.maxIter = maxIter;
+		this.insertionRetryQueue = insertionRetryQueue;
 	}
 
 	List<RequestInsertWorker> getRequestInsertWorker(int n) {
@@ -145,7 +146,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			RequestInsertWorker requestInsertWorker = new RequestInsertWorker(
 				requestFleetFilter,
 				insertionSearch.get(),
-				drtOfferAcceptor,
 				solutions,
 				noSolutions);
 			workers.add(requestInsertWorker);
@@ -162,18 +162,25 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		}
 	}
 
-
-	@Override
-	public void notifyMobsimAfterSimStep(MobsimAfterSimStepEvent e) {
-
-	}
-
 	private static Set<DvrpVehicle> getScheduledVehicles(List<RequestData> toBeScheduled) {
 		return toBeScheduled.stream()
 			.map(r -> r.getSolution().insertion().get().insertion.vehicleEntry.vehicle)
 			.collect(Collectors.toSet());
 
 	}
+
+	public static boolean validateUniqueRequests(List<Collection<RequestData>> partitions) {
+		Set<Id<Request>> seen = new HashSet<>();
+		for (Collection<RequestData> partition : partitions) {
+			for (RequestData data : partition) {
+				if (!seen.add(data.getDrtRequest().getId())) {
+					throw new IllegalStateException("Duplicate DrtRequest found across partitions: " + data.getDrtRequest().getId());
+				}
+			}
+		}
+		return true; // All requests are unique per partition
+	}
+
 
 	private void solve(double now, Map<Id<DvrpVehicle>, VehicleEntry> entries, RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner partitioner) {
 		List<ForkJoinTask<?>> tasks = new ArrayList<>();
@@ -189,6 +196,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			vehiclePartitions.size(), this.workers.size()
 		);
 
+		validateUniqueRequests(requestsPartitions);
 
 		AtomicInteger i = new AtomicInteger(0);
 		for (RequestInsertWorker worker : this.workers) {
@@ -291,26 +299,42 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	void schedule(RequestData requestData, double now) {
 		var req = requestData.getDrtRequest();
 		var insertion = requestData.getSolution().insertion().get();
-		var acceptedRequest = requestData.getSolution().acceptedDrtRequest();
-		var vehicle = insertion.insertion.vehicleEntry.vehicle;
-		var pickupDropoffTaskPair = insertionScheduler.scheduleRequest(acceptedRequest.get(), insertion);
 
-		double expectedPickupTime = pickupDropoffTaskPair.pickupTask.getBeginTime();
-		expectedPickupTime = Math.max(expectedPickupTime, acceptedRequest.get().getEarliestStartTime());
-		expectedPickupTime += stopDurationProvider.calcPickupDuration(vehicle, req);
+		double dropoffDuration = insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime -
+			insertion.detourTimeInfo.dropoffDetourInfo.vehicleArrivalTime;
 
-		double expectedDropoffTime = pickupDropoffTaskPair.dropoffTask.getBeginTime();
-		expectedDropoffTime += stopDurationProvider.calcDropoffDuration(vehicle, req);
+		var acceptedRequest = drtOfferAcceptor.acceptDrtOffer(req,
+			insertion.detourTimeInfo.pickupDetourInfo.requestPickupTime,
+			insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime,
+			dropoffDuration);
 
-		eventsManager.processEvent(
-			new PassengerRequestScheduledEvent(now, mode, req.getId(), req.getPassengerIds(), vehicle.getId(),
-				expectedPickupTime, expectedDropoffTime));
-		//2System.out.println("Scheduled # "+ requestData.getDrtRequest().getId());
+		if(acceptedRequest.isPresent())
+		{
+			var vehicle = insertion.insertion.vehicleEntry.vehicle;
+			var pickupDropoffTaskPair = insertionScheduler.scheduleRequest(acceptedRequest.get(), insertion);
 
+			double expectedPickupTime = pickupDropoffTaskPair.pickupTask.getBeginTime();
+			expectedPickupTime = Math.max(expectedPickupTime, acceptedRequest.get().getEarliestStartTime());
+			expectedPickupTime += stopDurationProvider.calcPickupDuration(vehicle, req);
+
+			double expectedDropoffTime = pickupDropoffTaskPair.dropoffTask.getBeginTime();
+			expectedDropoffTime += stopDurationProvider.calcDropoffDuration(vehicle, req);
+
+			eventsManager.processEvent(
+				new PassengerRequestScheduledEvent(now, mode, req.getId(), req.getPassengerIds(), vehicle.getId(),
+					expectedPickupTime, expectedDropoffTime));
+		} else {
+			retryOrReject(req,now, OFFER_REJECTED_CAUSE);
+		}
 	}
 
-	void reject(DrtRequest req, double now, String text) {
-		eventsManager.processEvent(new PassengerRequestRejectedEvent(now, mode, req.getId(), req.getPassengerIds(), text));
+	void retryOrReject(DrtRequest req, double now, String cause) {
+		if (!insertionRetryQueue.tryAddFailedRequest(req, now)) {
+			eventsManager.processEvent(
+				new PassengerRequestRejectedEvent(now, mode, req.getId(), req.getPassengerIds(),
+					cause));
+			LOG.debug("No insertion found for drt request {} with passenger ids={} fromLinkId={}", req, req.getPassengerIds().stream().map(Object::toString).collect(Collectors.joining(",")), req.getFromLink().getId());
+		}
 	}
 
 	@Override
@@ -328,6 +352,11 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 	}
 
+	void handleInsertionRetryQueue (double now)
+	{
+		tmpQueue.addAll(insertionRetryQueue.getRequestsToRetryNow(now));
+	}
+
 	@Override
 	public void doSimStep(double time) {
 
@@ -336,9 +365,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		}
 
 		if ((time - lastProcessingTime) >= collectionPeriod) {
-
-			int w = this.workers.stream().mapToInt(RequestInsertWorker::getUnplannedRequestCount).sum();
-			LOG.debug("Unplanned requests #{} ", w);
+			handleInsertionRetryQueue(time); // Add now also elements from the insertionRetryQueue
 
 			// Solve requests the first time
 			// At this point, we need to generate vehicleEntries for all vehicles
@@ -370,7 +397,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 					|| (lastUnsolvedConflicts != null && toBeRejected.size() == lastUnsolvedConflicts) // not getting better
 					|| i == this.maxIter - 1) { // reached iter limit
 					LOG.debug("Stopped with rejections #{} ", toBeRejected.size());
-					toBeRejected.forEach(s -> reject(s, time, NO_INSERTION_FOUND_CAUSE));
+					toBeRejected.forEach(s -> retryOrReject(s, time, NO_INSERTION_FOUND_CAUSE));
 					break;
 				}
 
@@ -380,7 +407,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 				this.scheduleUnplannedRequests(toBeRejected);
 			}
 			// Clean workers ultimately
-			toBeRejected.forEach(s -> reject(s, time, NO_INSERTION_FOUND_CAUSE));
+			toBeRejected.forEach(s -> retryOrReject(s, time, NO_INSERTION_FOUND_CAUSE));
 			LOG.debug("Scheduled requests #{} ", scheduled);
 
 			this.workers.forEach(RequestInsertWorker::clean);

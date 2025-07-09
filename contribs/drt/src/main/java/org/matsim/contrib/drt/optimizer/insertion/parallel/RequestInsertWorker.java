@@ -28,18 +28,15 @@ public class RequestInsertWorker {
 	private final RequestFleetFilter requestFleetFilter;
 	private final DrtInsertionSearch insertionSearch;
 	private final Queue<RequestData> unplannedRequests = new ConcurrentLinkedQueue<>();
-	private final DrtOfferAcceptor drtOfferAcceptor;
 	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions;
 	private final SortedSet<DrtRequest> noSolutions;
 
 	public RequestInsertWorker(
 		RequestFleetFilter requestFleetFilter,
 		DrtInsertionSearch insertionSearch,
-		DrtOfferAcceptor drtOfferAcceptor,
 		Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions, SortedSet<DrtRequest> noSolutions) {
 		this.requestFleetFilter = requestFleetFilter;
 		this.insertionSearch = insertionSearch;
-		this.drtOfferAcceptor = drtOfferAcceptor;
 		this.solutions = solutions;
 		this.noSolutions = noSolutions;
 	}
@@ -69,21 +66,8 @@ public class RequestInsertWorker {
 			this.noSolutions.add(requestData.getDrtRequest());
 		} else {
 			InsertionWithDetourData insertion = best.get();
-			double dropoffDuration = insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime -
-				insertion.detourTimeInfo.dropoffDetourInfo.vehicleArrivalTime;
-
-			var acceptedRequest = drtOfferAcceptor.acceptDrtOffer(req,
-				insertion.detourTimeInfo.pickupDetourInfo.requestPickupTime,
-				insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime,
-				dropoffDuration);
-
-			if (acceptedRequest.isPresent()) {
-				var vehicle = insertion.insertion.vehicleEntry.vehicle;
-				requestData.setSolution(new RequestData.InsertionRecord(best, acceptedRequest, OFFER_ACCEPTED));
-				this.solutions.computeIfAbsent(vehicle.getId(), k -> createTreeSet()).add(requestData);
-			} else {
-				this.noSolutions.add(requestData.getDrtRequest());
-			}
+			requestData.setSolution(new RequestData.InsertionRecord(best));
+			this.solutions.computeIfAbsent(insertion.insertion.vehicleEntry.vehicle.getId(), k -> createTreeSet()).add(requestData);
 		}
 	}
 
