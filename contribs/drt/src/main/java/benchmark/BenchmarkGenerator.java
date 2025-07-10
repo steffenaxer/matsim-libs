@@ -203,8 +203,8 @@ public class BenchmarkGenerator {
 	}
 
 	public static void runParallelInserter(String uuid, int numberOfAgents, RequestsPartitioner requestsPartitioner, VehiclesPartitioner vehiclesPartitioner, int threads, double collectionPeriod, int maxIter, int insertionSearchThreadsPerWorker, String insertionSearch) {
-		String reqPartName = requestsPartitioner.getClass().getSimpleName();
-		String vehiclePartName = vehiclesPartitioner.getClass().getSimpleName();
+		String reqPartName = requestsPartitioner.name();
+		String vehiclePartName = vehiclesPartitioner.name();
 		Scenario scenario = configureScenario(numberOfAgents, insertionSearch);
 		Config config = scenario.getConfig();
 
