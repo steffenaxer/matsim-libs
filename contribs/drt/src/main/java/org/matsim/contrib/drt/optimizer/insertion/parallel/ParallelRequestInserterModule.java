@@ -24,11 +24,13 @@ import org.matsim.core.api.experimental.events.EventsManager;
 
 import java.util.Optional;
 
+import static org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.requests.LoadAwareRoundRobinRequestsPartitioner.getDefaultPartitionScalingFunction;
+
 
 public class ParallelRequestInserterModule extends AbstractDvrpModeQSimModule {
 	DrtConfigGroup drtConfigGroup;
 
-	protected ParallelRequestInserterModule(DrtConfigGroup drtConfigGroup) {
+	public ParallelRequestInserterModule(DrtConfigGroup drtConfigGroup) {
 		super(drtConfigGroup.getMode());
 		this.drtConfigGroup = drtConfigGroup;
 	}
@@ -48,7 +50,7 @@ public class ParallelRequestInserterModule extends AbstractDvrpModeQSimModule {
 				break;
 			case LoadAwareRoundRobinRequestsPartitioner:
 				bindModal(RequestsPartitioner.class).toProvider(() ->
-						new LoadAwareRoundRobinRequestsPartitioner(ParallelInserterUtils.getDefaultPartitionScalingFunction()))
+						new LoadAwareRoundRobinRequestsPartitioner(getDefaultPartitionScalingFunction()))
 					.asEagerSingleton();
 				break;
 			default:

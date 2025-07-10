@@ -162,13 +162,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		}
 	}
 
-	private static Set<DvrpVehicle> getScheduledVehicles(List<RequestData> toBeScheduled) {
-		return toBeScheduled.stream()
-			.map(r -> r.getSolution().insertion().get().insertion.vehicleEntry.vehicle)
-			.collect(Collectors.toSet());
-
-	}
-
 	public static boolean validateUniqueRequests(List<Collection<RequestData>> partitions) {
 		Set<Id<Request>> seen = new HashSet<>();
 		for (Collection<RequestData> partition : partitions) {
@@ -296,7 +289,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	}
 
 
-	void schedule(RequestData requestData, double now) {
+	Optional<DvrpVehicle> schedule(RequestData requestData, double now) {
 		var req = requestData.getDrtRequest();
 		var insertion = requestData.getSolution().insertion().get();
 
@@ -322,8 +315,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			eventsManager.processEvent(
 				new PassengerRequestScheduledEvent(now, mode, req.getId(), req.getPassengerIds(), vehicle.getId(),
 					expectedPickupTime, expectedDropoffTime));
+			return Optional.of(vehicle);
 		} else {
 			retryOrReject(req, now, OFFER_REJECTED_CAUSE);
+			return Optional.empty();
 		}
 	}
 
@@ -382,8 +377,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 				// Schedule and clear
 				List<RequestData> toBeScheduled = consolidationResult.toBeScheduled;
-				toBeScheduled.forEach(r -> schedule(r, time));
-				Set<DvrpVehicle> scheduledVehicles = getScheduledVehicles(toBeScheduled);
+				Set<DvrpVehicle> scheduledVehicles = toBeScheduled.stream()
+					.map(r -> schedule(r, time))
+					.flatMap(Optional::stream)
+					.collect(Collectors.toSet());
 				this.solutions.clear(); // Clean after having them scheduled!
 				scheduled += toBeScheduled.size();
 
@@ -415,12 +412,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	@Override
 	public void notifyMobsimBeforeCleanup(MobsimBeforeCleanupEvent e) {
 		inserterExecutorService.shutdown();
-		try {
-			inserterExecutorService.awaitTermination(5, TimeUnit.SECONDS);
-		} catch (InterruptedException ex) {
-			throw new RuntimeException(ex);
-		}
-
 		LOG.info("Avg. conflict share {} ", nConflicting / (double) (nConflicting + nNonConflicting));
 	}
 

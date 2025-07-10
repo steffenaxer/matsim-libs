@@ -330,7 +330,7 @@ public class DrtConfigGroup extends ReflectiveConfigGroupWithConfigurableParamet
 
 		//parallel inserter (optional)
 		addDefinition(DrtParallelInserterParams.SET_NAME, DrtParallelInserterParams::new,
-			() -> prebookingParams,
+			() -> drtParallelInserterParams,
 			params -> drtParallelInserterParams = (DrtParallelInserterParams)params);
 
 		// estimator (optional)

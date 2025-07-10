@@ -15,7 +15,7 @@ public class DrtParallelInserterParams extends ReflectiveConfigGroup {
 		ShiftingRoundRobinVehicleEntryPartitioner
 	}
 
-	public enum RequestsPartitioner {RoundRobinRequestsPartitioner, LoadAwareRoundRobinRequestsPartitioner,}
+	public enum RequestsPartitioner {RoundRobinRequestsPartitioner, LoadAwareRoundRobinRequestsPartitioner}
 
 	public static final String SET_NAME = "parallelInserter";
 
