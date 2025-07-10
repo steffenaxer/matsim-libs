@@ -25,6 +25,7 @@ import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.drt.optimizer.QsimScopeForkJoinPool;
 import org.matsim.contrib.drt.optimizer.insertion.DetourTimeEstimator;
 import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearch;
+import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearchManager;
 import org.matsim.contrib.drt.optimizer.insertion.InsertionCostCalculator;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.stops.StopTimeCalculator;
@@ -57,14 +58,16 @@ public class ExtensiveInsertionSearchQSimModule extends AbstractDvrpModeQSimModu
 			return admissibleTimeEstimator;
 		}));
 
-		bindModal(DrtInsertionSearch.class).toProvider(modalProvider(getter -> {
+		addModalComponent(DrtInsertionSearchManager.class, modalProvider(getter -> {
 			var insertionCostCalculator = getter.getModal(InsertionCostCalculator.class);
 			var provider = ExtensiveInsertionProvider.create(drtCfg, insertionCostCalculator,
 				getter.getModal(QsimScopeForkJoinPool.class).getPool(),
 				getter.getModal(StopTimeCalculator.class), getter.getModal(DetourTimeEstimator.class));
-			return new ExtensiveInsertionSearch(provider, getter.getModal(MultiInsertionDetourPathCalculatorManager.class).create(),
-				insertionCostCalculator, getter.getModal(StopTimeCalculator.class));
+			return new DrtInsertionSearchManager(() -> new ExtensiveInsertionSearch(provider, getter.getModal(MultiInsertionDetourPathCalculatorManager.class).create(),
+				insertionCostCalculator, getter.getModal(StopTimeCalculator.class)));
 		}));
+
+		bindModal(DrtInsertionSearch.class).toProvider(modalProvider( getter -> getter.getModal(DrtInsertionSearchManager.class).create()));
 
 		addModalComponent(MultiInsertionDetourPathCalculatorManager.class,
 				new ModalProviders.AbstractProvider<>(getMode(), DvrpModes::mode) {

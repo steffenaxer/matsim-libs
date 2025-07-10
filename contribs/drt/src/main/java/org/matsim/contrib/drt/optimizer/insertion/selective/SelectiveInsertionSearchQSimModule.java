@@ -24,6 +24,7 @@ import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.drt.optimizer.QsimScopeForkJoinPool;
 import org.matsim.contrib.drt.optimizer.insertion.DetourTimeEstimator;
 import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearch;
+import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearchManager;
 import org.matsim.contrib.drt.optimizer.insertion.InsertionCostCalculator;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.stops.StopTimeCalculator;
@@ -57,7 +58,7 @@ public class SelectiveInsertionSearchQSimModule extends AbstractDvrpModeQSimModu
 			return restrictiveDetourTimeEstimator;
 		}));
 
-		addModalComponent(SelectiveInsertionSearch.class, modalProvider(getter -> {
+		addModalComponent(DrtInsertionSearchManager.class, modalProvider(getter -> {
 			SelectiveInsertionProvider provider = SelectiveInsertionProvider.create(
 					getter.getModal(InsertionCostCalculator.class),
 					getter.getModal(QsimScopeForkJoinPool.class).getPool(),
@@ -69,10 +70,11 @@ public class SelectiveInsertionSearchQSimModule extends AbstractDvrpModeQSimModu
 			//   so we do not want to check for time window violations
 			//  Re (*) currently, free-speed travel times are quite accurate. We still need to adjust them to different times of day.
 			InsertionCostCalculator zeroCostInsertionCostCalculator = (drtRequest, insertion, detourTimeInfo) -> 0;
-			return new SelectiveInsertionSearch(provider, getter.getModal(SingleInsertionDetourPathCalculatorManager.class).create(),
-					zeroCostInsertionCostCalculator, drtCfg, getter.get(MatsimServices.class), getter.getModal(StopTimeCalculator.class));
+			return new DrtInsertionSearchManager(() -> new SelectiveInsertionSearch(provider, getter.getModal(SingleInsertionDetourPathCalculatorManager.class).create(),
+				zeroCostInsertionCostCalculator, drtCfg, getter.get(MatsimServices.class), getter.getModal(StopTimeCalculator.class)));
 		}));
-		bindModal(DrtInsertionSearch.class).to(modalKey(SelectiveInsertionSearch.class));
+
+		bindModal(DrtInsertionSearch.class).toProvider(modalProvider( getter -> getter.getModal(DrtInsertionSearchManager.class).create()));
 
 		addModalComponent(SingleInsertionDetourPathCalculatorManager.class,
 				new ModalProviders.AbstractProvider<>(getMode(), DvrpModes::mode) {

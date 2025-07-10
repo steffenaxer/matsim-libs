@@ -43,6 +43,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.matsim.contrib.drt.optimizer.insertion.InsertionCostCalculator.INFEASIBLE_SOLUTION_COST;
 import static org.matsim.contrib.drt.optimizer.insertion.InsertionDetourTimeCalculator.DetourTimeInfo;
@@ -50,7 +51,7 @@ import static org.matsim.contrib.drt.optimizer.insertion.InsertionDetourTimeCalc
 /**
  * @author steffenaxer
  */
-final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch {
+final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch, MobsimBeforeCleanupListener {
 	private final RepeatedSelectiveInsertionProvider insertionProvider;
 	private final SingleInsertionDetourPathCalculator detourPathCalculator;
 	private final InsertionDetourTimeCalculator detourTimeCalculator;
@@ -60,6 +61,8 @@ final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch {
 	private final TravelTimeMatrix travelTimeMatrix;
 	private final AdaptiveTravelTimeMatrix adaptiveTravelTimeMatrix;
 	private final RepeatedSelectiveInsertionSearchParams insertionSearchParams;
+	private static final AtomicInteger instanceCounter = new AtomicInteger(0);
+	private final int instanceId;
 
 	public RepeatedSelectiveInsertionSearch(RepeatedSelectiveInsertionProvider insertionProvider,
 											SingleInsertionDetourPathCalculator detourPathCalculator, InsertionCostCalculator insertionCostCalculator,
@@ -73,6 +76,7 @@ final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch {
 		this.mode = drtCfg.getMode();
 		this.travelTimeMatrix = travelTimeMatrix;
 		this.adaptiveTravelTimeMatrix = adaptiveTravelTimeMatrix;
+		this.instanceId = instanceCounter.incrementAndGet();
 	}
 
 	@Override
@@ -95,7 +99,7 @@ final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch {
             var insertionWithDetourData = new InsertionWithDetourData(insertion, insertionDetourData,
                     detourTimeCalculator.calculateDetourTimeInfo(insertion, insertionDetourData, drtRequest));
 
-            //collectDifferences(drtRequest, selectedInsertion.detourTimeInfo, insertionWithDetourData.detourTimeInfo);
+            collectDifferences(drtRequest, selectedInsertion.detourTimeInfo, insertionWithDetourData.detourTimeInfo);
 
             double insertionCost = insertionCostCalculator.calculate(drtRequest, insertion,
                     insertionWithDetourData.detourTimeInfo);
@@ -150,19 +154,19 @@ final class RepeatedSelectiveInsertionSearch implements DrtInsertionSearch {
 		}
 	}
 
-//	@Override
-//	public void notifyMobsimBeforeCleanup(@SuppressWarnings("rawtypes") MobsimBeforeCleanupEvent event) {
-//		String filename = matsimServices.getControlerIO()
-//				.getIterationFilename(matsimServices.getIterationNumber(),
-//						mode + "_selective_insertion_detour_time_estimation_errors.csv");
-//		try (CSVWriter writer = new CSVWriter(Files.newBufferedWriter(Paths.get(filename)), ';', '"', '"', "\n");) {
-//			writer.writeNext(new String[] { "type", "hour", "count", "mean", "std_dev", "min", "max" }, false);
-//			pickupTimeLossStats.forEach((hour, stats) -> printStats(writer, "pickup", hour, stats));
-//			dropoffTimeLossStats.forEach((hour, stats) -> printStats(writer, "dropoff", hour, stats));
-//		} catch (IOException e) {
-//			e.printStackTrace();
-//		}
-//	}
+	@Override
+	public void notifyMobsimBeforeCleanup(@SuppressWarnings("rawtypes") MobsimBeforeCleanupEvent event) {
+		String filename = matsimServices.getControlerIO()
+				.getIterationFilename(matsimServices.getIterationNumber(),
+						mode + "_repeated_insertion_detour_time_estimation_errors"+instanceId+".csv");
+		try (CSVWriter writer = new CSVWriter(Files.newBufferedWriter(Paths.get(filename)), ';', '"', '"', "\n");) {
+			writer.writeNext(new String[] { "type", "hour", "count", "mean", "std_dev", "min", "max" }, false);
+			pickupTimeLossStats.forEach((hour, stats) -> printStats(writer, "pickup", hour, stats));
+			dropoffTimeLossStats.forEach((hour, stats) -> printStats(writer, "dropoff", hour, stats));
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
 
 	private void printStats(CSVWriter writer, String type, int hour, SummaryStatistics stats) {
 		writer.writeNext(new String[] { type, hour + "", stats.getN() + "", stats.getMean() + "",
