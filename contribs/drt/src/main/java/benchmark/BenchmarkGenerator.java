@@ -7,12 +7,15 @@ import org.matsim.contrib.drt.optimizer.*;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsParams;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsSetImpl;
 import org.matsim.contrib.drt.optimizer.insertion.*;
+import org.matsim.contrib.drt.optimizer.insertion.extensive.ExtensiveInsertionSearchParams;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.DrtParallelInserterParams;
 import org.matsim.contrib.drt.optimizer.insertion.parallel.ParallelUnplannedRequestInserter;
 import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.requests.LoadAwareRoundRobinRequestsPartitioner;
 import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.requests.RequestsPartitioner;
 import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.vehicles.ShiftingRoundRobinVehicleEntryPartitioner;
 import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.vehicles.VehicleEntryPartitioner;
 import org.matsim.contrib.drt.optimizer.insertion.repeatedselective.RepeatedSelectiveInsertionSearchParams;
+import org.matsim.contrib.drt.optimizer.insertion.selective.SelectiveInsertionSearchParams;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
 import org.matsim.contrib.drt.routing.DrtRoute;
 import org.matsim.contrib.drt.routing.DrtRouteFactory;
@@ -59,7 +62,7 @@ public class BenchmarkGenerator {
 	static NumberFormat usFormat = NumberFormat.getNumberInstance(Locale.US);
 	static List<String[]> benchmarkResults = new ArrayList<>();
 	// Scenario Setup
-	static List<Integer> numberOfAgentsList = List.of(200_000);
+	static List<Integer> numberOfAgentsList = List.of(5000);
 	static int expectedRidesPerVehicle = 7;
 	static double endTime = 24 * 3600.;
 	static int iterations = 1;
@@ -69,7 +72,7 @@ public class BenchmarkGenerator {
 	static List<RequestsPartitioner> requestsPartitioners = List.of(new LoadAwareRoundRobinRequestsPartitioner(getDefaultPartitionScalingFunction()));
 	static List<VehicleEntryPartitioner> vehicleEntryPartitioners = List.of(new ShiftingRoundRobinVehicleEntryPartitioner());
 	static List<Integer> collectionPeriods = List.of(30);
-	static List<Integer> workersList = List.of(4);
+	static List<Integer> workersList = List.of(1);
 	static List<Integer> maxIterList = List.of(2);
 	static List<Integer> insertionSearchThreadsPerWorkersList = List.of(4);
 
@@ -100,9 +103,12 @@ public class BenchmarkGenerator {
 		DrtConfigGroup drtConfig = new DrtConfigGroup();
 		drtConfig.setVehiclesFile(fleet.toString());
 		drtConfig.setStopDuration(60);
-		RepeatedSelectiveInsertionSearchParams insertionParams = new RepeatedSelectiveInsertionSearchParams();
+		DrtInsertionSearchParams insertionParams = new ExtensiveInsertionSearchParams();
 		drtConfig.setDrtInsertionSearchParams(insertionParams);
 		multiModeDrtConfigGroup.addDrtConfigGroup(drtConfig);
+
+		DrtParallelInserterParams drtParallelInserterParams = new DrtParallelInserterParams();
+		drtConfig.addParameterSet(drtParallelInserterParams);
 
 		DrtOptimizationConstraintsParams drtOptimizationConstraintsParams = drtConfig.addOrGetDrtOptimizationConstraintsParams();
 		DrtOptimizationConstraintsSetImpl optimizationConstraintsSet = drtOptimizationConstraintsParams.addOrGetDefaultDrtOptimizationConstraintsSet();
@@ -249,32 +255,7 @@ public class BenchmarkGenerator {
 
 	static void installParallelUnplannedRequestInserter(Controler controler, DrtConfigGroup drtConfigGroup, RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, int worker, double collectionPeriod, int maxIter, int insertionSearchThreadsPerWorker) {
 
-		controler.addOverridingQSimModule(new AbstractDvrpModeQSimModule(drtConfigGroup.getMode()) {
-			@Override
-			protected void configureQSim() {
-				bindModal(UnplannedRequestInserter.class).toProvider(modalProvider(
-					getter -> new ParallelUnplannedRequestInserter(
-						requestsPartitioner,
-						vehicleEntryPartitioner,
-						worker,
-						collectionPeriod,
-						maxIter,
-						drtConfigGroup,
-						getter.getModal(Fleet.class),
-						getter.get(EventsManager.class),
-						() -> getter.getModal(RequestInsertionScheduler.class),
-						getter.getModal(VehicleEntry.EntryFactory.class),
-						() -> getter.getModal(DrtInsertionSearch.class),
-						getter.getModal(DrtOfferAcceptor.class),
-						getter.getModal(PassengerStopDurationProvider.class),
-						getter.getModal(RequestFleetFilter.class),
-						getter.getModal(DrtRequestInsertionRetryQueue.class)
-					))).asEagerSingleton();
 
-				addModalComponent(QsimScopeForkJoinPool.class,
-					() -> new MultiQSimScopeForkJoinPoolHolder(insertionSearchThreadsPerWorker));
-			}
-		});
 	}
 
 	public static String getValueFromCSV(String filePath, String field) {

@@ -108,23 +108,23 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	public long nConflicting = 0;
 	public long nNonConflicting = 0;
 
-	public ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, DrtConfigGroup drtCfg, Fleet fleet,
+	public ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, DrtParallelInserterParams drtParallelInserterParams, DrtConfigGroup drtCfg, Fleet fleet,
 											EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
 											VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
 											DrtOfferAcceptor drtOfferAcceptor,
 											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter,
 											DrtRequestInsertionRetryQueue insertionRetryQueue) {
-		this(requestsPartitioner, vehicleEntryPartitioner, threadCount, collectionPeriod, maxIter, drtCfg.getMode(), fleet, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
+		this(requestsPartitioner, vehicleEntryPartitioner, drtParallelInserterParams, drtCfg.getMode(), fleet, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
 			insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter, insertionRetryQueue);
 	}
 
 	@VisibleForTesting
-	ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, int threadCount, double collectionPeriod, int maxIter, String mode, Fleet fleet, EventsManager eventsManager,
+	ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, DrtParallelInserterParams drtParallelInserterParams, String mode, Fleet fleet, EventsManager eventsManager,
 									 Provider<RequestInsertionScheduler> insertionSchedulerProvider, VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
 									 DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, DrtRequestInsertionRetryQueue insertionRetryQueue) {
 		this.requestsPartitioner = requestsPartitioner;
 		this.vehicleEntryPartitioner = vehicleEntryPartitioner;
-		this.collectionPeriod = collectionPeriod;
+		this.collectionPeriod = drtParallelInserterParams.getCollectionPeriod();
 		this.mode = mode;
 		this.fleet = fleet;
 		this.eventsManager = eventsManager;
@@ -134,9 +134,9 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		this.drtOfferAcceptor = drtOfferAcceptor;
 		this.stopDurationProvider = stopDurationProvider;
 		this.requestFleetFilter = requestFleetFilter;
-		this.inserterExecutorService = new ForkJoinPool(threadCount);
-		this.workers = getRequestInsertWorker(threadCount);
-		this.maxIter = maxIter;
+		this.inserterExecutorService = new ForkJoinPool(drtParallelInserterParams.getMaxPartitions());
+		this.workers = getRequestInsertWorker(drtParallelInserterParams.getMaxPartitions());
+		this.maxIter = drtParallelInserterParams.getMaxIterations();
 		this.insertionRetryQueue = insertionRetryQueue;
 	}
 
@@ -308,8 +308,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime,
 			dropoffDuration);
 
-		if(acceptedRequest.isPresent())
-		{
+		if (acceptedRequest.isPresent()) {
 			var vehicle = insertion.insertion.vehicleEntry.vehicle;
 			var pickupDropoffTaskPair = insertionScheduler.scheduleRequest(acceptedRequest.get(), insertion);
 
@@ -324,7 +323,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 				new PassengerRequestScheduledEvent(now, mode, req.getId(), req.getPassengerIds(), vehicle.getId(),
 					expectedPickupTime, expectedDropoffTime));
 		} else {
-			retryOrReject(req,now, OFFER_REJECTED_CAUSE);
+			retryOrReject(req, now, OFFER_REJECTED_CAUSE);
 		}
 	}
 
@@ -352,8 +351,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 	}
 
-	void handleInsertionRetryQueue (double now)
-	{
+	void handleInsertionRetryQueue(double now) {
 		tmpQueue.addAll(insertionRetryQueue.getRequestsToRetryNow(now));
 	}
 

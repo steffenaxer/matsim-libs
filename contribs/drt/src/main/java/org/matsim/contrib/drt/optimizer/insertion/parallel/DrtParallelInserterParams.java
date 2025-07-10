@@ -1,37 +1,64 @@
 package org.matsim.contrib.drt.optimizer.insertion.parallel;
 
+import jakarta.validation.constraints.NotNull;
 import org.matsim.core.config.ReflectiveConfigGroup;
 
 
-public class ParallelInserterParams extends ReflectiveConfigGroup {
-	enum VehiclePartitioner {
+public class DrtParallelInserterParams extends ReflectiveConfigGroup {
+
+	public DrtParallelInserterParams() {
+		super(SET_NAME);
+	}
+
+	public enum VehiclesPartitioner {
 		ReplicatingVehicleEntryPartitioner, RoundRobinVehicleEntryPartitioner,
 		ShiftingRoundRobinVehicleEntryPartitioner
 	}
 
-	enum RequestPartitioner {RoundRobinRequestsPartitioner, LoadAwareRoundRobinRequestsPartitioner,}
+	public enum RequestsPartitioner {RoundRobinRequestsPartitioner, LoadAwareRoundRobinRequestsPartitioner,}
 
-	public static final String GROUP_NAME = "parallelInserter";
+	public static final String SET_NAME = "parallelInserter";
 
-	@Parameter("Time window (in seconds) for collecting incoming requests before processing begins.")
+	@Comment("Time window (in seconds) for collecting incoming requests before processing begins.")
 	private double collectionPeriod = 15.0;
 
-	@Parameter("Maximum number of conflict resolution iterations allowed. " +
+	@Comment("Maximum number of conflict resolution iterations allowed. " +
 		"Each additional iteration may resolve conflicts where multiple partitions attempt to use the same vehicle.")
 	private int maxIterations = 2;
 
-	@Parameter("Maximum number of partitions. Each partition handles a subset of requests and vehicles. " +
+	@Comment("Maximum number of partitions. Each partition handles a subset of requests and vehicles. " +
 		"Note: Each partition requires a separate insertion search instance. " +
 		"See also: insertionSearchThreadsPerWorker.")
 	private int maxPartitions = 4;
 
-	@Parameter("Number of insertion search threads allocated per worker.")
+	@Comment("Number of insertion search threads allocated per worker.")
 	private int insertionSearchThreadsPerWorker = 4;
 
-
-	public ParallelInserterParams() {
-		super(GROUP_NAME);
+	@StringGetter("vehiclesPartitioner")
+	public VehiclesPartitioner getVehiclesPartitioner() {
+		return vehiclesPartitioner;
 	}
+
+	@StringSetter("vehiclesPartitioner")
+	public void setVehiclesPartitioner(VehiclesPartitioner vehiclesPartitioner) {
+		this.vehiclesPartitioner = vehiclesPartitioner;
+	}
+
+	@StringGetter("requestsPartitioner")
+	public RequestsPartitioner getRequestsPartitioner() {
+		return requestsPartitioner;
+	}
+
+	@StringSetter("requestsPartitioner")
+	public void setRequestsPartitioner(RequestsPartitioner requestPartitioner) {
+		this.requestsPartitioner = requestPartitioner;
+	}
+
+	@NotNull
+	VehiclesPartitioner vehiclesPartitioner = VehiclesPartitioner.ShiftingRoundRobinVehicleEntryPartitioner;
+
+	@NotNull
+	RequestsPartitioner requestsPartitioner = RequestsPartitioner.LoadAwareRoundRobinRequestsPartitioner;
 
 	@StringGetter("collectionPeriod")
 	public double getCollectionPeriod() {
