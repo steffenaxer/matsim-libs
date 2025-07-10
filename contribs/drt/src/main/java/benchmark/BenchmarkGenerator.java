@@ -58,7 +58,7 @@ public class BenchmarkGenerator {
 	static List<Integer> numberOfAgentsList = List.of(50_000);
 	static int expectedRidesPerVehicle = 7;
 	static double endTime = 24 * 3600.;
-	static int iterations = 1;
+	static int iterations = 0;
 
 
 	// ParallelInsertion Setup
