@@ -468,6 +468,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		NumberAxis partitionsAxis = new NumberAxis("Active Partitions");
 		partitionsAxis.setAutoRangeIncludesZero(false);
 		partitionsAxis.setLowerBound(1);
+		partitionsAxis.setUpperBound(this.drtParallelInserterParams.getMaxPartitions() + 1);
 
 		XYPlot partitionsPlot = new XYPlot(partitionsDataset, null, partitionsAxis, null);
 		XYLineAndShapeRenderer partitionsRenderer = new XYLineAndShapeRenderer(true, false);
@@ -479,11 +480,11 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		combinedPlot.add(densityPlot, 1);
 		combinedPlot.add(partitionsPlot, 1);
 
-		var chart = new JFreeChart("Thread Activity Over Time", JFreeChart.DEFAULT_TITLE_FONT, combinedPlot, true);
+		var chart = new JFreeChart("Active Partitions Over Time", JFreeChart.DEFAULT_TITLE_FONT, combinedPlot, true);
 
 
 		String filename = matsimServices.getControlerIO().getIterationFilename(
-			matsimServices.getIterationNumber(), mode + "_threadActivityPlot.png"
+			matsimServices.getIterationNumber(), mode + "_partitionActivity.png"
 		);
 
 		try {

@@ -91,7 +91,7 @@ public class BenchmarkGenerator {
 
 		GridNetworkGenerator.generateNetwork(scenario);
 
-		PopulationGenerator.generatePopulation(numberOfAgents, scenario);
+		PopulationGenerator.generatePopulation(numberOfAgents, scenario, true);
 		Path fleet = FleetGenerator.generateFleet(scenario, numberOfVehicles, 6, endTime, "fleet/fleet.xml");
 
 		MultiModeDrtConfigGroup multiModeDrtConfigGroup = new MultiModeDrtConfigGroup();

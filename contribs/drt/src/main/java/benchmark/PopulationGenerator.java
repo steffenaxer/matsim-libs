@@ -15,7 +15,28 @@ public class PopulationGenerator {
 
 	private static final Random random = MatsimRandom.getLocalInstance();
 
-	public static void generatePopulation(int numberOfAgents, Scenario scenario) {
+	private static double sampleDepartureTime(boolean timeDependent) {
+		if (!timeDependent) {
+			return random.nextDouble() * 86400;
+		}
+
+
+		double morningPeak = gaussianSample(8 * 3600, 1.5 * 3600);
+		double eveningPeak = gaussianSample(17 * 3600, 2 * 3600);
+
+		return random.nextDouble() < 0.7 ? morningPeak : eveningPeak;
+	}
+
+	private static double gaussianSample(double mean, double stdDev) {
+		double sample;
+		do {
+			sample = mean + random.nextGaussian() * stdDev;
+		} while (sample < 0 || sample > 86400);
+		return sample;
+	}
+
+
+	public static void generatePopulation(int numberOfAgents, Scenario scenario, boolean timeDependent) {
 		Population population = scenario.getPopulation();
 		List<Link> links = new ArrayList<>(scenario.getNetwork().getLinks().values());
 
@@ -75,7 +96,7 @@ public class PopulationGenerator {
 				destinationLink = weightedRandomLink.get();
 			} while (destinationLink.equals(originLink));
 
-			double departureTime = random.nextDouble() * 86400;
+			double departureTime = sampleDepartureTime(timeDependent);
 
 			Person person = population.getFactory().createPerson(Id.createPersonId("person_" + i));
 			Plan plan = population.getFactory().createPlan();
