@@ -67,7 +67,7 @@ public class BenchmarkGenerator {
 	static List<String> insertionSearchList = List.of(ExtensiveInsertionSearchParams.SET_NAME, SelectiveInsertionSearchParams.SET_NAME, RepeatedSelectiveInsertionSearchParams.SET_NAME);
 
 	static List<Integer> collectionPeriods = List.of(30);
-	static List<Integer> workersList = List.of(2, 4);
+	static List<Integer> workersList = List.of(4);
 	static List<Integer> maxIterList = List.of(2);
 	static List<Integer> insertionSearchThreadsPerWorkersList = List.of(4);
 
@@ -220,6 +220,7 @@ public class BenchmarkGenerator {
 		drtParallelInserterParams.setInsertionSearchThreadsPerWorker(insertionSearchThreadsPerWorker);
 		drtParallelInserterParams.setVehiclesPartitioner(vehiclesPartitioner);
 		drtParallelInserterParams.setRequestsPartitioner(requestsPartitioner);
+		drtParallelInserterParams.setLogThreadActivity(true);
 		drtConfig.addParameterSet(drtParallelInserterParams);
 
 		// Run the simulation
@@ -259,8 +260,8 @@ public class BenchmarkGenerator {
 
 		for (String insertionSearch : insertionSearchList) {
 			for (Integer numberOfAgents : numberOfAgentsList) {
-				runBaseline(UUID.randomUUID().toString(), numberOfAgents, insertionSearch);
-				writeBenchmark();
+//				runBaseline(UUID.randomUUID().toString(), numberOfAgents, insertionSearch);
+//				writeBenchmark();
 				for (RequestsPartitioner requestsPartitioner : requestsPartitioners) {
 					for (VehiclesPartitioner vehicleEntryPartitioner : vehicleEntryPartitioners) {
 						for (Integer collectionPeriod : collectionPeriods) {

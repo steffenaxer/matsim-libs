@@ -24,6 +24,14 @@ import com.google.common.base.Verify;
 import com.google.inject.Provider;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jfree.chart.ChartUtils;
+import org.jfree.chart.JFreeChart;
+import org.jfree.chart.axis.NumberAxis;
+import org.jfree.chart.plot.CombinedDomainXYPlot;
+import org.jfree.chart.plot.XYPlot;
+import org.jfree.chart.renderer.xy.XYLineAndShapeRenderer;
+import org.jfree.data.xy.XYSeries;
+import org.jfree.data.xy.XYSeriesCollection;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.Identifiable;
 import org.matsim.contrib.drt.optimizer.DrtRequestInsertionRetryQueue;
@@ -45,13 +53,18 @@ import org.matsim.contrib.dvrp.optimizer.Request;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestRejectedEvent;
 import org.matsim.contrib.dvrp.passenger.PassengerRequestScheduledEvent;
 import org.matsim.core.api.experimental.events.EventsManager;
+import org.matsim.core.controler.MatsimServices;
 import org.matsim.core.mobsim.framework.events.MobsimAfterSimStepEvent;
 import org.matsim.core.mobsim.framework.events.MobsimBeforeCleanupEvent;
 import org.matsim.core.mobsim.framework.listeners.MobsimAfterSimStepListener;
 import org.matsim.core.mobsim.framework.listeners.MobsimBeforeCleanupListener;
 import org.matsim.core.mobsim.qsim.InternalInterface;
 import org.matsim.core.mobsim.qsim.interfaces.MobsimEngine;
+import org.matsim.core.utils.io.IOUtils;
 
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -104,27 +117,31 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final VehicleEntryPartitioner vehicleEntryPartitioner;
 	private final RequestsPartitioner requestsPartitioner;
 	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
+	private final List<DataRecord> dataRecordsLog = new ArrayList<>();
+	private final DrtParallelInserterParams drtParallelInserterParams;
+	private final MatsimServices matsimServices;
 
 	public long nConflicting = 0;
 	public long nNonConflicting = 0;
 
-	public ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, DrtParallelInserterParams drtParallelInserterParams, DrtConfigGroup drtCfg, Fleet fleet,
+	public ParallelUnplannedRequestInserter(MatsimServices matsimServices, RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, DrtParallelInserterParams drtParallelInserterParams, DrtConfigGroup drtCfg, Fleet fleet,
 											EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
 											VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
 											DrtOfferAcceptor drtOfferAcceptor,
 											PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter,
 											DrtRequestInsertionRetryQueue insertionRetryQueue) {
-		this(requestsPartitioner, vehicleEntryPartitioner, drtParallelInserterParams, drtCfg.getMode(), fleet, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
+		this(matsimServices, requestsPartitioner, vehicleEntryPartitioner, drtParallelInserterParams, drtCfg.getMode(), fleet, eventsManager, insertionSchedulerProvider, vehicleEntryFactory,
 			insertionSearch, drtOfferAcceptor, stopDurationProvider, requestFleetFilter, insertionRetryQueue);
 	}
 
 	@VisibleForTesting
-	ParallelUnplannedRequestInserter(RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, DrtParallelInserterParams drtParallelInserterParams, String mode, Fleet fleet, EventsManager eventsManager,
+	ParallelUnplannedRequestInserter(MatsimServices matsimServices, RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, DrtParallelInserterParams drtParallelInserterParams, String mode, Fleet fleet, EventsManager eventsManager,
 									 Provider<RequestInsertionScheduler> insertionSchedulerProvider, VehicleEntry.EntryFactory vehicleEntryFactory, Provider<DrtInsertionSearch> insertionSearch,
 									 DrtOfferAcceptor drtOfferAcceptor, PassengerStopDurationProvider stopDurationProvider, RequestFleetFilter requestFleetFilter, DrtRequestInsertionRetryQueue insertionRetryQueue) {
 		this.requestsPartitioner = requestsPartitioner;
 		this.vehicleEntryPartitioner = vehicleEntryPartitioner;
 		this.collectionPeriod = drtParallelInserterParams.getCollectionPeriod();
+		this.drtParallelInserterParams = drtParallelInserterParams;
 		this.mode = mode;
 		this.fleet = fleet;
 		this.eventsManager = eventsManager;
@@ -138,6 +155,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		this.workers = getRequestInsertWorker(drtParallelInserterParams.getMaxPartitions());
 		this.maxIter = drtParallelInserterParams.getMaxIterations();
 		this.insertionRetryQueue = insertionRetryQueue;
+		this.matsimServices = matsimServices;
 	}
 
 	List<RequestInsertWorker> getRequestInsertWorker(int n) {
@@ -178,7 +196,15 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private void solve(double now, Map<Id<DvrpVehicle>, VehicleEntry> entries, RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner partitioner) {
 		List<ForkJoinTask<?>> tasks = new ArrayList<>();
 
+		int requests = this.tmpQueue.size();
 		List<Collection<RequestData>> requestsPartitions = requestsPartitioner.partition(this.tmpQueue, this.workers.size(), this.collectionPeriod);
+
+		if (drtParallelInserterParams.isLogThreadActivity()) {
+			int activePartitions = (int) requestsPartitions.stream()
+				.filter(partition -> partition != null && !partition.isEmpty())
+				.count();
+			this.dataRecordsLog.add(new DataRecord(now, (int) (requests / this.collectionPeriod * 60), activePartitions));
+		}
 
 		// The number of request partitions indicate the number of required vehicle partitions
 		List<Map<Id<DvrpVehicle>, VehicleEntry>> vehiclePartitions = partitioner.partition(entries, requestsPartitions);
@@ -411,9 +437,92 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 	@Override
 	public void notifyMobsimBeforeCleanup(MobsimBeforeCleanupEvent e) {
+		plotDataRecordLogWithDualAxis();
+		dumpDataRecordLog();
 		inserterExecutorService.shutdown();
 		LOG.info("Avg. conflict share {} ", nConflicting / (double) (nConflicting + nNonConflicting));
 	}
+
+	public void plotDataRecordLogWithDualAxis() {
+		if (!this.drtParallelInserterParams.isLogThreadActivity()) return;
+
+
+		XYSeries densitySeries = new XYSeries("Requests Density");
+
+		XYSeries partitionsSeries = new XYSeries("Active Partitions");
+
+		for (DataRecord record : dataRecordsLog) {
+			densitySeries.add(record.time, record.requestsDensityPerMinute);
+			partitionsSeries.add(record.time, record.activePartitions);
+		}
+
+		XYSeriesCollection densityDataset = new XYSeriesCollection(densitySeries);
+		NumberAxis densityAxis = new NumberAxis("Requests Density [req/min]");
+		XYPlot densityPlot = new XYPlot(densityDataset, null, densityAxis, null);
+		XYLineAndShapeRenderer densityRenderer = new XYLineAndShapeRenderer(true, false); // Linien ohne Punkte
+		densityPlot.setRenderer(densityRenderer);
+
+
+		XYSeriesCollection partitionsDataset = new XYSeriesCollection(partitionsSeries);
+
+		NumberAxis partitionsAxis = new NumberAxis("Active Partitions");
+		partitionsAxis.setAutoRangeIncludesZero(false);
+		partitionsAxis.setLowerBound(1);
+
+		XYPlot partitionsPlot = new XYPlot(partitionsDataset, null, partitionsAxis, null);
+		XYLineAndShapeRenderer partitionsRenderer = new XYLineAndShapeRenderer(true, false);
+		partitionsPlot.setRenderer(partitionsRenderer);
+
+
+		NumberAxis timeAxis = new NumberAxis("Time [s]");
+		CombinedDomainXYPlot combinedPlot = new CombinedDomainXYPlot(timeAxis);
+		combinedPlot.add(densityPlot, 1);
+		combinedPlot.add(partitionsPlot, 1);
+
+		var chart = new JFreeChart("Thread Activity Over Time", JFreeChart.DEFAULT_TITLE_FONT, combinedPlot, true);
+
+
+		String filename = matsimServices.getControlerIO().getIterationFilename(
+			matsimServices.getIterationNumber(), mode + "_threadActivityPlot.png"
+		);
+
+		try {
+			ChartUtils.saveChartAsPNG(new File(filename), chart, 900, 600);
+		} catch (IOException e) {
+			LOG.error("Failed to write chart image", e);
+		}
+	}
+
+	void dumpDataRecordLog() {
+		if (!this.drtParallelInserterParams.isLogThreadActivity()) return;
+
+		String sep = matsimServices.getConfig().global().getDefaultDelimiter();
+		String header = String.join(sep, "time", "requestsDensityPerMinute", "activePartitions");
+		String filename = matsimServices.getControlerIO().getIterationFilename(
+			matsimServices.getIterationNumber(), mode + "_dataRecordsLog.csv.gz"
+		);
+
+		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
+			writer.write(header);
+			writer.newLine();
+
+			for (DataRecord record : dataRecordsLog) {
+				writer.write(String.join(sep,
+					String.valueOf(record.time),
+					String.valueOf(record.requestsDensityPerMinute),
+					String.valueOf(record.activePartitions)
+				));
+				writer.newLine();
+			}
+
+		} catch (IOException ex) {
+			LOG.error("Failed to write dataRecordsLog", ex);
+		}
+	}
+
+
+record DataRecord(double time, int requestsDensityPerMinute, int activePartitions) {
+}
 
 
 }

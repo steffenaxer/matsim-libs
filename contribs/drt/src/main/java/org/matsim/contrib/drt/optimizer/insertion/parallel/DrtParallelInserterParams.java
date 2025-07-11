@@ -34,6 +34,19 @@ public class DrtParallelInserterParams extends ReflectiveConfigGroup {
 	@Comment("Number of insertion search threads allocated per worker.")
 	private int insertionSearchThreadsPerWorker = 4;
 
+	@StringGetter("logThreadActivity")
+	public boolean isLogThreadActivity() {
+		return logThreadActivity;
+	}
+
+	@StringSetter("logThreadActivity")
+	public void setLogThreadActivity(boolean logThreadActivity) {
+		this.logThreadActivity = logThreadActivity;
+	}
+
+	@Comment("Enable/Disable thread activity statistics. Note: Disabled by default to improve performance and save memory-")
+	private boolean logThreadActivity = false;
+
 	@StringGetter("vehiclesPartitioner")
 	public VehiclesPartitioner getVehiclesPartitioner() {
 		return vehiclesPartitioner;

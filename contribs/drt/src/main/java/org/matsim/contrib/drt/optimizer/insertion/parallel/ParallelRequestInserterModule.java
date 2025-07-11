@@ -21,6 +21,7 @@ import org.matsim.contrib.drt.stops.PassengerStopDurationProvider;
 import org.matsim.contrib.dvrp.fleet.Fleet;
 import org.matsim.contrib.dvrp.run.AbstractDvrpModeQSimModule;
 import org.matsim.core.api.experimental.events.EventsManager;
+import org.matsim.core.controler.MatsimServices;
 
 import java.util.Optional;
 
@@ -75,6 +76,7 @@ public class ParallelRequestInserterModule extends AbstractDvrpModeQSimModule {
 
 		bindModal(UnplannedRequestInserter.class).toProvider(modalProvider(
 			getter -> new ParallelUnplannedRequestInserter(
+				getter.get(MatsimServices.class),
 				getter.getModal(RequestsPartitioner.class),
 				getter.getModal(VehicleEntryPartitioner.class),
 				drtParallelInserterParams.get(),
