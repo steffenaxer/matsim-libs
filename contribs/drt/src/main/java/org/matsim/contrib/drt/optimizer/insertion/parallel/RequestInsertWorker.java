@@ -21,8 +21,6 @@
 package org.matsim.contrib.drt.optimizer.insertion.parallel;
 
 import com.google.common.base.Verify;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.contrib.drt.optimizer.VehicleEntry;
 import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearch;
@@ -42,8 +40,6 @@ import static org.matsim.contrib.drt.optimizer.insertion.selective.RequestDataCo
  * @author steffenaxer
  */
 public class RequestInsertWorker {
-	private static final Logger LOG = LogManager.getLogger(RequestInsertWorker.class);
-	private static final String OFFER_ACCEPTED = "accepted";
 	private final RequestFleetFilter requestFleetFilter;
 	private final DrtInsertionSearch insertionSearch;
 	private final Queue<RequestData> unplannedRequests = new ConcurrentLinkedQueue<>();
