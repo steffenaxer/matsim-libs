@@ -29,7 +29,7 @@ public class BenchmarkRunner {
                        List<Integer> collectionPeriods, List<Integer> workers,
                        List<Integer> maxIters, List<Integer> threadsPerWorker) {
 
-		ScenarioConfigurator scenarioConfigurator = new ScenarioConfigurator( 3600 * 24, 5,  1);
+		ScenarioConfigurator scenarioConfigurator = new ScenarioConfigurator( 3600 * 24, 5,  2);
 		final Path path = Path.of(workDir);
         for (String insertionSearch : insertionSearchList) {
             for (Integer agents : agentCounts) {
@@ -43,6 +43,7 @@ public class BenchmarkRunner {
                         String.format(Locale.US, "%.2f", result.durationSeconds()),
                         rejectionRate, emptyRatio, uuid, insertionSearch
                 });
+				recorder.writeToFile(this.workDir);
 
                 for (RequestsPartitioner reqPart : requestPartitioners) {
                     for (VehiclesPartitioner vehPart : vehiclePartitioners) {
@@ -71,7 +72,9 @@ public class BenchmarkRunner {
                                                 agents + "", reqPart.name(), vehPart.name(), worker + "", period + "", iter + "", thread + "",
                                                 String.format(Locale.US, "%.2f", result2.durationSeconds()),
                                                 rejectionRate2, emptyRatio2, uuid2, insertionSearch
+
                                         });
+										recorder.writeToFile(this.workDir);
                                     }
                                 }
                             }
@@ -80,7 +83,5 @@ public class BenchmarkRunner {
                 }
             }
         }
-
-        recorder.writeToFile();
     }
 }

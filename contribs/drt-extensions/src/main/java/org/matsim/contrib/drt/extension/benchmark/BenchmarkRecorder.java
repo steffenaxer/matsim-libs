@@ -18,8 +18,8 @@ public class BenchmarkRecorder {
         results.add(row);
     }
 
-    public void writeToFile() {
-        Path file = Path.of("benchmark_" + timestamp + ".csv");
+    public void writeToFile(String workDir) {
+        Path file = Path.of(workDir,"benchmark_" + timestamp + ".csv");
         try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(file))) {
             writer.println("agents;requestPartitioner;vehiclePartitioner;Threads;CollectionPeriod;MaxIter;InsertionSearchThreadsPerWorker;DurationSeconds;rejectionRate;emptyRatio;uuid;insertionSearch");
             for (String[] row : results) {

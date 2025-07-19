@@ -10,7 +10,7 @@ import static org.matsim.contrib.drt.optimizer.insertion.parallel.DrtParallelIns
 
 public class DrtBenchmarkSuite {
     public static void main(String[] args) {
-        BenchmarkRunner runner = new BenchmarkRunner("");
+        BenchmarkRunner runner = new BenchmarkRunner( "/Users/steffenaxer/tmp");
 
 		// Param Combinations
         List<Integer> agentCounts = List.of(10000);
@@ -19,7 +19,7 @@ public class DrtBenchmarkSuite {
         List<VehiclesPartitioner> vehiclePartitioners = List.of(ReplicatingVehicleEntryPartitioner, RoundRobinVehicleEntryPartitioner, ShiftingRoundRobinVehicleEntryPartitioner);
         List<Integer> collectionPeriods = List.of(30);
         List<Integer> workers = List.of(4);
-        List<Integer> maxIters = List.of(1);
+        List<Integer> maxIters = List.of(2);
         List<Integer> threadsPerWorker = List.of(4);
 
         runner.runAll(agentCounts, insertionSearchList, requestPartitioners, vehiclePartitioners, collectionPeriods, workers, maxIters, threadsPerWorker);

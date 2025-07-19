@@ -44,11 +44,11 @@ public class ScenarioConfigurator {
         MatsimRandom.reset();
         Config config = ConfigUtils.createConfig();
 
-		config.controller().setOutputDirectory(outputPath);
+		config.controller().setOutputDirectory(Path.of(outputPath).resolve("output").toString());
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
 
-		config.controller().setWriteEventsInterval(0);
-        config.controller().setWritePlansInterval(0);
+		// config.controller().setWriteEventsInterval(0);
+        // config.controller().setWritePlansInterval(0);
         config.controller().setLastIteration(iterations);
 
         config.addModule(new DvrpConfigGroup());
@@ -62,7 +62,8 @@ public class ScenarioConfigurator {
 
         GridNetworkGenerator.generateNetwork(scenario);
         PopulationGenerator.generatePopulation(numberOfAgents, scenario, true);
-        Path fleet = FleetGenerator.generateFleet(scenario, numberOfVehicles, 6, endTime, "fleet/fleet.xml");
+
+        Path fleet = FleetGenerator.generateFleet(scenario, numberOfVehicles, 6, endTime, Path.of(outputPath,"fleet","fleet.xml").toString());
 
         MultiModeDrtConfigGroup multiModeDrtConfigGroup = new MultiModeDrtConfigGroup();
         DrtConfigGroup drtConfig = new DrtConfigGroup();
