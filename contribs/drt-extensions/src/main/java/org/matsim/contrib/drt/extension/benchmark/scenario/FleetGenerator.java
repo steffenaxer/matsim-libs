@@ -1,4 +1,4 @@
-package org.matsim.contrib.drt.extension.benchmark;
+package org.matsim.contrib.drt.extension.benchmark.scenario;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.Scenario;
