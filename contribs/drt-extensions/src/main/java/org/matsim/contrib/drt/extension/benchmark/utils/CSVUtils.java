@@ -1,5 +1,5 @@
 
-package org.matsim.contrib.drt.extension.benchmark;
+package org.matsim.contrib.drt.extension.benchmark.utils;
 
 import java.io.BufferedReader;
 import java.io.FileReader;

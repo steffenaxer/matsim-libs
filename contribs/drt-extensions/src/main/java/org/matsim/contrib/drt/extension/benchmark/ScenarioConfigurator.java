@@ -9,6 +9,7 @@ import org.matsim.contrib.drt.extension.benchmark.scenario.GridNetworkGenerator;
 import org.matsim.contrib.drt.extension.benchmark.scenario.PopulationGenerator;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsParams;
 import org.matsim.contrib.drt.optimizer.constraints.DrtOptimizationConstraintsSetImpl;
+import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearchParams;
 import org.matsim.contrib.drt.optimizer.insertion.extensive.ExtensiveInsertionSearchParams;
 import org.matsim.contrib.drt.optimizer.insertion.repeatedselective.RepeatedSelectiveInsertionSearchParams;
 import org.matsim.contrib.drt.optimizer.insertion.selective.SelectiveInsertionSearchParams;
@@ -39,7 +40,7 @@ public class ScenarioConfigurator {
         this.iterations = iterations;
     }
 
-    public Scenario configureScenario(int numberOfAgents, String insertionSearch, String outputPath) {
+    public Scenario configureScenario(int numberOfAgents, DrtInsertionSearchParams insertionSearch, String outputPath) {
 		int numberOfVehicles = (int) (numberOfAgents / (endTime / 3600.) / expectedRidesPerVehicle);
         MatsimRandom.reset();
         Config config = ConfigUtils.createConfig();
@@ -47,8 +48,6 @@ public class ScenarioConfigurator {
 		config.controller().setOutputDirectory(Path.of(outputPath).resolve("output").toString());
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
 
-		// config.controller().setWriteEventsInterval(0);
-        // config.controller().setWritePlansInterval(0);
         config.controller().setLastIteration(iterations);
 
         config.addModule(new DvrpConfigGroup());
@@ -69,20 +68,7 @@ public class ScenarioConfigurator {
         DrtConfigGroup drtConfig = new DrtConfigGroup();
         drtConfig.setVehiclesFile(fleet.toString());
         drtConfig.setStopDuration(30);
-
-        switch (insertionSearch) {
-            case ExtensiveInsertionSearchParams.SET_NAME:
-                drtConfig.setDrtInsertionSearchParams(new ExtensiveInsertionSearchParams());
-                break;
-            case RepeatedSelectiveInsertionSearchParams.SET_NAME:
-                drtConfig.setDrtInsertionSearchParams(new RepeatedSelectiveInsertionSearchParams());
-                break;
-            case SelectiveInsertionSearchParams.SET_NAME:
-                drtConfig.setDrtInsertionSearchParams(new SelectiveInsertionSearchParams());
-                break;
-            default:
-                throw new IllegalArgumentException("Unknown insertion search type: " + insertionSearch);
-        }
+		drtConfig.addParameterSet(insertionSearch);
 
         multiModeDrtConfigGroup.addDrtConfigGroup(drtConfig);
 
