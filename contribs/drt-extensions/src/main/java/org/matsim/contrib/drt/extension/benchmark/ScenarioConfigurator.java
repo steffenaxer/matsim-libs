@@ -47,7 +47,6 @@ public class ScenarioConfigurator {
 
 		config.controller().setOutputDirectory(Path.of(outputPath).resolve("output").toString());
 		config.controller().setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
-
         config.controller().setLastIteration(iterations);
 
         config.addModule(new DvrpConfigGroup());

@@ -35,7 +35,7 @@ public class BenchmarkExecutor {
 
 
 			String uuid = UUID.randomUUID().toString();
-			ScenarioConfigurator scenarioConfigurator = new ScenarioConfigurator(3600 * 24, 5, 2);
+			ScenarioConfigurator scenarioConfigurator = new ScenarioConfigurator(3600 * 24, 3, 2);
 			final Path path = Path.of(workDir);
 			Scenario scenario = scenarioConfigurator.configureScenario(paramSet.agents, paramSet.drtInsertionSearch, path.resolve(uuid).toString());
 			DrtConfigGroup drtConfig = ConfigUtils.addOrGetModule(scenario.getConfig(), MultiModeDrtConfigGroup.class).getModalElements().iterator().next();

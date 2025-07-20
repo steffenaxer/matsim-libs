@@ -13,15 +13,15 @@ import static org.matsim.contrib.drt.optimizer.insertion.parallel.DrtParallelIns
 
 public class DrtBenchmarkSuite {
 	public static void main(String[] args) {
-		BenchmarkExecutor runner = new BenchmarkExecutor("/Users/steffenaxer/tmp");
+		BenchmarkExecutor benchmarkExecutor = new BenchmarkExecutor("C:\\tmp");
 
 		// Param Combinations
-		List<Integer> agentCounts = List.of(50000);
+		List<Integer> agentCounts = List.of(200_000);
 		List<DrtInsertionSearchParams> insertionSearchList = List.of(new RepeatedSelectiveInsertionSearchParams());
-		List<RequestsPartitioner> requestPartitioners = List.of(RoundRobinRequestsPartitioner, LoadAwareRoundRobinRequestsPartitioner);
-		List<VehiclesPartitioner> vehiclePartitioners = List.of(ReplicatingVehicleEntryPartitioner, RoundRobinVehicleEntryPartitioner, ShiftingRoundRobinVehicleEntryPartitioner);
-		List<Integer> collectionPeriods = List.of(30);
-		List<Integer> workers = List.of(4);
+		List<RequestsPartitioner> requestPartitioners = List.of(LoadAwareRoundRobinRequestsPartitioner);
+		List<VehiclesPartitioner> vehiclePartitioners = List.of(ShiftingRoundRobinVehicleEntryPartitioner);
+		List<Integer> collectionPeriods = List.of(15);
+		List<Integer> workers = List.of(6);
 		List<Integer> maxIters = List.of(2);
 		List<Integer> threadsPerWorker = List.of(4);
 
@@ -34,6 +34,6 @@ public class DrtBenchmarkSuite {
 			vehiclePartitioners,
 			agentCounts);
 
-		runner.runAll(params);
+		benchmarkExecutor.runAll(params);
 	}
 }
