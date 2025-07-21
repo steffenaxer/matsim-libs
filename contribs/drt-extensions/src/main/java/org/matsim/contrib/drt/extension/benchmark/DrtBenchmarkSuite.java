@@ -21,11 +21,11 @@ public class DrtBenchmarkSuite {
 		List<RequestsPartitioner> requestPartitioners = List.of(LoadAwareRoundRobinRequestsPartitioner);
 		List<VehiclesPartitioner> vehiclePartitioners = List.of(ShiftingRoundRobinVehicleEntryPartitioner);
 		List<Integer> collectionPeriods = List.of(15);
-		List<Integer> workers = List.of(6);
+		List<Integer> workers = List.of(10);
 		List<Integer> maxIters = List.of(2);
 		List<Integer> threadsPerWorker = List.of(4);
 
-		var params = BenchmarkParamsGenerator.generateVariants(insertionSearchList,
+		var params = BenchmarkParamsGenerator.generateVariants(true, insertionSearchList,
 			collectionPeriods,
 			workers,
 			maxIters,

@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Optional;
 
 public class BenchmarkParamsGenerator {
-    public static List<BenchmarkParams> generateVariants(
+    public static List<BenchmarkParams> generateVariants(boolean disableBaseCase,
 			List<DrtInsertionSearchParams> insertionSearches,
             List<Integer> collectionPeriods,
             List<Integer> workers,
@@ -25,7 +25,10 @@ public class BenchmarkParamsGenerator {
         List<BenchmarkParams> variants = new ArrayList<>();
 		for (Integer agents : agentList) {
 			for (DrtInsertionSearchParams insertionSearch : insertionSearches) {
-				variants.add(new BenchmarkParams(agents, Optional.empty(), insertionSearch));
+				if(!disableBaseCase)
+				{
+					variants.add(new BenchmarkParams(agents, Optional.empty(), insertionSearch));
+				}
 				for (RequestsPartitioner reqPart : requestPartitioners) {
 					for (VehiclesPartitioner vehPart : vehiclePartitioners) {
 						for (Integer period : collectionPeriods) {
@@ -36,7 +39,6 @@ public class BenchmarkParamsGenerator {
 										drtParallelInserterParams.setCollectionPeriod(period);
 										drtParallelInserterParams.setMaxIterations(iter);
 										drtParallelInserterParams.setMaxPartitions(worker);
-										drtParallelInserterParams.setMaxIterations(iter);
 										drtParallelInserterParams.setInsertionSearchThreadsPerWorker(thread);
 										drtParallelInserterParams.setRequestsPartitioner(reqPart);
 										drtParallelInserterParams.setVehiclesPartitioner(vehPart);
