@@ -1,6 +1,7 @@
 package org.matsim.contrib.drt.extension.benchmark;
 
 import org.matsim.api.core.v01.Scenario;
+import org.matsim.contrib.drt.extension.insertion.spatialFilter.SpatialFilterInsertionSearchQSimModule;
 import org.matsim.contrib.drt.optimizer.insertion.parallel.ParallelRequestInserterModule;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.run.DrtControlerCreator;
@@ -16,6 +17,7 @@ public class SimulationRunner {
 		Config config = scenario.getConfig();
 		Controler controller = DrtControlerCreator.createControler(config, scenario, false);
 		controller.addOverridingQSimModule(new ParallelRequestInserterModule(drtConfigGroup));
+		controller.addOverridingQSimModule(new SpatialFilterInsertionSearchQSimModule(drtConfigGroup));
         long start = System.nanoTime();
 		controller.run();
         long end = System.nanoTime();

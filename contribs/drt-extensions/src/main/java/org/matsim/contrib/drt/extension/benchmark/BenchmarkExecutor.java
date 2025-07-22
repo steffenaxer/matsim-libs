@@ -1,8 +1,11 @@
 package org.matsim.contrib.drt.extension.benchmark;
 
 import org.matsim.api.core.v01.Scenario;
+import org.matsim.contrib.drt.extension.DrtWithExtensionsConfigGroup;
 import org.matsim.contrib.drt.extension.benchmark.params.BenchmarkParams;
 import org.matsim.contrib.drt.extension.benchmark.utils.CSVUtils;
+import org.matsim.contrib.drt.extension.insertion.spatialFilter.DrtSpatialRequestFleetFilterParams;
+import org.matsim.contrib.drt.extension.insertion.spatialFilter.SpatialRequestFleetFilter;
 import org.matsim.contrib.drt.optimizer.insertion.parallel.DrtParallelInserterParams;
 import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
@@ -35,10 +38,10 @@ public class BenchmarkExecutor {
 
 
 			String uuid = UUID.randomUUID().toString();
-			ScenarioConfigurator scenarioConfigurator = new ScenarioConfigurator(3600 * 24, 3, 2);
+			ScenarioConfigurator scenarioConfigurator = new ScenarioConfigurator(3600 * 24, 3, 0);
 			final Path path = Path.of(workDir);
 			Scenario scenario = scenarioConfigurator.configureScenario(paramSet.agents, paramSet.drtInsertionSearch, path.resolve(uuid).toString());
-			DrtConfigGroup drtConfig = ConfigUtils.addOrGetModule(scenario.getConfig(), MultiModeDrtConfigGroup.class).getModalElements().iterator().next();
+			DrtWithExtensionsConfigGroup drtConfig = (DrtWithExtensionsConfigGroup) ConfigUtils.addOrGetModule(scenario.getConfig(), MultiModeDrtConfigGroup.class).getModalElements().iterator().next();
 
 			if (paramSet.drtParallelInserterParams.isPresent()) {
 				DrtParallelInserterParams p = paramSet.drtParallelInserterParams.get();

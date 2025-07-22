@@ -4,6 +4,7 @@ package org.matsim.contrib.drt.extension.benchmark;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.contrib.common.zones.systems.grid.square.SquareGridZoneSystemParams;
+import org.matsim.contrib.drt.extension.DrtWithExtensionsConfigGroup;
 import org.matsim.contrib.drt.extension.benchmark.scenario.FleetGenerator;
 import org.matsim.contrib.drt.extension.benchmark.scenario.GridNetworkGenerator;
 import org.matsim.contrib.drt.extension.benchmark.scenario.PopulationGenerator;
@@ -61,7 +62,7 @@ public class ScenarioConfigurator {
         Path fleet = FleetGenerator.generateFleet(scenario, numberOfVehicles, 6, endTime, Path.of(outputPath,"fleet","fleet.xml").toString());
 
         MultiModeDrtConfigGroup multiModeDrtConfigGroup = new MultiModeDrtConfigGroup();
-        DrtConfigGroup drtConfig = new DrtConfigGroup();
+		DrtWithExtensionsConfigGroup drtConfig = new DrtWithExtensionsConfigGroup();
         drtConfig.setVehiclesFile(fleet.toString());
         drtConfig.setStopDuration(30);
 		drtConfig.addParameterSet(insertionSearch);
