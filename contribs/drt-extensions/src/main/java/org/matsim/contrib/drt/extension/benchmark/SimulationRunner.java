@@ -17,7 +17,6 @@ public class SimulationRunner {
 		Config config = scenario.getConfig();
 		Controler controller = DrtControlerCreator.createControler(config, scenario, false);
 		controller.addOverridingQSimModule(new ParallelRequestInserterModule(drtConfigGroup));
-		controller.addOverridingQSimModule(new SpatialFilterInsertionSearchQSimModule(drtConfigGroup));
         long start = System.nanoTime();
 		controller.run();
         long end = System.nanoTime();
