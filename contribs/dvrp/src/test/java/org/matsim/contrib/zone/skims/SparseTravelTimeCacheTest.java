@@ -27,10 +27,11 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.matsim.contrib.zone.skims.AdaptiveTravelTimeMatrixImpl.KeyUtils.*;
 
 class SparseTravelTimeCacheTest {
 
-    private Map<AdaptiveTravelTimeMatrixImpl.IntSparseKey, Double> cache;
+    private Map<Long, Double> cache;
 
     @BeforeEach
     void setUp() {
@@ -44,7 +45,7 @@ class SparseTravelTimeCacheTest {
         int timeBin = 5;
         double travelTime = 321.5;
 
-        AdaptiveTravelTimeMatrixImpl.IntSparseKey key = new AdaptiveTravelTimeMatrixImpl.IntSparseKey(fromIndex, toIndex, timeBin);
+        long key = getKey(fromIndex, toIndex, timeBin);
         cache.put(key, travelTime);
 
         assertTrue(cache.containsKey(key), "Key should exist in cache");
@@ -53,8 +54,8 @@ class SparseTravelTimeCacheTest {
 
     @Test
     void testDifferentBinsAreDifferentKeys() {
-        AdaptiveTravelTimeMatrixImpl.IntSparseKey key1 = new AdaptiveTravelTimeMatrixImpl.IntSparseKey(1, 2, 3);
-        AdaptiveTravelTimeMatrixImpl.IntSparseKey key2 = new AdaptiveTravelTimeMatrixImpl.IntSparseKey(1, 2, 4);
+        long key1 = getKey(1, 2, 3);
+		long key2 = getKey(1, 2, 4);
 
         cache.put(key1, 100.0);
         cache.put(key2, 200.0);
@@ -66,8 +67,8 @@ class SparseTravelTimeCacheTest {
 
     @Test
     void testSymmetry() {
-        AdaptiveTravelTimeMatrixImpl.IntSparseKey key1 = new AdaptiveTravelTimeMatrixImpl.IntSparseKey(10, 20, 1);
-        AdaptiveTravelTimeMatrixImpl.IntSparseKey key2 = new AdaptiveTravelTimeMatrixImpl.IntSparseKey(20, 10, 1);
+        long key1 = getKey(10, 20, 1);
+        long key2 = getKey(20, 10, 1);
 
         cache.put(key1, 50.0);
         cache.put(key2, 75.0);
@@ -83,11 +84,11 @@ class SparseTravelTimeCacheTest {
 		int toIndex = 654321;
 		int timeBin = 17;
 
-		AdaptiveTravelTimeMatrixImpl.IntSparseKey key = new AdaptiveTravelTimeMatrixImpl.IntSparseKey(fromIndex, toIndex, timeBin);
+		long key = getKey(fromIndex, toIndex, timeBin);
 
-		assertEquals(fromIndex, key.getFromIndex(), "fromIndex should match after unpacking");
-		assertEquals(toIndex, key.getToIndex(), "toIndex should match after unpacking");
-		assertEquals(timeBin, key.getTimeBin(), "timeBin should match after unpacking");
+		assertEquals(fromIndex, getFromIndex(key), "fromIndex should match after unpacking");
+		assertEquals(toIndex, getToIndex(key), "toIndex should match after unpacking");
+		assertEquals(timeBin, getTimeBin(key), "timeBin should match after unpacking");
 	}
 
 }

@@ -19,6 +19,7 @@
 
 package org.matsim.contrib.zone.skims;
 
+import it.unimi.dsi.fastutil.longs.Long2DoubleOpenHashMap;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.network.Node;
 import org.matsim.contrib.common.util.DistanceUtils;
@@ -29,7 +30,6 @@ import org.matsim.contrib.common.zones.ZoneSystemUtils;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
 
 /**
@@ -43,7 +43,7 @@ public class AdaptiveTravelTimeMatrixImpl implements AdaptiveTravelTimeMatrix {
 	private final Map<Zone, Node> centralNodes;
 	private final int numberOfBins;
 	private final DvrpTravelTimeMatrixParams params;
-	private final Map<IntSparseKey, Double> sparseTravelTimeCache = new ConcurrentHashMap<>();
+	private final Map<Long, Double> sparseTravelTimeCache = new Long2DoubleOpenHashMap();
 
 	public AdaptiveTravelTimeMatrixImpl(double maxTime, Network dvrpNetwork, ZoneSystem zoneSystem, DvrpTravelTimeMatrixParams params,
 										TravelTimeMatrix freeSpeedMatrix, double alpha) {
@@ -68,13 +68,12 @@ public class AdaptiveTravelTimeMatrixImpl implements AdaptiveTravelTimeMatrix {
 	void initializeSparseTravelTimeCache(TravelTimeMatrix freeSpeedMatrix) {
 		for (int i = 0; i < numberOfBins; i++) {
 			int bin = i;
-			centralNodes.entrySet().stream().parallel().forEach(originZoneEntry -> {
+			centralNodes.forEach((key1, originNode) -> {
 				for (Entry<Zone, Node> destinationZoneEntry : centralNodes.entrySet()) {
-					Node originNode = originZoneEntry.getValue();
 					Node destinationNode = destinationZoneEntry.getValue();
 					if (DistanceUtils.calculateSquaredDistance(originNode.getCoord(),
-							destinationNode.getCoord()) < (params.getMaxNeighborDistance() * params.getMaxNeighborDistance())) {
-						IntSparseKey key = getSparseTravelTimeKey(originNode, destinationNode, bin);
+						destinationNode.getCoord()) < (params.getMaxNeighborDistance() * params.getMaxNeighborDistance())) {
+						long key = getSparseTravelTimeKey(originNode, destinationNode, bin);
 						double freeSpeedTravelTime = freeSpeedMatrix.getTravelTime(originNode, destinationNode, Double.NaN);
 						this.sparseTravelTimeCache.computeIfAbsent(key, k -> freeSpeedTravelTime);
 					}
@@ -83,8 +82,8 @@ public class AdaptiveTravelTimeMatrixImpl implements AdaptiveTravelTimeMatrix {
 		}
 	}
 
-	IntSparseKey getSparseTravelTimeKey(Node fromNode, Node toNode, int bin) {
-		return new IntSparseKey(fromNode.getId().index(), toNode.getId().index(), bin);
+	long getSparseTravelTimeKey(Node fromNode, Node toNode, int bin) {
+		return KeyUtils.getKey(fromNode.getId().index(), toNode.getId().index(), bin);
 	}
 
 
@@ -122,13 +121,15 @@ public class AdaptiveTravelTimeMatrixImpl implements AdaptiveTravelTimeMatrix {
 	@Override
 	public void setTravelTime(Node fromNode, Node toNode, double routeEstimate, double departureTime) {
 		int bin = this.getBin(departureTime);
-		IntSparseKey key = this.getSparseTravelTimeKey(fromNode, toNode, bin);
+		long key = this.getSparseTravelTimeKey(fromNode, toNode, bin);
 		Double sparseValue = this.sparseTravelTimeCache.get(this.getSparseTravelTimeKey(fromNode, toNode, bin));
 
 		// Update sparseTravelTimeCache
 		if (sparseValue != null) {
 			double value = getUpdatedValue(sparseValue, routeEstimate, this.alpha);
-			this.sparseTravelTimeCache.put(key, value);
+			synchronized (this.sparseTravelTimeCache) {
+				this.sparseTravelTimeCache.put(key, value);
+			}
 
 			// Update regular matrix for long distances
 		} else {
@@ -145,36 +146,23 @@ public class AdaptiveTravelTimeMatrixImpl implements AdaptiveTravelTimeMatrix {
 	}
 
 
-	public static class IntSparseKey {
-		private final long key;
+	public static class KeyUtils {
 
-		public IntSparseKey(int fromIndex, int toIndex, int timeBin) {
-			this.key = (((long) timeBin) << 40) | (((long) fromIndex & 0xFFFFF) << 20) | ((long) toIndex & 0xFFFFF);
+		public static long getKey(int fromIndex, int toIndex, int timeBin)
+		{
+			return (((long) timeBin) << 40) | (((long) fromIndex & 0xFFFFF) << 20) | ((long) toIndex & 0xFFFFF);
 		}
 
-		public int getFromIndex() {
+		public static int getFromIndex(long key) {
 			return (int) ((key >> 20) & 0xFFFFF);
 		}
 
-		public int getToIndex() {
+		public static  int getToIndex(long key) {
 			return (int) (key & 0xFFFFF);
 		}
 
-		public int getTimeBin() {
+		public static int getTimeBin(long key) {
 			return (int) ((key >> 40) & 0xFFFFFF);
-		}
-
-		@Override
-		public boolean equals(Object obj) {
-			if (this == obj) return true;
-			if (!(obj instanceof IntSparseKey)) return false;
-			IntSparseKey other = (IntSparseKey) obj;
-			return this.key == other.key;
-		}
-
-		@Override
-		public int hashCode() {
-			return Long.hashCode(key);
 		}
 	}
 
