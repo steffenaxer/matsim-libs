@@ -16,7 +16,7 @@ public class DrtBenchmarkSuite {
 		BenchmarkExecutor benchmarkExecutor = new BenchmarkExecutor("C:\\tmp");
 
 		// Param Combinations
-		List<Integer> agentCounts = List.of(200_000);
+		List<Integer> agentCounts = List.of(100_000);
 		List<DrtInsertionSearchParams> insertionSearchList = List.of(new RepeatedSelectiveInsertionSearchParams());
 		List<RequestsPartitioner> requestPartitioners = List.of(LoadAwareRoundRobinRequestsPartitioner);
 		List<VehiclesPartitioner> vehiclePartitioners = List.of(ShiftingRoundRobinVehicleEntryPartitioner);
