@@ -42,6 +42,7 @@ public class BenchmarkParamsGenerator {
 										drtParallelInserterParams.setInsertionSearchThreadsPerWorker(thread);
 										drtParallelInserterParams.setRequestsPartitioner(reqPart);
 										drtParallelInserterParams.setVehiclesPartitioner(vehPart);
+										drtParallelInserterParams.setUseWorkStealing(true);
 										variants.add(new BenchmarkParams(agents, Optional.of(drtParallelInserterParams), insertionSearch));
 									}
 								}

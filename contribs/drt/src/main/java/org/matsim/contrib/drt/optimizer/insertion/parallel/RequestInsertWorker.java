@@ -97,6 +97,14 @@ public class RequestInsertWorker {
 	}
 
 
+
+	public void processStealing(Queue<RequestData> requestQueue, Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries, double now) {
+		RequestData request;
+		while ((request = requestQueue.poll()) != null) {
+			findInsertion(request, vehicleEntries, now);
+		}
+	}
+
 	public void clean() {
 		this.unplannedRequests.clear();
 	}

@@ -45,7 +45,7 @@ public class DrtParallelInserterParams extends ReflectiveConfigGroup {
 
 	@Comment("Maximum number of conflict resolution iterations allowed. " +
 		"Each additional iteration may resolve conflicts where multiple partitions attempt to use the same vehicle.")
-	private int maxIterations = 2;
+	private int maxIterations = 5;
 
 	@Comment("Maximum number of partitions. Each partition handles a subset of requests and vehicles. " +
 		"Note: Each partition requires a separate insertion search instance. " +
@@ -54,6 +54,8 @@ public class DrtParallelInserterParams extends ReflectiveConfigGroup {
 
 	@Comment("Number of insertion search threads allocated per worker.")
 	private int insertionSearchThreadsPerWorker = 4;
+
+	boolean useWorkStealing = false;
 
 	@StringGetter("logThreadActivity")
 	public boolean isLogThreadActivity() {
@@ -132,5 +134,15 @@ public class DrtParallelInserterParams extends ReflectiveConfigGroup {
 	@StringSetter("insertionSearchThreadsPerWorker")
 	public void setInsertionSearchThreadsPerWorker(int insertionSearchThreadsPerWorker) {
 		this.insertionSearchThreadsPerWorker = insertionSearchThreadsPerWorker;
+	}
+
+	@StringGetter("useWorkStealing")
+	public boolean isUseWorkStealing() {
+		return useWorkStealing;
+	}
+
+	@StringSetter("useWorkStealing")
+	public void setUseWorkStealing(boolean useWorkStealing) {
+		this.useWorkStealing = useWorkStealing;
 	}
 }

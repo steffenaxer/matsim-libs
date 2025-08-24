@@ -116,6 +116,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
 	private final List<DataRecord> dataRecordsLog = new ArrayList<>();
 	private final DrtParallelInserterParams drtParallelInserterParams;
+	private final boolean useWorkStealing;
 	private final MatsimServices matsimServices;
 
 	public long nConflicting = 0;
@@ -139,6 +140,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		this.vehicleEntryPartitioner = vehicleEntryPartitioner;
 		this.collectionPeriod = drtParallelInserterParams.getCollectionPeriod();
 		this.drtParallelInserterParams = drtParallelInserterParams;
+		this.useWorkStealing = drtParallelInserterParams.isUseWorkStealing();
 		this.mode = mode;
 		this.fleet = fleet;
 		this.eventsManager = eventsManager;
@@ -218,14 +220,24 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		validateUniqueRequests(requestsPartitions);
 
 		// We only could use the number of maxPartitions
-		for (int i = 0; i < maxPartitions; i++) {
-			var worker = this.workers.get(i);
-			Collection<RequestData> requestDataPartition = requestsPartitions.get(i);
-			Map<Id<DvrpVehicle>, VehicleEntry> vehiclePartition = vehiclePartitions.get(i);
-			tasks.add(inserterExecutorService.submit(() -> worker.process(now, requestDataPartition, vehiclePartition)));
+		if (useWorkStealing) {
+			ConcurrentLinkedQueue<RequestData> requestQueue = new ConcurrentLinkedQueue<>();
+			requestsPartitions.forEach(requestQueue::addAll);
+			for (int i = 0; i < maxPartitions; i++) {
+				var worker = this.workers.get(i);
+				Map<Id<DvrpVehicle>, VehicleEntry> vehiclePartition = vehiclePartitions.get(i);
+				tasks.add(inserterExecutorService.submit(() -> worker.processStealing(requestQueue, vehiclePartition, now)));
+			}
+		} else {
+			for (int i = 0; i < maxPartitions; i++) {
+				var worker = this.workers.get(i);
+				Collection<RequestData> requestDataPartition = requestsPartitions.get(i);
+				Map<Id<DvrpVehicle>, VehicleEntry> vehiclePartition = vehiclePartitions.get(i);
+				tasks.add(inserterExecutorService.submit(() -> worker.process(now, requestDataPartition, vehiclePartition)));
+			}
+
+
 		}
-
-
 		tasks.forEach(ForkJoinTask::join);
 	}
 
@@ -418,7 +430,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 					|| (lastUnsolvedConflicts != null && toBeRejected.size() == lastUnsolvedConflicts) // not getting better
 					|| i == this.maxIter - 1) { // reached iter limit
 					LOG.debug("Stopped with rejections #{} ", toBeRejected.size());
-					toBeRejected.forEach(s -> retryOrReject(s, time, NO_INSERTION_FOUND_CAUSE));
 					break;
 				}
 
