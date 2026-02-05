@@ -65,7 +65,7 @@ public class DrtCompanionUtils {
 	}
 
 	public static WeightedRandomSelection<Integer> createIntegerSampler(final List<Double> distribution) {
-		WeightedRandomSelection<Integer> wrs = new WeightedRandomSelection<>(MatsimRandom.getLocalInstance());
+		WeightedRandomSelection<Integer> wrs = new WeightedRandomSelection<>(MatsimRandom.getRandom());
 		for (int i = 0; i < distribution.size(); ++i) {
 			wrs.add(i, distribution.get(i));
 		}
