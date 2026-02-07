@@ -33,6 +33,7 @@ import org.matsim.contrib.drt.optimizer.insertion.UnplannedRequestInserter;
 import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.RequestData;
 import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.requests.RequestsPartitioner;
 import org.matsim.contrib.drt.optimizer.insertion.parallel.partitioner.vehicles.VehicleEntryPartitioner;
+import org.matsim.contrib.drt.optimizer.insertion.parallel.WorkDistributionStrategy.WorkResult;
 import org.matsim.contrib.drt.passenger.DrtOfferAcceptor;
 import org.matsim.contrib.drt.passenger.DrtRequest;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
@@ -90,16 +91,22 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final DrtOfferAcceptor drtOfferAcceptor;
 	private final PassengerStopDurationProvider stopDurationProvider;
 	private final RequestFleetFilter requestFleetFilter;
-	private final List<RequestInsertWorker> workers;
 	private final ForkJoinPool inserterExecutorService;
 	private final int maxIter;
-	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions = new ConcurrentHashMap<>();
-	private final SortedSet<DrtRequest> noSolutions = new ConcurrentSkipListSet<>(ConflictResolver.DRT_REQUEST_COMPARATOR);
 	private final Queue<DrtRequest> tmpQueue = new ConcurrentLinkedQueue<>();
 	private final PartitionStrategy partitionStrategy;
 	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
 	private final PartitionActivityLogger activityLogger;
 	private final ConflictResolver conflictResolver;
+
+	// Legacy mode: old workers with shared collections (for PARTITIONING mode with vehicle partitioning)
+	private final List<RequestInsertWorker> legacyWorkers;
+	private final Map<Id<DvrpVehicle>, SortedSet<RequestData>> solutions = new ConcurrentHashMap<>();
+	private final SortedSet<DrtRequest> noSolutions = new ConcurrentSkipListSet<>(ConflictResolver.DRT_REQUEST_COMPARATOR);
+
+	// New mode: WorkDistributionStrategy (for WORK_STEALING and LOCKING_WORK_STEALING)
+	private final WorkDistributionStrategy workDistributionStrategy;
+	private final DrtParallelInserterParams.WorkDistributionMode workDistributionMode;
 
 	public ParallelUnplannedRequestInserter(MatsimServices matsimServices, RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, DrtParallelInserterParams drtParallelInserterParams, DrtConfigGroup drtCfg, Fleet fleet,
 											EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
@@ -126,7 +133,6 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		this.stopDurationProvider = stopDurationProvider;
 		this.requestFleetFilter = requestFleetFilter;
 		this.inserterExecutorService = new ForkJoinPool(drtParallelInserterParams.getMaxPartitions());
-		this.workers = createWorkers(drtParallelInserterParams.getMaxPartitions());
 		this.maxIter = drtParallelInserterParams.getMaxIterations();
 		this.insertionRetryQueue = insertionRetryQueue;
 		this.partitionStrategy = new PartitionStrategy(
@@ -137,9 +143,26 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		);
 		this.activityLogger = new PartitionActivityLogger(matsimServices, mode, drtParallelInserterParams);
 		this.conflictResolver = new ConflictResolver();
+		this.workDistributionMode = drtParallelInserterParams.getWorkDistributionMode();
+
+		// Initialize based on distribution mode
+		if (workDistributionMode == DrtParallelInserterParams.WorkDistributionMode.PARTITIONING) {
+			// Legacy mode with vehicle partitioning
+			this.legacyWorkers = createLegacyWorkers(drtParallelInserterParams.getMaxPartitions());
+			this.workDistributionStrategy = null;
+		} else {
+			// New work distribution strategies (WORK_STEALING, LOCKING_WORK_STEALING)
+			this.legacyWorkers = Collections.emptyList();
+			this.workDistributionStrategy = new WorkDistributionStrategyFactory(
+				drtParallelInserterParams,
+				inserterExecutorService,
+				requestFleetFilter,
+				insertionSearch::get
+			).create();
+		}
 	}
 
-	private List<RequestInsertWorker> createWorkers(int n) {
+	private List<RequestInsertWorker> createLegacyWorkers(int n) {
 		List<RequestInsertWorker> workerList = new ArrayList<>();
 		for (int i = 0; i < n; i++) {
 			workerList.add(new RequestInsertWorker(requestFleetFilter, insertionSearch.get(), solutions, noSolutions));
@@ -157,6 +180,16 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	}
 
 	private void solve(double now, Map<Id<DvrpVehicle>, VehicleEntry> entries) {
+		if (workDistributionMode == DrtParallelInserterParams.WorkDistributionMode.PARTITIONING) {
+			// Legacy mode with vehicle partitioning
+			solveLegacy(now, entries);
+		} else {
+			// New mode: WorkDistributionStrategy (WORK_STEALING, LOCKING_WORK_STEALING)
+			solveWithStrategy(now, entries);
+		}
+	}
+
+	private void solveLegacy(double now, Map<Id<DvrpVehicle>, VehicleEntry> entries) {
 		PartitionContext partitions = partitionStrategy.createPartitions(tmpQueue, entries);
 
 		activityLogger.record(now, partitions.originalRequestCount(), collectionPeriod, partitions.activePartitionCount());
@@ -165,14 +198,31 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			return;
 		}
 
-		submitWorkersForPartitions(now, partitions);
+		submitLegacyWorkersForPartitions(now, partitions);
 	}
 
-	private void submitWorkersForPartitions(double now, PartitionContext partitions) {
+	private void solveWithStrategy(double now, Map<Id<DvrpVehicle>, VehicleEntry> entries) {
+		if (tmpQueue.isEmpty()) {
+			return;
+		}
+
+		// Convert queue to RequestData list
+		List<RequestData> requests = tmpQueue.stream()
+			.map(RequestData::new)
+			.toList();
+		tmpQueue.clear();
+
+		activityLogger.record(now, requests.size(), collectionPeriod, 1);
+
+		// Use the configured work distribution strategy
+		workDistributionStrategy.distribute(requests, entries, now);
+	}
+
+	private void submitLegacyWorkersForPartitions(double now, PartitionContext partitions) {
 		List<ForkJoinTask<?>> tasks = new ArrayList<>();
 
 		for (int i = 0; i < partitions.size(); i++) {
-			var worker = this.workers.get(i);
+			var worker = this.legacyWorkers.get(i);
 			var requestPartition = partitions.getRequestPartition(i);
 			var vehiclePartition = partitions.getVehiclePartition(i);
 			tasks.add(inserterExecutorService.submit(() -> worker.process(now, requestPartition, vehiclePartition)));
@@ -226,9 +276,21 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	}
 
 	ConflictResolver.ConsolidationResult consolidate() {
-		ConflictResolver.ConsolidationResult result = conflictResolver.consolidate(this.solutions, this.noSolutions);
-		this.workers.forEach(RequestInsertWorker::clean);
-		return result;
+		if (workDistributionMode == DrtParallelInserterParams.WorkDistributionMode.PARTITIONING) {
+			// Legacy mode
+			ConflictResolver.ConsolidationResult result = conflictResolver.consolidate(this.solutions, this.noSolutions);
+			this.legacyWorkers.forEach(RequestInsertWorker::clean);
+			return result;
+		} else {
+			// New mode: collect results from WorkDistributionStrategy
+			WorkResult workResult = workDistributionStrategy.collectResults();
+			ConflictResolver.ConsolidationResult result = conflictResolver.consolidate(
+				workResult.solutions(),
+				workResult.noSolutions()
+			);
+			workDistributionStrategy.clean();
+			return result;
+		}
 	}
 
 	Optional<DvrpVehicle> schedule(RequestData requestData, double now) {
@@ -321,7 +383,7 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		result.rejected().forEach(req -> retryOrReject(req, time, NO_INSERTION_FOUND_CAUSE));
 		LOG.debug("Scheduled requests #{} ", result.scheduledCount());
 
-		this.workers.forEach(RequestInsertWorker::clean);
+		// Cleanup is handled in consolidate() for both modes
 	}
 
 	/**
@@ -345,14 +407,19 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 			// Schedule successful insertions
 			List<RequestData> toBeScheduled = consolidationResult.toBeScheduled();
 			Set<DvrpVehicle> scheduledVehicles = scheduleRequests(toBeScheduled, time);
-			this.solutions.clear();
 			scheduled += toBeScheduled.size();
+
+			// Clear legacy collections if in legacy mode
+			if (workDistributionMode == DrtParallelInserterParams.WorkDistributionMode.PARTITIONING) {
+				this.solutions.clear();
+				this.noSolutions.clear();
+			}
 
 			// Collect rejections for this iteration
 			Collection<DrtRequest> iterationRejections = consolidationResult.toBeRejected();
-			this.noSolutions.clear();
 
 			// Check termination conditions
+			// For LOCKING_WORK_STEALING, conflicts are resolved immediately, so usually only 1 iteration needed
 			if (iterationRejections.isEmpty()
 				|| (lastUnsolvedConflicts != null && iterationRejections.size() == lastUnsolvedConflicts)
 				|| i == this.maxIter - 1) {

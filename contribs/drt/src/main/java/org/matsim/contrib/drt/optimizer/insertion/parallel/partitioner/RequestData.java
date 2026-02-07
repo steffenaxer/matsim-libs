@@ -32,6 +32,7 @@ import java.util.*;
 public class RequestData {
     private final DrtRequest drtRequest;
 	private InsertionRecord solution;
+	private int retryCount = 0;
 
     public RequestData(DrtRequest drtRequest) {
         this.drtRequest = drtRequest;
@@ -48,6 +49,18 @@ public class RequestData {
 	public void setSolution(InsertionRecord solution) {
 		Verify.verify(this.solution==null);
 		this.solution = solution;
+	}
+
+	public int getRetryCount() {
+		return retryCount;
+	}
+
+	public void incrementRetryCount() {
+		this.retryCount++;
+	}
+
+	public void resetRetryCount() {
+		this.retryCount = 0;
 	}
 
 	public record InsertionRecord(Optional<InsertionWithDetourData> insertion) {}

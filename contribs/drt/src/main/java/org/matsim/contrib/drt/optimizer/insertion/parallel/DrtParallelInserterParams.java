@@ -38,6 +38,31 @@ public class DrtParallelInserterParams extends ReflectiveConfigGroup {
 
 	public enum RequestsPartitioner {RoundRobinRequestsPartitioner, LoadAwareRoundRobinRequestsPartitioner}
 
+	public enum WorkDistributionMode {
+		/**
+		 * Static partitioning - requests are divided upfront among workers.
+		 * Each worker has its own vehicle partition, minimizing conflicts.
+		 */
+		PARTITIONING,
+
+		/**
+		 * Work-stealing with optimistic vehicle locking.
+		 * Workers dynamically pull requests from a central queue.
+		 * Conflicts are resolved immediately via CAS locks.
+		 * Best performance when request complexity varies significantly.
+		 */
+		LOCKING_WORK_STEALING
+	}
+
+	public enum LockFailureStrategy {
+		/** Re-queue the request for later retry */
+		REQUEUE,
+		/** Find next best insertion that's not locked */
+		FIND_ALTERNATIVE,
+		/** Mark as no-solution immediately */
+		NO_SOLUTION
+	}
+
 	public static final String SET_NAME = "parallelInserter";
 
 	@Comment("Time window (in seconds) for collecting incoming requests before processing begins.")
@@ -93,6 +118,47 @@ public class DrtParallelInserterParams extends ReflectiveConfigGroup {
 
 	@NotNull
 	RequestsPartitioner requestsPartitioner = RequestsPartitioner.LoadAwareRoundRobinRequestsPartitioner;
+
+	@NotNull
+	@Comment("Work distribution mode: PARTITIONING, WORK_STEALING, or LOCKING_WORK_STEALING")
+	WorkDistributionMode workDistributionMode = WorkDistributionMode.PARTITIONING;
+
+	@NotNull
+	@Comment("Strategy when vehicle lock fails (only for LOCKING_WORK_STEALING): REQUEUE, FIND_ALTERNATIVE, or NO_SOLUTION")
+	LockFailureStrategy lockFailureStrategy = LockFailureStrategy.FIND_ALTERNATIVE;
+
+	@Comment("Maximum retry attempts when lock fails with REQUEUE strategy")
+	private int maxLockRetries = 3;
+
+	@StringGetter("lockFailureStrategy")
+	public LockFailureStrategy getLockFailureStrategy() {
+		return lockFailureStrategy;
+	}
+
+	@StringSetter("lockFailureStrategy")
+	public void setLockFailureStrategy(LockFailureStrategy lockFailureStrategy) {
+		this.lockFailureStrategy = lockFailureStrategy;
+	}
+
+	@StringGetter("maxLockRetries")
+	public int getMaxLockRetries() {
+		return maxLockRetries;
+	}
+
+	@StringSetter("maxLockRetries")
+	public void setMaxLockRetries(int maxLockRetries) {
+		this.maxLockRetries = maxLockRetries;
+	}
+
+	@StringGetter("workDistributionMode")
+	public WorkDistributionMode getWorkDistributionMode() {
+		return workDistributionMode;
+	}
+
+	@StringSetter("workDistributionMode")
+	public void setWorkDistributionMode(WorkDistributionMode workDistributionMode) {
+		this.workDistributionMode = workDistributionMode;
+	}
 
 	@StringGetter("collectionPeriod")
 	public double getCollectionPeriod() {

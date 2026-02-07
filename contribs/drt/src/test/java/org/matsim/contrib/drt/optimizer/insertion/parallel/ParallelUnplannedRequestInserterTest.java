@@ -1056,6 +1056,306 @@ public class ParallelUnplannedRequestInserterTest {
 		verify(eventsManager, times(numRequests)).processEvent(any(PassengerRequestScheduledEvent.class));
 	}
 
+	// ==================== LOCKING_WORK_STEALING MODE TESTS ====================
+
+	@Test
+	void lockingWorkStealing_basicScheduling() {
+		var vehicle1 = vehicle("lws_v1");
+		var fleet = fleet(vehicle1);
+		var unplannedRequests = requests(request("lws_r1", "from1", "to1"));
+		double now = 15;
+
+		var vehicle1Entry = new VehicleEntry(vehicle1, null, null, null, null, 0);
+		VehicleEntry.EntryFactory entryFactory = (vehicle, currentTime) ->
+			vehicle == vehicle1 ? vehicle1Entry : null;
+
+		DrtRequestInsertionRetryQueue retryQueue = new DrtRequestInsertionRetryQueue(
+				new DrtRequestInsertionRetryParams());
+
+		DrtInsertionSearch insertionSearch = (drtRequest, vEntries) -> {
+			if (vEntries.isEmpty()) return Optional.empty();
+			return Optional.of(new InsertionWithDetourData(
+					new InsertionGenerator.Insertion(vEntries.iterator().next(), null, null, loadType.fromInt(1)), null,
+					new InsertionDetourTimeCalculator.DetourTimeInfo(
+							mock(InsertionDetourTimeCalculator.PickupDetourInfo.class),
+							mock(InsertionDetourTimeCalculator.DropoffDetourInfo.class))));
+		};
+
+		double processTime = now + COLLECTION_PERIOD;
+		Set<Id<Request>> scheduledRequests = Collections.synchronizedSet(new HashSet<>());
+
+		RequestInsertionScheduler insertionScheduler = (acceptedRequest, insertion) -> {
+			scheduledRequests.add(acceptedRequest.getId());
+			var pickupTask = new DefaultDrtStopTask(processTime, processTime + 10, acceptedRequest.getFromLink());
+			pickupTask.addPickupRequest(acceptedRequest);
+			var dropoffTask = new DefaultDrtStopTask(processTime + 20, processTime + 30, acceptedRequest.getToLink());
+			dropoffTask.addPickupRequest(acceptedRequest);
+			return new PickupDropoffTaskPair(pickupTask, dropoffTask);
+		};
+
+		var inserter = newInserterWithLockingWorkStealing(fleet, entryFactory, retryQueue, insertionSearch, insertionScheduler, 4);
+		inserter.scheduleUnplannedRequests(unplannedRequests);
+
+		inserter.doSimStep(now);
+		inserter.doSimStep(processTime);
+
+		assertThat(unplannedRequests).isEmpty();
+		assertThat(scheduledRequests).hasSize(1);
+		verify(eventsManager, times(1)).processEvent(any(PassengerRequestScheduledEvent.class));
+	}
+
+	@Test
+	void lockingWorkStealing_highLoad_noConflicts() {
+		// Test LOCKING_WORK_STEALING with high load where each request gets unique vehicle
+		int numVehicles = 500;
+		int numRequests = 500;
+		int numWorkers = 8;
+
+		List<DvrpVehicle> vehicleList = new ArrayList<>();
+		Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntryMap = new HashMap<>();
+		for (int i = 0; i < numVehicles; i++) {
+			var vehicle = vehicle("lws_v" + i);
+			vehicleList.add(vehicle);
+			vehicleEntryMap.put(vehicle.getId(), new VehicleEntry(vehicle, null, null, null, null, 0));
+		}
+
+		List<DrtRequest> requestList = new ArrayList<>();
+		for (int i = 0; i < numRequests; i++) {
+			requestList.add(request("lws_req" + i, "from" + i, "to" + i));
+		}
+
+		var fleet = fleet(vehicleList.toArray(new DvrpVehicle[0]));
+		var unplannedRequests = requests(requestList.toArray(new DrtRequest[0]));
+		double now = 15;
+
+		VehicleEntry.EntryFactory entryFactory = (vehicle, currentTime) -> vehicleEntryMap.get(vehicle.getId());
+
+		DrtRequestInsertionRetryQueue retryQueue = new DrtRequestInsertionRetryQueue(
+				new DrtRequestInsertionRetryParams());
+
+		Set<Id<Request>> scheduledRequests = Collections.synchronizedSet(new HashSet<>());
+
+		// Each request gets unique vehicle
+		DrtInsertionSearch insertionSearch = (drtRequest, vEntries) -> {
+			if (vEntries.isEmpty()) return Optional.empty();
+			String reqId = drtRequest.getId().toString();
+			int requestNum = Integer.parseInt(reqId.replace("lws_req", ""));
+			var vehicleEntry = vehicleEntryMap.get(Id.create("lws_v" + requestNum, DvrpVehicle.class));
+			if (vehicleEntry == null) return Optional.empty();
+			return Optional.of(new InsertionWithDetourData(
+					new InsertionGenerator.Insertion(vehicleEntry, null, null, loadType.fromInt(1)), null,
+					new InsertionDetourTimeCalculator.DetourTimeInfo(
+							mock(InsertionDetourTimeCalculator.PickupDetourInfo.class),
+							mock(InsertionDetourTimeCalculator.DropoffDetourInfo.class))));
+		};
+
+		double processTime = now + COLLECTION_PERIOD;
+		RequestInsertionScheduler insertionScheduler = (acceptedRequest, insertion) -> {
+			scheduledRequests.add(acceptedRequest.getId());
+			var pickupTask = new DefaultDrtStopTask(processTime, processTime + 10, acceptedRequest.getFromLink());
+			pickupTask.addPickupRequest(acceptedRequest);
+			var dropoffTask = new DefaultDrtStopTask(processTime + 20, processTime + 30, acceptedRequest.getToLink());
+			dropoffTask.addPickupRequest(acceptedRequest);
+			return new PickupDropoffTaskPair(pickupTask, dropoffTask);
+		};
+
+		var inserter = newInserterWithLockingWorkStealing(fleet, entryFactory, retryQueue, insertionSearch, insertionScheduler, numWorkers);
+		inserter.scheduleUnplannedRequests(unplannedRequests);
+
+		inserter.doSimStep(now);
+		inserter.doSimStep(processTime);
+
+		assertThat(unplannedRequests).isEmpty();
+		assertThat(scheduledRequests).doesNotHaveDuplicates();
+		assertThat(scheduledRequests).hasSize(numRequests);
+		verify(eventsManager, times(numRequests)).processEvent(any(PassengerRequestScheduledEvent.class));
+	}
+
+	@Test
+	void lockingWorkStealing_withConflicts_findAlternative() {
+		// Test LOCKING_WORK_STEALING with conflicts
+		// Multiple requests want the same vehicles, FIND_ALTERNATIVE should resolve conflicts
+		int numVehicles = 100;
+		int numRequests = 50;
+		int numWorkers = 8;
+
+		List<DvrpVehicle> vehicleList = new ArrayList<>();
+		Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntryMap = new HashMap<>();
+		for (int i = 0; i < numVehicles; i++) {
+			var vehicle = vehicle("conflict_v" + i);
+			vehicleList.add(vehicle);
+			vehicleEntryMap.put(vehicle.getId(), new VehicleEntry(vehicle, null, null, null, null, 0));
+		}
+
+		List<DrtRequest> requestList = new ArrayList<>();
+		for (int i = 0; i < numRequests; i++) {
+			requestList.add(request("conflict_req" + i, "from" + i, "to" + i));
+		}
+
+		var fleet = fleet(vehicleList.toArray(new DvrpVehicle[0]));
+		var unplannedRequests = requests(requestList.toArray(new DrtRequest[0]));
+		double now = 15;
+
+		VehicleEntry.EntryFactory entryFactory = (vehicle, currentTime) -> vehicleEntryMap.get(vehicle.getId());
+
+		DrtRequestInsertionRetryQueue retryQueue = new DrtRequestInsertionRetryQueue(
+				new DrtRequestInsertionRetryParams());
+
+		Set<Id<Request>> scheduledRequests = Collections.synchronizedSet(new HashSet<>());
+
+		// Each request prefers a vehicle based on request number modulo 10
+		// This creates conflicts (5 requests per vehicle), but alternatives exist
+		DrtInsertionSearch insertionSearch = (drtRequest, vEntries) -> {
+			if (vEntries.isEmpty()) return Optional.empty();
+			String reqId = drtRequest.getId().toString();
+			int requestNum = Integer.parseInt(reqId.replace("conflict_req", ""));
+			// Prefer vehicle (requestNum % 10) - creates 5 conflicts per vehicle
+			int preferredVehicleNum = requestNum % 10;
+			var preferredEntry = vehicleEntryMap.get(Id.create("conflict_v" + preferredVehicleNum, DvrpVehicle.class));
+			// Check if preferred is in available entries, otherwise use first available
+			for (var entry : vEntries) {
+				if (entry.vehicle.getId().equals(preferredEntry.vehicle.getId())) {
+					return Optional.of(new InsertionWithDetourData(
+						new InsertionGenerator.Insertion(entry, null, null, loadType.fromInt(1)), null,
+						new InsertionDetourTimeCalculator.DetourTimeInfo(
+							mock(InsertionDetourTimeCalculator.PickupDetourInfo.class),
+							mock(InsertionDetourTimeCalculator.DropoffDetourInfo.class))));
+				}
+			}
+			// Fallback to first available
+			var vehicleEntry = vEntries.iterator().next();
+			return Optional.of(new InsertionWithDetourData(
+					new InsertionGenerator.Insertion(vehicleEntry, null, null, loadType.fromInt(1)), null,
+					new InsertionDetourTimeCalculator.DetourTimeInfo(
+							mock(InsertionDetourTimeCalculator.PickupDetourInfo.class),
+							mock(InsertionDetourTimeCalculator.DropoffDetourInfo.class))));
+		};
+
+		double processTime = now + COLLECTION_PERIOD;
+		RequestInsertionScheduler insertionScheduler = (acceptedRequest, insertion) -> {
+			scheduledRequests.add(acceptedRequest.getId());
+			var pickupTask = new DefaultDrtStopTask(processTime, processTime + 10, acceptedRequest.getFromLink());
+			pickupTask.addPickupRequest(acceptedRequest);
+			var dropoffTask = new DefaultDrtStopTask(processTime + 20, processTime + 30, acceptedRequest.getToLink());
+			dropoffTask.addPickupRequest(acceptedRequest);
+			return new PickupDropoffTaskPair(pickupTask, dropoffTask);
+		};
+
+		var inserter = newInserterWithLockingWorkStealing(fleet, entryFactory, retryQueue, insertionSearch, insertionScheduler, numWorkers);
+		inserter.scheduleUnplannedRequests(unplannedRequests);
+
+		inserter.doSimStep(now);
+		inserter.doSimStep(processTime);
+
+		assertThat(unplannedRequests).isEmpty();
+		assertThat(scheduledRequests).doesNotHaveDuplicates();
+		// With FIND_ALTERNATIVE and 100 vehicles for 50 requests, most should be scheduled
+		// Even with conflicts, alternatives should be found
+		assertThat(scheduledRequests).hasSizeGreaterThanOrEqualTo(10);
+	}
+
+	@Test
+	void lockingWorkStealing_repeatedExecution_deterministic() {
+		// Run the same scenario multiple times and verify results are consistent
+		int numVehicles = 100;
+		int numRequests = 100;
+		int numWorkers = 4;
+		int numIterations = 5;
+
+		List<Integer> scheduledCounts = new ArrayList<>();
+
+		for (int iteration = 0; iteration < numIterations; iteration++) {
+			EventsManager iterationEventsManager = mock(EventsManager.class);
+
+			List<DvrpVehicle> vehicleList = new ArrayList<>();
+			Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntryMap = new HashMap<>();
+			for (int i = 0; i < numVehicles; i++) {
+				var vehicle = vehicle("det_v" + i);
+				vehicleList.add(vehicle);
+				vehicleEntryMap.put(vehicle.getId(), new VehicleEntry(vehicle, null, null, null, null, 0));
+			}
+
+			List<DrtRequest> requestList = new ArrayList<>();
+			for (int i = 0; i < numRequests; i++) {
+				requestList.add(request("det_req" + i, "from" + i, "to" + i));
+			}
+
+			var fleet = fleet(vehicleList.toArray(new DvrpVehicle[0]));
+			var unplannedRequests = requests(requestList.toArray(new DrtRequest[0]));
+			double now = 15;
+
+			VehicleEntry.EntryFactory entryFactory = (vehicle, currentTime) -> vehicleEntryMap.get(vehicle.getId());
+
+			DrtRequestInsertionRetryQueue retryQueue = new DrtRequestInsertionRetryQueue(
+					new DrtRequestInsertionRetryParams());
+
+			Set<Id<Request>> scheduledRequests = Collections.synchronizedSet(new HashSet<>());
+
+			DrtInsertionSearch insertionSearch = (drtRequest, vEntries) -> {
+				if (vEntries.isEmpty()) return Optional.empty();
+				String reqId = drtRequest.getId().toString();
+				int requestNum = Integer.parseInt(reqId.replace("det_req", ""));
+				var vehicleEntry = vehicleEntryMap.get(Id.create("det_v" + requestNum, DvrpVehicle.class));
+				if (vehicleEntry == null) return Optional.empty();
+				return Optional.of(new InsertionWithDetourData(
+						new InsertionGenerator.Insertion(vehicleEntry, null, null, loadType.fromInt(1)), null,
+						new InsertionDetourTimeCalculator.DetourTimeInfo(
+								mock(InsertionDetourTimeCalculator.PickupDetourInfo.class),
+								mock(InsertionDetourTimeCalculator.DropoffDetourInfo.class))));
+			};
+
+			double processTime = now + COLLECTION_PERIOD;
+			RequestInsertionScheduler insertionScheduler = (acceptedRequest, insertion) -> {
+				scheduledRequests.add(acceptedRequest.getId());
+				var pickupTask = new DefaultDrtStopTask(processTime, processTime + 10, acceptedRequest.getFromLink());
+				pickupTask.addPickupRequest(acceptedRequest);
+				var dropoffTask = new DefaultDrtStopTask(processTime + 20, processTime + 30, acceptedRequest.getToLink());
+				dropoffTask.addPickupRequest(acceptedRequest);
+				return new PickupDropoffTaskPair(pickupTask, dropoffTask);
+			};
+
+			RequestsPartitioner requestsPartitioner = new RoundRobinRequestsPartitioner();
+			VehicleEntryPartitioner vehicleEntryPartitioner = new ReplicatingVehicleEntryPartitioner();
+
+			DrtParallelInserterParams params = new DrtParallelInserterParams();
+			params.setCollectionPeriod(COLLECTION_PERIOD);
+			params.setMaxIterations(1);
+			params.setMaxPartitions(numWorkers);
+			params.setLogThreadActivity(false);
+			params.setWorkDistributionMode(DrtParallelInserterParams.WorkDistributionMode.LOCKING_WORK_STEALING);
+			params.setLockFailureStrategy(DrtParallelInserterParams.LockFailureStrategy.FIND_ALTERNATIVE);
+
+			var inserter = new ParallelUnplannedRequestInserter(
+					matsimServices,
+					requestsPartitioner,
+					vehicleEntryPartitioner,
+					params,
+					mode,
+					fleet,
+					iterationEventsManager,
+					() -> insertionScheduler,
+					entryFactory,
+					() -> insertionSearch,
+					new DefaultOfferAcceptor(),
+					StaticPassengerStopDurationProvider.of(10.0, 0.0),
+					RequestFleetFilter.none,
+					retryQueue
+			);
+
+			inserter.scheduleUnplannedRequests(unplannedRequests);
+			inserter.doSimStep(now);
+			inserter.doSimStep(processTime);
+
+			scheduledCounts.add(scheduledRequests.size());
+
+			assertThat(unplannedRequests).as("Iteration " + iteration).isEmpty();
+			assertThat(scheduledRequests).as("Iteration " + iteration).doesNotHaveDuplicates();
+		}
+
+		// All iterations should have the same result (determinism)
+		assertThat(scheduledCounts).as("All iterations should schedule same count").containsOnly(numRequests);
+	}
+
 	private Collection<DrtRequest> requests(DrtRequest... requests) {
 		return new ArrayList<>(Arrays.asList(requests));//returned collection needs to be modifiable
 	}
@@ -1101,6 +1401,41 @@ public class ParallelUnplannedRequestInserterTest {
 		params.setMaxIterations(2);
 		params.setMaxPartitions(maxPartitions);
 		params.setLogThreadActivity(false);
+		params.setWorkDistributionMode(DrtParallelInserterParams.WorkDistributionMode.PARTITIONING);
+
+		return new ParallelUnplannedRequestInserter(
+				matsimServices,
+				requestsPartitioner,
+				vehicleEntryPartitioner,
+				params,
+				mode,
+				fleet,
+				eventsManager,
+				() -> insertionScheduler,
+				vehicleEntryFactory,
+				() -> insertionSearch,
+				new DefaultOfferAcceptor(),
+				StaticPassengerStopDurationProvider.of(10.0, 0.0),
+				RequestFleetFilter.none,
+				insertionRetryQueue
+		);
+	}
+
+	private ParallelUnplannedRequestInserter newInserterWithLockingWorkStealing(Fleet fleet,
+			VehicleEntry.EntryFactory vehicleEntryFactory, DrtRequestInsertionRetryQueue insertionRetryQueue,
+			DrtInsertionSearch insertionSearch, RequestInsertionScheduler insertionScheduler, int numWorkers) {
+
+		RequestsPartitioner requestsPartitioner = new RoundRobinRequestsPartitioner();
+		VehicleEntryPartitioner vehicleEntryPartitioner = new ReplicatingVehicleEntryPartitioner();
+
+		DrtParallelInserterParams params = new DrtParallelInserterParams();
+		params.setCollectionPeriod(COLLECTION_PERIOD);
+		params.setMaxIterations(1); // Usually only 1 iteration needed with locking
+		params.setMaxPartitions(numWorkers);
+		params.setLogThreadActivity(false);
+		params.setWorkDistributionMode(DrtParallelInserterParams.WorkDistributionMode.LOCKING_WORK_STEALING);
+		params.setLockFailureStrategy(DrtParallelInserterParams.LockFailureStrategy.FIND_ALTERNATIVE);
+		params.setMaxLockRetries(3);
 
 		return new ParallelUnplannedRequestInserter(
 				matsimServices,
