@@ -37,13 +37,13 @@ public class RunScalabilityBenchmark {
 			String suffix = agents / 1000 + "k";
 
 			// Default inserter
-			runner.addScenario("Default-" + suffix, () -> {
-				Controler c = SyntheticBenchmarkScenario.builder()
-					.agents(agents).vehicles(vehicles)
-					.outputDirectory("output/benchmark/default_" + suffix)
-					.build();
-				c.run();
-			});
+//			runner.addScenario("Default-" + suffix, () -> {
+//				Controler c = SyntheticBenchmarkScenario.builder()
+//					.agents(agents).vehicles(vehicles)
+//					.outputDirectory("output/benchmark/default_" + suffix)
+//					.build();
+//				c.run();
+//			});
 
 			// Parallel inserter (8 partitions)
 			runner.addScenario("Parallel8-" + suffix, () -> {
@@ -55,8 +55,11 @@ public class RunScalabilityBenchmark {
 				var drtCfg = MultiModeDrtConfigGroup.get(c.getConfig()).getModalElements().iterator().next();
 				DrtParallelInserterParams params = new DrtParallelInserterParams();
 				params.setMaxPartitions(8);
-				params.setMaxIterations(3);
+				params.setMaxIterations(1);
 				params.setCollectionPeriod(30);
+				params.setMaxAgeForIndexZeroInsertions(10);
+				params.setExecutionMode(DrtParallelInserterParams.ExecutionMode.ASYNCHRONOUS);
+
 				drtCfg.addParameterSet(params);
 
 				DrtSpatialRequestFleetFilterParams drtSpatialRequestFleetFilterParams = new DrtSpatialRequestFleetFilterParams();

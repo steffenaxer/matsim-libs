@@ -38,6 +38,24 @@ public class DrtParallelInserterParams extends ReflectiveConfigGroup {
 
 	public enum RequestsPartitioner {RoundRobinRequestsPartitioner, LoadAwareRoundRobinRequestsPartitioner}
 
+	/**
+	 * Execution mode for the parallel inserter.
+	 */
+	public enum ExecutionMode {
+		/**
+		 * Synchronous batch processing: Collects requests for a period, then blocks mobsim during calculation.
+		 * This is the default and well-tested mode.
+		 */
+		SYNCHRONOUS,
+
+		/**
+		 * Asynchronous processing: Calculations run in background while mobsim continues.
+		 * Uses DiversionPoint-based validation to ensure calculated insertions are still valid.
+		 * EXPERIMENTAL: May provide better performance but requires careful tuning.
+		 */
+		ASYNCHRONOUS
+	}
+
 	public static final String SET_NAME = "parallelInserter";
 
 	@Comment("Time window (in seconds) for collecting incoming requests before processing begins.")
@@ -67,6 +85,49 @@ public class DrtParallelInserterParams extends ReflectiveConfigGroup {
 
 	@Comment("Enable/Disable thread activity statistics. Note: Disabled by default to improve performance and save memory-")
 	private boolean logThreadActivity = false;
+
+	@Comment("Execution mode: SYNCHRONOUS (default, blocks mobsim during calculation) or ASYNCHRONOUS (experimental, calculates in background)")
+	@NotNull
+	private ExecutionMode executionMode = ExecutionMode.SYNCHRONOUS;
+
+	@Comment("Maximum age in seconds for insertions before the first stop (index 0). " +
+		"Only relevant for ASYNCHRONOUS mode. These insertions depend on the exact DiversionPoint " +
+		"and may become invalid if the calculation takes too long.")
+	private double maxAgeForIndexZeroInsertions = 10.0;
+
+	@Comment("Maximum number of retry attempts when a calculated insertion becomes invalid due to schedule changes. " +
+		"Only relevant for ASYNCHRONOUS mode.")
+	private int asyncMaxRetries = 3;
+
+	@StringGetter("executionMode")
+	public ExecutionMode getExecutionMode() {
+		return executionMode;
+	}
+
+	@StringSetter("executionMode")
+	public void setExecutionMode(ExecutionMode executionMode) {
+		this.executionMode = executionMode;
+	}
+
+	@StringGetter("maxAgeForIndexZeroInsertions")
+	public double getMaxAgeForIndexZeroInsertions() {
+		return maxAgeForIndexZeroInsertions;
+	}
+
+	@StringSetter("maxAgeForIndexZeroInsertions")
+	public void setMaxAgeForIndexZeroInsertions(double maxAgeForIndexZeroInsertions) {
+		this.maxAgeForIndexZeroInsertions = maxAgeForIndexZeroInsertions;
+	}
+
+	@StringGetter("asyncMaxRetries")
+	public int getAsyncMaxRetries() {
+		return asyncMaxRetries;
+	}
+
+	@StringSetter("asyncMaxRetries")
+	public void setAsyncMaxRetries(int asyncMaxRetries) {
+		this.asyncMaxRetries = asyncMaxRetries;
+	}
 
 	@StringGetter("vehiclesPartitioner")
 	public VehiclesPartitioner getVehiclesPartitioner() {

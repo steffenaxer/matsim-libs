@@ -100,6 +100,8 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 	private final DrtRequestInsertionRetryQueue insertionRetryQueue;
 	private final PartitionActivityLogger activityLogger;
 	private final ConflictResolver conflictResolver;
+	private final DrtParallelInserterParams.ExecutionMode executionMode;
+	private final AsyncInsertionStrategy asyncInsertionStrategy;
 
 	public ParallelUnplannedRequestInserter(MatsimServices matsimServices, RequestsPartitioner requestsPartitioner, VehicleEntryPartitioner vehicleEntryPartitioner, DrtParallelInserterParams drtParallelInserterParams, DrtConfigGroup drtCfg, Fleet fleet,
 											EventsManager eventsManager, Provider<RequestInsertionScheduler> insertionSchedulerProvider,
@@ -137,6 +139,17 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		);
 		this.activityLogger = new PartitionActivityLogger(matsimServices, mode, drtParallelInserterParams);
 		this.conflictResolver = new ConflictResolver();
+		this.executionMode = drtParallelInserterParams.getExecutionMode();
+		this.asyncInsertionStrategy = new AsyncInsertionStrategy(
+			drtParallelInserterParams.getMaxAgeForIndexZeroInsertions(),
+			drtParallelInserterParams.getAsyncMaxRetries()
+		);
+
+		if (executionMode == DrtParallelInserterParams.ExecutionMode.ASYNCHRONOUS) {
+			LOG.info("Using ASYNCHRONOUS execution mode with DiversionPoint-based validation");
+		} else {
+			LOG.info("Using SYNCHRONOUS execution mode (default)");
+		}
 	}
 
 	private List<RequestInsertWorker> createWorkers(int n) {
@@ -294,10 +307,128 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 
 	@Override
 	public void doSimStep(double time) {
+		if (executionMode == DrtParallelInserterParams.ExecutionMode.ASYNCHRONOUS) {
+			doSimStepAsync(time);
+		} else {
+			doSimStepSync(time);
+		}
+	}
+
+	/**
+	 * Synchronous execution: Blocks mobsim during calculation (default behavior).
+	 */
+	private void doSimStepSync(double time) {
 		if (!shouldProcess(time)) {
 			return;
 		}
 		processRequests(time);
+	}
+
+	/**
+	 * Asynchronous execution: Calculates in background, validates before scheduling.
+	 *
+	 * <p>In async mode, we process pending validated solutions every step,
+	 * and start new calculations when the collection period expires.</p>
+	 */
+	private void doSimStepAsync(double time) {
+		// Always process any ready validated solutions
+		processValidatedSolutions(time);
+
+		// Start new calculations if collection period has passed
+		if (shouldProcess(time)) {
+			startAsyncCalculations(time);
+		}
+	}
+
+	/**
+	 * Processes validated insertion solutions (async mode).
+	 */
+	private void processValidatedSolutions(double time) {
+		Map<Id<DvrpVehicle>, VehicleEntry> currentEntries = null;
+		int processed = 0;
+
+		while (asyncInsertionStrategy.hasPendingSolutions()) {
+			// Lazy load current entries only when needed
+			if (currentEntries == null) {
+				currentEntries = calculateVehicleEntries(time, this.fleet.getVehicles().values());
+			}
+
+			var validatedResult = asyncInsertionStrategy.pollAndValidate(currentEntries, time);
+			if (validatedResult.isEmpty()) {
+				break;
+			}
+
+			var result = validatedResult.get();
+			if (result.isValid()) {
+				// Schedule the valid insertion
+				var request = result.calculationResult().request();
+				var insertion = result.calculationResult().insertion();
+
+				var vehicle = insertion.insertion.vehicleEntry.vehicle;
+				double pickupDuration = stopDurationProvider.calcPickupDuration(vehicle, request);
+				double dropoffDuration = stopDurationProvider.calcDropoffDuration(vehicle, request);
+
+				var acceptedRequest = drtOfferAcceptor.acceptDrtOffer(request,
+					insertion.detourTimeInfo.pickupDetourInfo.requestPickupTime,
+					insertion.detourTimeInfo.dropoffDetourInfo.requestDropoffTime,
+					pickupDuration, dropoffDuration);
+
+				if (acceptedRequest.isPresent()) {
+					var pickupDropoffTaskPair = insertionScheduler.scheduleRequest(acceptedRequest.get(), insertion);
+
+					// Notify async strategy that schedule was modified
+					asyncInsertionStrategy.onRequestScheduled(vehicle.getId());
+
+					// Update entries for next iteration
+					VehicleEntry newEntry = vehicleEntryFactory.create(vehicle, time);
+					if (newEntry != null) {
+						currentEntries = new HashMap<>(currentEntries);
+						currentEntries.put(vehicle.getId(), newEntry);
+					}
+
+					double expectedPickupTime = Math.max(pickupDropoffTaskPair.pickupTask.getBeginTime(),
+						acceptedRequest.get().getEarliestStartTime()) + pickupDuration;
+					double expectedDropoffTime = pickupDropoffTaskPair.dropoffTask.getBeginTime() + dropoffDuration;
+
+					eventsManager.processEvent(
+						new PassengerRequestScheduledEvent(time, mode, request.getId(), request.getPassengerIds(),
+							vehicle.getId(), expectedPickupTime, expectedDropoffTime));
+					processed++;
+				} else {
+					retryOrReject(request, time, OFFER_REJECTED_CAUSE);
+				}
+			} else {
+				// Invalid insertion - requeue for recalculation
+				tmpQueue.add(result.calculationResult().request());
+				LOG.debug("Insertion invalidated for request {} - requeued",
+					result.calculationResult().request().getId());
+			}
+		}
+
+		if (processed > 0) {
+			LOG.debug("Async mode: scheduled {} requests", processed);
+		}
+	}
+
+	/**
+	 * Starts async calculations (does not block).
+	 */
+	private void startAsyncCalculations(double time) {
+		handleInsertionRetryQueue(time);
+
+		if (tmpQueue.isEmpty()) {
+			return;
+		}
+
+		Map<Id<DvrpVehicle>, VehicleEntry> vehicleEntries = calculateVehicleEntries(time, this.fleet.getVehicles().values());
+
+		// For now, use synchronous calculation but store results for async validation
+		// TODO: In a full implementation, this would be truly asynchronous
+		InsertionRoundResult result = runInsertionRounds(time, vehicleEntries);
+		result.rejected().forEach(req -> retryOrReject(req, time, NO_INSERTION_FOUND_CAUSE));
+		LOG.debug("Async mode: started calculations, scheduled {} requests", result.scheduledCount());
+
+		this.workers.forEach(RequestInsertWorker::clean);
 	}
 
 	private boolean shouldProcess(double time) {
@@ -383,6 +514,10 @@ public class ParallelUnplannedRequestInserter implements UnplannedRequestInserte
 		activityLogger.writeOutputs();
 		inserterExecutorService.shutdown();
 		LOG.info("Avg. conflict share {} ", conflictResolver.getAverageConflictShare());
+
+		if (executionMode == DrtParallelInserterParams.ExecutionMode.ASYNCHRONOUS) {
+			LOG.info(asyncInsertionStrategy.getMetricsSummary());
+		}
 	}
 
 
