@@ -5,6 +5,7 @@
 package org.matsim.contrib.drt.extension.benchmark;
 
 import org.matsim.contrib.drt.extension.benchmark.scenario.SyntheticBenchmarkScenario;
+import org.matsim.contrib.drt.extension.benchmark.traveltime.ClusteredTravelTimeModule;
 import org.matsim.contrib.drt.extension.insertion.spatialFilter.DrtSpatialRequestFleetFilterParams;
 import org.matsim.contrib.drt.extension.insertion.spatialFilter.SpatialFilterInsertionSearchQSimModule;
 import org.matsim.contrib.drt.optimizer.insertion.parallel.DrtParallelInserterParams;
@@ -136,6 +137,13 @@ public class RunScalabilityBenchmark {
 							}
 
 							c.addOverridingQSimModule(new ParallelRequestInserterModule(drtCfg));
+
+							// Optional: Clustered TravelTime for better cache efficiency
+							if (finalConfig.isUseClusteredTravelTime()) {
+								c.addOverridingModule(new ClusteredTravelTimeModule(
+									finalConfig.getNumTravelTimePatterns()));
+							}
+
 							c.run();
 							return outputDir;
 						});
@@ -160,6 +168,10 @@ public class RunScalabilityBenchmark {
 		System.out.println("Measured Runs: " + config.getMeasuredRuns());
 		System.out.println("Output Directory: " + config.getOutputDirectory());
 		System.out.println("Use Spatial Filter: " + config.isUseSpatialFilter());
+		System.out.println("Use Clustered TravelTime: " + config.isUseClusteredTravelTime());
+		if (config.isUseClusteredTravelTime()) {
+			System.out.println("  - Num Patterns: " + config.getNumTravelTimePatterns());
+		}
 		System.out.println("====================================");
 
 		int totalScenarios = config.getAgentCounts().size()

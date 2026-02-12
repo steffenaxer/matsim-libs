@@ -156,12 +156,21 @@ drt-extensions/
     ├── DrtBenchmarkConfigGroup.java # MATSim config group
     ├── DrtBenchmarkRunner.java      # Benchmark execution engine
     ├── BenchmarkResult.java         # Result record with quality stats
+    ├── docs/
+    │   └── AdaptiveClusteredTravelTime.md   # Concept paper for adaptive clustering
+    ├── traveltime/                          # Optimized TravelTime implementations
+    │   ├── AdaptiveClusteredTravelTime.java # Adaptive pattern-based TravelTime wrapper
+    │   └── ClusteredTravelTimeModule.java   # MATSim module for easy integration
     └── scenario/
         ├── SyntheticBenchmarkScenario.java  # Scenario builder
         ├── GridNetworkGenerator.java        # Grid network generation
         ├── PopulationGenerator.java         # Population generation
         └── FleetGenerator.java              # Fleet generation
 ```
+
+## Further Reading
+
+- [Adaptive Clustered TravelTime](docs/AdaptiveClusteredTravelTime.md) - Adaptive pattern-based optimization for TravelTime lookups
 
 ## Tips
 

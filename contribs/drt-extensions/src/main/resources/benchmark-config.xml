@@ -14,7 +14,7 @@
 		<!-- ================================================================== -->
 
 		<!-- Comma-separated list of agent counts to test -->
-		<param name="agentCounts" value="50000,100000"/>
+		<param name="agentCounts" value="50000"/>
 
 		<!-- Number of vehicles per 100 agents (with 50000 agents and value 1 = 500 vehicles) -->
 		<param name="vehiclesPerHundredAgents" value="1"/>
@@ -74,6 +74,12 @@
 
 		<!-- Enable spatial request-fleet filter (reduces search space) -->
 		<param name="useSpatialFilter" value="true"/>
+
+		<!-- Enable clustered TravelTime for better cache efficiency -->
+		<param name="useClusteredTravelTime" value="false"/>
+
+		<!-- Number of TravelTime patterns/clusters (more = more accuracy) -->
+		<param name="numTravelTimePatterns" value="256"/>
 
 	</module>
 </config>

@@ -279,6 +279,8 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 
 	private static final String OUTPUT_DIRECTORY = "outputDirectory";
 	private static final String USE_SPATIAL_FILTER = "useSpatialFilter";
+	private static final String USE_CLUSTERED_TRAVEL_TIME = "useClusteredTravelTime";
+	private static final String NUM_TRAVEL_TIME_PATTERNS = "numTravelTimePatterns";
 
 	@Comment("Output directory for benchmark results (timestamp subfolder will be created)")
 	@NotBlank
@@ -286,6 +288,12 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 
 	@Comment("Enable spatial request-fleet filter (reduces search space)")
 	private boolean useSpatialFilter = true;
+
+	@Comment("Enable clustered TravelTime for better cache efficiency (~100x less memory, 2-4x faster)")
+	private boolean useClusteredTravelTime = false;
+
+	@Comment("Number of TravelTime patterns/clusters (more = more accuracy, less compression)")
+	private int numTravelTimePatterns = 256;
 
 	@StringGetter(OUTPUT_DIRECTORY)
 	public String getOutputDirectory() {
@@ -305,6 +313,26 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter(USE_SPATIAL_FILTER)
 	public void setUseSpatialFilter(boolean useSpatialFilter) {
 		this.useSpatialFilter = useSpatialFilter;
+	}
+
+	@StringGetter(USE_CLUSTERED_TRAVEL_TIME)
+	public boolean isUseClusteredTravelTime() {
+		return useClusteredTravelTime;
+	}
+
+	@StringSetter(USE_CLUSTERED_TRAVEL_TIME)
+	public void setUseClusteredTravelTime(boolean useClusteredTravelTime) {
+		this.useClusteredTravelTime = useClusteredTravelTime;
+	}
+
+	@StringGetter(NUM_TRAVEL_TIME_PATTERNS)
+	public int getNumTravelTimePatterns() {
+		return numTravelTimePatterns;
+	}
+
+	@StringSetter(NUM_TRAVEL_TIME_PATTERNS)
+	public void setNumTravelTimePatterns(int numTravelTimePatterns) {
+		this.numTravelTimePatterns = numTravelTimePatterns;
 	}
 
 	// =========================================================================
