@@ -62,6 +62,9 @@ public class SpeedyCHGraph {
         this.edgeData = edgeData;
         this.nodeLevel = nodeLevel;
         this.edgeWeights = new double[edgeCount];
+        // Pre-allocate TTF arrays so customization can reuse them across iterations.
+        this.ttf    = new double[edgeCount][SpeedyCHTTFCustomizer.NUM_BINS];
+        this.minTTF = new double[edgeCount];
     }
 
     SpeedyGraph getBaseGraph() {

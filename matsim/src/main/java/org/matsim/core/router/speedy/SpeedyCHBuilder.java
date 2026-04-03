@@ -58,8 +58,9 @@ public class SpeedyCHBuilder {
     private int    witnessIteration = 0;
     private final int[]    witnessIterIds;
     private final double[] witnessCost;
-    // Reusable PQ for witness search (cleared via .clear() between searches)
-    private final PriorityQueue<double[]> witnessHeap;
+    private final int[]    witnessHops;
+    // Fast heap for witness search; keyed by cost, indexed by node.
+    private final DAryMinHeap witnessHeap;
 
     @SuppressWarnings("unchecked")
     public SpeedyCHBuilder(SpeedyGraph graph, TravelDisutility td) {
@@ -84,9 +85,9 @@ public class SpeedyCHBuilder {
 
         this.witnessIterIds = new int[nodeCount];
         this.witnessCost    = new double[nodeCount];
+        this.witnessHops    = new int[nodeCount];
         Arrays.fill(witnessCost, Double.POSITIVE_INFINITY);
-        this.witnessHeap = new PriorityQueue<>(
-                (a, b) -> Double.compare(a[1], b[1]));
+        this.witnessHeap = new DAryMinHeap(nodeCount, 4);
     }
 
     /** Runs the full CH build pipeline and returns the ready-to-customize graph. */
@@ -237,18 +238,14 @@ public class SpeedyCHBuilder {
 
         witnessIterIds[source] = witnessIteration;
         witnessCost[source]    = 0.0;
-        witnessHeap.offer(new double[]{source, 0.0, 0.0}); // {node, cost, hops}
+        witnessHops[source]    = 0;
+        witnessHeap.insert(source, 0.0);
 
         while (!witnessHeap.isEmpty()) {
-            double[] entry = witnessHeap.poll();
-            int    node = (int) entry[0];
-            double cost = entry[1];
-            int    hops = (int) entry[2];
+            int    node = witnessHeap.poll();
+            double cost = witnessCost[node];
+            int    hops = witnessHops[node];
 
-            // Stale entry: a cheaper path was found later.
-            if (witnessIterIds[node] == witnessIteration && cost > witnessCost[node]) {
-                continue;
-            }
             if (node == target)    return cost;
             if (cost >= maxCost)   continue; // cost bound – cannot improve
             if (hops >= HOP_LIMIT) continue; // hop limit
@@ -262,11 +259,15 @@ public class SpeedyCHBuilder {
                 double newCost = cost + buildEdgeWeights[edgeIdx];
                 if (newCost > maxCost) continue;
 
-                if (witnessIterIds[toNode] != witnessIteration
-                        || newCost < witnessCost[toNode]) {
+                if (witnessIterIds[toNode] != witnessIteration) {
                     witnessCost[toNode]    = newCost;
+                    witnessHops[toNode]    = hops + 1;
                     witnessIterIds[toNode] = witnessIteration;
-                    witnessHeap.offer(new double[]{toNode, newCost, hops + 1.0});
+                    witnessHeap.insert(toNode, newCost);
+                } else if (newCost < witnessCost[toNode]) {
+                    witnessCost[toNode]    = newCost;
+                    witnessHops[toNode]    = hops + 1;
+                    witnessHeap.decreaseKey(toNode, newCost);
                 }
             }
         }

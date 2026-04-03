@@ -74,10 +74,6 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
     private final SpeedyCHGraph.DownwardInEdgeIterator downInIter;
 
     public SpeedyCHTimeDep(SpeedyCHGraph chGraph, TravelTime tt, TravelDisutility td) {
-        if (chGraph.ttf == null || chGraph.minTTF == null) {
-            throw new IllegalArgumentException(
-                    "SpeedyCHGraph has no TTF data. Run SpeedyCHTTFCustomizer first.");
-        }
         this.chGraph   = chGraph;
         this.baseGraph = chGraph.getBaseGraph();
         this.tt        = tt;

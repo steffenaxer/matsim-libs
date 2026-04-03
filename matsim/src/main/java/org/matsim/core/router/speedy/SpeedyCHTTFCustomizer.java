@@ -4,8 +4,6 @@ import org.matsim.api.core.v01.network.Link;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
 
-import java.util.Arrays;
-
 /**
  * Time-dependent customization of a {@link SpeedyCHGraph} using
  * Travel Time Functions (TTFs) – one {@code double[]} per edge per time bin.
@@ -51,13 +49,14 @@ public class SpeedyCHTTFCustomizer {
         int   edgeCount = chGraph.edgeCount;
         int[] edgeData  = chGraph.edgeData;
 
-        double[][] ttf    = new double[edgeCount][NUM_BINS];
-        double[]   minTTF = new double[edgeCount];
-        Arrays.fill(minTTF, Double.POSITIVE_INFINITY);
+        // Reuse pre-allocated arrays from the CH graph (avoids per-iteration GC pressure).
+        double[][] ttf    = chGraph.ttf;
+        double[]   minTTF = chGraph.minTTF;
 
         for (int e = 0; e < edgeCount; e++) {
             int base     = e * SpeedyCHGraph.EDGE_SIZE;
             int origLink = edgeData[base + 4];
+            double min   = Double.POSITIVE_INFINITY;
 
             if (origLink >= 0) {
                 // ---- Real edge: sample TravelTime at each bin start ----
@@ -65,7 +64,7 @@ public class SpeedyCHTTFCustomizer {
                 for (int k = 0; k < NUM_BINS; k++) {
                     double t = tt.getLinkTravelTime(link, k * BIN_SIZE, null, null);
                     ttf[e][k] = t;
-                    if (t < minTTF[e]) minTTF[e] = t;
+                    if (t < min) min = t;
                 }
             } else {
                 // ---- Shortcut: CATCHUp composition ----
@@ -78,16 +77,14 @@ public class SpeedyCHTTFCustomizer {
                     double t2           = ttf[lower2][arrivalBin];
                     double composed     = t1 + t2;
                     ttf[e][k]  = composed;
-                    if (composed < minTTF[e]) minTTF[e] = composed;
+                    if (composed < min) min = composed;
                 }
             }
 
+            minTTF[e] = min;
             // Write the per-edge minimum into edgeWeights for the backward lower-bound search.
-            chGraph.edgeWeights[e] = minTTF[e];
+            chGraph.edgeWeights[e] = min;
         }
-
-        chGraph.ttf    = ttf;
-        chGraph.minTTF = minTTF;
     }
 
     /**
