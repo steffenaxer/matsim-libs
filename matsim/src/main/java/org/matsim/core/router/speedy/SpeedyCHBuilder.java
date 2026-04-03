@@ -5,7 +5,6 @@ import org.matsim.core.router.util.TravelDisutility;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.PriorityQueue;
 
 /**
  * Builds a {@link SpeedyCHGraph} from a {@link SpeedyGraph} using the
@@ -120,24 +119,26 @@ public class SpeedyCHBuilder {
 
     private void contractNodes() {
         // Min-priority queue ordered by contraction priority.
-        // Entry: double[]{nodeId, priority}
-        PriorityQueue<double[]> pq = new PriorityQueue<>(
-                (a, b) -> Double.compare(a[1], b[1]));
+        // Uses DAryMinHeap for zero-allocation operation (no double[] per node).
+        DAryMinHeap pq = new DAryMinHeap(nodeCount, 4);
+        int[] nodePriority = new int[nodeCount]; // cached priority per node
 
         for (int node = 0; node < nodeCount; node++) {
-            pq.offer(new double[]{node, computePriority(node)});
+            int prio = computePriority(node);
+            nodePriority[node] = prio;
+            pq.insert(node, prio);
         }
 
         int levelCounter = 0;
         while (!pq.isEmpty()) {
-            double[] entry = pq.poll();
-            int node = (int) entry[0];
+            int node = pq.poll();
             if (contracted[node]) continue;
 
             // Lazy update: recompute priority and re-queue if it increased.
             int newPriority = computePriority(node);
-            if (newPriority > (int) entry[1]) {
-                pq.offer(new double[]{node, newPriority});
+            if (newPriority > nodePriority[node]) {
+                nodePriority[node] = newPriority;
+                pq.insert(node, newPriority);
                 continue;
             }
 
