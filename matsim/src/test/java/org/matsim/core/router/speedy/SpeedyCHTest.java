@@ -7,11 +7,10 @@ import org.matsim.core.router.costcalculators.FreespeedTravelTimeAndDisutility;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 
 /**
- * Standard LeastCostPathCalculator test suite for the SpeedyCH system
- * (CATCHUp time-dependent router backed by {@link SpeedyCHTimeDep}).
- *
- * <p>Uses {@link FreespeedTravelTimeAndDisutility} which makes TTFs constant over
- * time, so results must match the static shortest paths expected by the test suite.
+ * Standard LeastCostPathCalculator test suite for the SpeedyCH system.
+ * Uses {@link SpeedyCHTimeDep} with constant {@link FreespeedTravelTimeAndDisutility}
+ * TTFs so that the time-dependent router produces static shortest paths matching
+ * the expected test results.
  */
 public class SpeedyCHTest extends AbstractCHLeastCostPathCalculatorTest {
 
