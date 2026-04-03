@@ -41,6 +41,10 @@ public class SpeedyCHBuilder {
     /** Maximum hops allowed in the witness search. */
     private static final int HOP_LIMIT = 5;
 
+    /** Maximum number of nodes settled in a single witness search.
+     *  Prevents unbounded exploration on large networks. */
+    private static final int SETTLED_LIMIT = 500;
+
     private final SpeedyGraph graph;
     private final TravelDisutility td;
     private final int nodeCount;
@@ -195,7 +199,7 @@ public class SpeedyCHBuilder {
         int[] nodePriority = new int[nodeCount];
 
         for (int node = 0; node < nodeCount; node++) {
-            int prio = computePriority(node);
+            int prio = estimatePriority(node);
             nodePriority[node] = prio;
             pq.insert(node, prio);
         }
@@ -206,8 +210,8 @@ public class SpeedyCHBuilder {
             int node = pq.poll();
             if (contracted[node]) continue;
 
-            // Lazy update: recompute priority and re-queue if it increased.
-            int newPriority = computePriority(node);
+            // Lazy update: recompute cheap priority estimate and re-queue if it increased.
+            int newPriority = estimatePriority(node);
             if (newPriority > nodePriority[node]) {
                 nodePriority[node] = newPriority;
                 pq.insert(node, newPriority);
@@ -239,61 +243,31 @@ public class SpeedyCHBuilder {
     }
 
     /**
-     * Computes the contraction priority using batched witness search.
-     * For each in-neighbour u, ONE Dijkstra finds witnesses for ALL out-neighbours w.
+     * Cheap priority estimate based on the edge-difference heuristic.
+     * Uses worst-case shortcut count (inDeg × outDeg) as an upper bound,
+     * avoiding the expensive witness search for priority ordering.
+     * The actual witness search only runs when a node is contracted.
      */
-    private int computePriority(int node) {
+    private int estimatePriority(int node) {
         int oOff = outOff[node], oLen = outLen[node];
         int iOff = inOff[node],  iLen = inLen[node];
 
-        // Collect active out-neighbours and their edge costs v→w.
-        int numTargets = 0;
-        for (int i = 0; i < oLen; i++) {
-            int outIdx = outBuf[oOff + i];
-            int w = buildEdgeData[outIdx * BE_SIZE + BE_TO];
-            if (contracted[w] || w == node) continue;
-            if (numTargets >= scratchTargets.length) growScratch();
-            scratchTargets[numTargets]  = w;
-            scratchMaxCosts[numTargets] = buildEdgeWeights[outIdx];
-            numTargets++;
-        }
-
-        int inDeg  = 0;
-        int outDeg = numTargets;
-        int shortcuts = 0;
-
+        int inDeg = 0;
         for (int j = 0; j < iLen; j++) {
-            int inIdx = inBuf[iOff + j];
-            int u = buildEdgeData[inIdx * BE_SIZE + BE_FROM];
-            if (contracted[u] || u == node) continue;
-            inDeg++;
-            if (numTargets == 0) continue;
-
-            double wUV = buildEdgeWeights[inIdx];
-
-            // Find max cost bound for this u.
-            double globalMax = 0;
-            for (int t = 0; t < numTargets; t++) {
-                if (scratchTargets[t] == u) continue;
-                double bound = wUV + scratchMaxCosts[t];
-                if (bound > globalMax) globalMax = bound;
-            }
-
-            // One batched Dijkstra from u.
-            batchedWitnessSearch(u, node, globalMax);
-
-            // Count shortcuts needed.
-            for (int t = 0; t < numTargets; t++) {
-                int w = scratchTargets[t];
-                if (w == u) continue;
-                double scCost = wUV + scratchMaxCosts[t];
-                double witCost = (witnessIterIds[w] == witnessIteration)
-                        ? witnessCost[w] : Double.POSITIVE_INFINITY;
-                if (witCost >= scCost) shortcuts++;
-            }
+            int u = buildEdgeData[inBuf[iOff + j] * BE_SIZE + BE_FROM];
+            if (!contracted[u] && u != node) inDeg++;
+        }
+        int outDeg = 0;
+        for (int i = 0; i < oLen; i++) {
+            int w = buildEdgeData[outBuf[oOff + i] * BE_SIZE + BE_TO];
+            if (!contracted[w] && w != node) outDeg++;
         }
 
-        return shortcuts - (inDeg + outDeg) + contractedNeighborCount[node];
+        // Upper bound on shortcuts (worst case: all need shortcuts).
+        // The actual contraction will use witness search to add only necessary ones.
+        int worstCaseShortcuts = inDeg * outDeg;
+        int removed = inDeg + outDeg;
+        return worstCaseShortcuts - removed + contractedNeighborCount[node];
     }
 
     private void growScratch() {
@@ -355,10 +329,10 @@ public class SpeedyCHBuilder {
                 if (w == u) continue;
                 double shortcutCost = wUV + scratchMaxCosts[t];
 
-                // Check if witness found (cost < shortcutCost).
+                // Check if witness found (cost <= shortcutCost means witness exists).
                 double witnessCostToW = (witnessIterIds[w] == witnessIteration)
                         ? witnessCost[w] : Double.POSITIVE_INFINITY;
-                if (witnessCostToW < shortcutCost) continue; // witness exists
+                if (witnessCostToW <= shortcutCost) continue; // witness exists
 
                 // Check if existing edge u→w is already at least as cheap.
                 boolean superseded = false;
@@ -396,13 +370,15 @@ public class SpeedyCHBuilder {
         witnessHops[source]    = 0;
         witnessHeap.insert(source, 0.0);
 
+        int settled = 0;
         while (!witnessHeap.isEmpty()) {
             int    v    = witnessHeap.poll();
             double cost = witnessCost[v];
             int    hops = witnessHops[v];
 
-            if (cost >= maxCost)   break; // everything remaining exceeds bound
+            if (cost > maxCost)   break; // everything remaining exceeds bound
             if (hops >= HOP_LIMIT) continue;
+            if (++settled > SETTLED_LIMIT) break; // prevent unbounded exploration
 
             int vOOff = outOff[v], vOLen = outLen[v];
             for (int i = 0; i < vOLen; i++) {
@@ -412,7 +388,7 @@ public class SpeedyCHBuilder {
                 if (contracted[toNode]) continue;
 
                 double newCost = cost + buildEdgeWeights[edgeIdx];
-                if (newCost >= maxCost) continue;
+                if (newCost > maxCost) continue;
 
                 if (witnessIterIds[toNode] != witnessIteration) {
                     witnessCost[toNode]    = newCost;
