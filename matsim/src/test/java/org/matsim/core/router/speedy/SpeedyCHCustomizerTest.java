@@ -19,10 +19,6 @@ import org.matsim.core.scenario.ScenarioUtils;
  */
 public class SpeedyCHCustomizerTest {
 
-    /**
-     * After TTF customization of a linear A→B→C network, every TTF bin value for
-     * each real edge must equal the link's freespeed travel time (constant over time bins).
-     */
     @Test
     void testRealEdgeTTFValues() {
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
@@ -46,13 +42,14 @@ public class SpeedyCHCustomizerTest {
         Assertions.assertNotNull(ch.minTTF, "minTTF array must be populated");
 
         // For freespeed travel time the TTF is constant across all bins.
-        for (int e = 0; e < ch.edgeCount; e++) {
-            int origLink = ch.edgeData[e * SpeedyCHGraph.EDGE_SIZE + 4];
+        int numBins = SpeedyCHTTFCustomizer.NUM_BINS;
+        for (int e = 0; e < ch.totalEdgeCount; e++) {
+            int origLink = ch.edgeOrigLink[e];
             if (origLink >= 0) {
                 Link link = g.getLink(origLink);
                 double expected = tc.getLinkTravelTime(link, 0.0, null, null);
-                for (int k = 0; k < SpeedyCHTTFCustomizer.NUM_BINS; k++) {
-                    Assertions.assertEquals(expected, ch.ttf[e][k], 1e-9,
+                for (int k = 0; k < numBins; k++) {
+                    Assertions.assertEquals(expected, ch.ttf[e * numBins + k], 1e-9,
                             "Real edge TTF bin " + k + " mismatch for link " + link.getId());
                 }
                 Assertions.assertEquals(expected, ch.minTTF[e], 1e-9,
@@ -61,10 +58,6 @@ public class SpeedyCHCustomizerTest {
         }
     }
 
-    /**
-     * Shortcut TTF values must be consistent with the CATCHUp composition formula:
-     * {@code ttf[shortcut][k] == ttf[lower1][k] + ttf[lower2][ bin(k*BIN_SIZE + ttf[lower1][k]) ]}
-     */
     @Test
     void testShortcutTTFComposition() {
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
@@ -88,28 +81,26 @@ public class SpeedyCHCustomizerTest {
         SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).build();
         new SpeedyCHTTFCustomizer().customize(ch, tc, tc);
 
-        // Verify composition for every shortcut.
-        for (int e = 0; e < ch.edgeCount; e++) {
-            int base   = e * SpeedyCHGraph.EDGE_SIZE;
-            int orig   = ch.edgeData[base + 4];
-            int lower1 = ch.edgeData[base + 6];
-            int lower2 = ch.edgeData[base + 7];
+        int numBins = SpeedyCHTTFCustomizer.NUM_BINS;
+        for (int e = 0; e < ch.totalEdgeCount; e++) {
+            int orig   = ch.edgeOrigLink[e];
+            int lower1 = ch.edgeLower1[e];
+            int lower2 = ch.edgeLower2[e];
             if (orig < 0 && lower1 >= 0 && lower2 >= 0) {
-                for (int k = 0; k < SpeedyCHTTFCustomizer.NUM_BINS; k++) {
-                    double t1          = ch.ttf[lower1][k];
-                    int    arrBin      = SpeedyCHTTFCustomizer.timeToBin(k * SpeedyCHTTFCustomizer.BIN_SIZE + t1);
-                    double t2          = ch.ttf[lower2][arrBin];
-                    double expected    = t1 + t2;
-                    Assertions.assertEquals(expected, ch.ttf[e][k], 1e-9,
+                int eOff  = e * numBins;
+                int l1Off = lower1 * numBins;
+                int l2Off = lower2 * numBins;
+                for (int k = 0; k < numBins; k++) {
+                    double t1       = ch.ttf[l1Off + k];
+                    int    arrBin   = SpeedyCHTTFCustomizer.timeToBin(k * SpeedyCHTTFCustomizer.BIN_SIZE + t1);
+                    double t2       = ch.ttf[l2Off + arrBin];
+                    double expected = t1 + t2;
+                    Assertions.assertEquals(expected, ch.ttf[eOff + k], 1e-9,
                             "Shortcut " + e + " TTF bin " + k + " mismatch");
                 }
             }
         }
     }
-
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
 
     private static void addLink(Network network, String id, Node from, Node to,
                                 double length, double freespeed) {

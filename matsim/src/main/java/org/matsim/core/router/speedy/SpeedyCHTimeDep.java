@@ -17,29 +17,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
- * Time-dependent CATCHUp bidirectional CH query.
- *
- * <p>Requires a {@link SpeedyCHGraph} whose {@link SpeedyCHTTFCustomizer} has already been
- * applied (i.e., {@link SpeedyCHGraph#ttf} and {@link SpeedyCHGraph#minTTF} are non-null).
- *
- * <h3>Algorithm</h3>
- * <ul>
- *   <li><b>Forward search</b> from source: evaluates {@code ttf[e][ bin(currentTime) ]} at each
- *       relaxed edge; tracks <em>absolute arrival time</em> at every node.</li>
- *   <li><b>Backward search</b> from target: uses {@code minTTF[e]} (the per-edge minimum
- *       travel time over all time bins) as a conservative FIFO lower bound.</li>
- *   <li><b>Meeting node</b>: the node that minimises
- *       {@code fwdArrival[v] + bwdLowerBound[v]}.</li>
- *   <li><b>Stopping criterion</b>: {@code fwdPQ.minArrival + bwdPQ.minLB >= bestBound}.</li>
- *   <li><b>Path reconstruction</b>: shortcuts are unpacked recursively; actual travel times
- *       and disutilities are recomputed by a forward pass over the original links.</li>
- * </ul>
- *
- * <p>This implementation is <b>not thread-safe</b>. Every thread must own a separate instance;
- * the underlying {@link SpeedyCHGraph} may be shared.
+ * Time-dependent CATCHUp bidirectional CH query using the optimised
+ * CSR-based {@link SpeedyCHGraph} with flat TTF array.
  *
  * @author Implementation for CCH/CATCHUp router
  */
@@ -52,15 +33,18 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
     private final TravelTime       tt;
     private final TravelDisutility td;
 
-    // Forward search: tracks both absolute arrival times and relative travel times.
-    private final double[] fwdArrival;   // absolute arrival time at node (for TTF bin lookup)
-    private final double[] fwdCost;      // relative travel time from source (for PQ key and stopping)
+    // Resolved once in constructor – avoids Optional.isPresent() on hot path.
+    private final TurnRestrictionsContext turnRestrictions; // null if none
+
+    // Forward search state
+    private final double[] fwdArrival;
+    private final double[] fwdCost;
     private final int[]    fwdComingFrom;
-    private final int[]    fwdUsedEdge;
+    private final int[]    fwdUsedEdge;  // stores global edge index
     private final int[]    fwdIterIds;
 
-    // Backward search: tracks lower-bound remaining travel times.
-    private final double[] bwdLB;        // lower-bound remaining time to target
+    // Backward search state
+    private final double[] bwdLB;
     private final int[]    bwdComingFrom;
     private final int[]    bwdUsedEdge;
     private final int[]    bwdIterIds;
@@ -70,14 +54,18 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
     private final DAryMinHeap fwdPQ;
     private final DAryMinHeap bwdPQ;
 
-    private final SpeedyCHGraph.UpwardOutEdgeIterator  outUpIter;
-    private final SpeedyCHGraph.DownwardInEdgeIterator downInIter;
+    // Local references for hot-path access (avoid field dereference chains)
+    private final int[]    upOff, upLen, upEdges, upGlobalIdx;
+    private final int[]    dnOff, dnLen, dnEdges, dnGlobalIdx;
+    private final double[] ttf;
+    private final double[] minTTF;
 
     public SpeedyCHTimeDep(SpeedyCHGraph chGraph, TravelTime tt, TravelDisutility td) {
         this.chGraph   = chGraph;
         this.baseGraph = chGraph.getBaseGraph();
         this.tt        = tt;
         this.td        = td;
+        this.turnRestrictions = baseGraph.getTurnRestrictions().orElse(null);
 
         int n = chGraph.nodeCount;
         this.fwdArrival    = new double[n];
@@ -97,13 +85,18 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
         this.fwdPQ = new DAryMinHeap(n, 6);
         this.bwdPQ = new DAryMinHeap(n, 6);
 
-        this.outUpIter  = chGraph.getUpwardOutEdgeIterator();
-        this.downInIter = chGraph.getDownwardInEdgeIterator();
+        // Cache array references for hot-path
+        this.upOff       = chGraph.upOff;
+        this.upLen       = chGraph.upLen;
+        this.upEdges     = chGraph.upEdges;
+        this.upGlobalIdx = chGraph.upGlobalIdx;
+        this.dnOff       = chGraph.dnOff;
+        this.dnLen       = chGraph.dnLen;
+        this.dnEdges     = chGraph.dnEdges;
+        this.dnGlobalIdx = chGraph.dnGlobalIdx;
+        this.ttf         = chGraph.ttf;
+        this.minTTF      = chGraph.minTTF;
     }
-
-    // -------------------------------------------------------------------------
-    // Public API
-    // -------------------------------------------------------------------------
 
     @Override
     public Path calcLeastCostPath(Node startNode, Node endNode,
@@ -111,9 +104,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
         int startIdx = startNode.getId().index();
         int endIdx   = endNode.getId().index();
         Path path    = calcLeastCostPathImpl(startIdx, endIdx, startTime, person, vehicle);
-        if (path == null) {
-            logNoRoute("node " + startNode.getId(), "node " + endNode.getId());
-        }
+        if (path == null) logNoRoute("node " + startNode.getId(), "node " + endNode.getId());
         return path;
     }
 
@@ -123,18 +114,15 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
         int startIdx = fromLink.getToNode().getId().index();
         int endIdx   = toLink.getFromNode().getId().index();
 
-        if (baseGraph.getTurnRestrictions().isPresent()) {
-            Map<Id<Link>, TurnRestrictionsContext.ColoredLink> replaced =
-                    baseGraph.getTurnRestrictions().get().replacedLinks;
+        if (turnRestrictions != null) {
+            Map<Id<Link>, TurnRestrictionsContext.ColoredLink> replaced = turnRestrictions.replacedLinks;
             if (replaced.containsKey(fromLink.getId())) {
                 startIdx = replaced.get(fromLink.getId()).toColoredNode.index();
             }
         }
 
         Path path = calcLeastCostPathImpl(startIdx, endIdx, startTime, person, vehicle);
-        if (path == null) {
-            logNoRoute("link " + fromLink.getId(), "link " + toLink.getId());
-        }
+        if (path == null) logNoRoute("link " + fromLink.getId(), "link " + toLink.getId());
         return path;
     }
 
@@ -146,30 +134,25 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                                        double startTime, Person person, Vehicle vehicle) {
         advanceIteration();
 
-        // Trivial same-node case.
         if (startIdx == endIdx) {
             return new Path(
                     Collections.singletonList(baseGraph.getNode(startIdx)),
                     Collections.emptyList(), 0.0, 0.0);
         }
 
-        // Initialize forward search.
-        // PQ is keyed by relative travel time from source (fwdCost).
-        // fwdArrival stores absolute arrival time for TTF bin lookups.
+        // Initialize forward search
         setFwd(startIdx, startTime, 0.0, -1, -1);
         fwdPQ.clear();
         fwdPQ.insert(startIdx, 0.0);
 
-        // Initialize backward search (lower-bound remaining times).
+        // Initialize backward search
         setBwd(endIdx, 0.0, -1, -1);
         bwdPQ.clear();
         bwdPQ.insert(endIdx, 0.0);
 
-        // With turn restrictions, also seed backward search from colored copies of the
-        // destination node and forward search from colored copies of the source node.
-        Optional<TurnRestrictionsContext> trOpt = baseGraph.getTurnRestrictions();
-        if (trOpt.isPresent()) {
-            for (TurnRestrictionsContext.ColoredNode cn : trOpt.get().coloredNodes) {
+        // Seed colored copies for turn restrictions
+        if (turnRestrictions != null) {
+            for (TurnRestrictionsContext.ColoredNode cn : turnRestrictions.coloredNodes) {
                 int origIdx = cn.node().getId().index();
                 int coloredIdx = cn.index();
                 if (origIdx == endIdx && coloredIdx != endIdx) {
@@ -183,20 +166,18 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
             }
         }
 
+        final int S = SpeedyCHGraph.E_STRIDE;
+        final int NUM_BINS = SpeedyCHTTFCustomizer.NUM_BINS;
+        final double INV_BIN = SpeedyCHTTFCustomizer.INV_BIN_SIZE;
+
         double bestBound   = Double.POSITIVE_INFINITY;
         int    meetingNode = -1;
 
         while (!fwdPQ.isEmpty() || !bwdPQ.isEmpty()) {
-            // Stopping criterion.  A meeting can involve:
-            //  (a) two unsettled nodes           → cost ≥ fMin + bMin
-            //  (b) fwd-unsettled, bwd-settled     → cost ≥ fMin
-            //  (c) fwd-settled,   bwd-unsettled   → cost ≥ bMin
-            // So the overall lower bound on any future meeting is min(fMin, bMin).
             double fMin = fwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : fwdCost[fwdPQ.peek()];
             double bMin = bwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : bwdLB[bwdPQ.peek()];
-            if (Math.min(fMin, bMin) >= bestBound) break;
+            if (fMin >= bestBound && bMin >= bestBound) break;
 
-            // Expand the side with the smaller key (both are relative travel times).
             boolean expandForward = !fwdPQ.isEmpty()
                     && (bwdPQ.isEmpty() || fMin <= bMin);
 
@@ -205,7 +186,6 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                 double arr = fwdArrival[v];
                 double cost = fwdCost[v];
 
-                // Update meeting point.
                 if (bwdIterIds[v] == currentIteration) {
                     double bound = cost + bwdLB[v];
                     if (bound < bestBound) {
@@ -214,31 +194,35 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                     }
                 }
 
-                // Relax upward out-edges (time-dependent TTF lookup).
-                int bin = SpeedyCHTTFCustomizer.timeToBin(arr);
-                outUpIter.reset(v);
-                while (outUpIter.next()) {
-                    int    e          = outUpIter.getEdgeIndex();
-                    int    w          = outUpIter.getToNode();
-                    double travelTime = chGraph.ttf[e][bin];
-                    double newArr     = arr + travelTime;
-                    double newCost    = cost + travelTime;
+                // Compute time bin once for this node
+                int bin = ((int) (arr * INV_BIN)) % NUM_BINS;
+                if (bin < 0) bin += NUM_BINS;
+
+                // Iterate upward out-edges (CSR: contiguous in memory)
+                int uOff = upOff[v];
+                int uEnd = uOff + upLen[v];
+                for (int slot = uOff; slot < uEnd; slot++) {
+                    int eBase      = slot * S;
+                    int w          = upEdges[eBase]; // toNode
+                    int gIdx       = upGlobalIdx[slot];
+                    double tTime   = ttf[gIdx * NUM_BINS + bin];
+                    double newArr  = arr + tTime;
+                    double newCost = cost + tTime;
 
                     if (fwdIterIds[w] == currentIteration) {
                         if (newCost < fwdCost[w]) {
                             fwdArrival[w]    = newArr;
                             fwdCost[w]       = newCost;
                             fwdComingFrom[w] = v;
-                            fwdUsedEdge[w]   = e;
+                            fwdUsedEdge[w]   = gIdx;
                             fwdPQ.decreaseKey(w, newCost);
-                        } else if (newCost == fwdCost[w] && e < fwdUsedEdge[w]) {
-                            // Tie-breaking: prefer lower edge index for deterministic paths.
+                        } else if (newCost == fwdCost[w] && gIdx < fwdUsedEdge[w]) {
                             fwdArrival[w]    = newArr;
                             fwdComingFrom[w] = v;
-                            fwdUsedEdge[w]   = e;
+                            fwdUsedEdge[w]   = gIdx;
                         }
                     } else {
-                        setFwd(w, newArr, newCost, v, e);
+                        setFwd(w, newArr, newCost, v, gIdx);
                         fwdPQ.insert(w, newCost);
                     }
                 }
@@ -247,7 +231,6 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                 int v   = bwdPQ.poll();
                 double lb = bwdLB[v];
 
-                // Update meeting point.
                 if (fwdIterIds[v] == currentIteration) {
                     double bound = fwdCost[v] + lb;
                     if (bound < bestBound) {
@@ -256,26 +239,27 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                     }
                 }
 
-                // Relax downward in-edges using minTTF lower bounds.
-                downInIter.reset(v);
-                while (downInIter.next()) {
-                    int    e      = downInIter.getEdgeIndex();
-                    int    y      = downInIter.getFromNode(); // higher-level predecessor
-                    double newLB  = lb + chGraph.minTTF[e];
+                // Iterate downward in-edges (CSR)
+                int dOff = dnOff[v];
+                int dEnd = dOff + dnLen[v];
+                for (int slot = dOff; slot < dEnd; slot++) {
+                    int eBase = slot * S;
+                    int y     = dnEdges[eBase]; // fromNode (higher-level)
+                    int gIdx  = dnGlobalIdx[slot];
+                    double newLB = lb + minTTF[gIdx];
 
                     if (bwdIterIds[y] == currentIteration) {
                         if (newLB < bwdLB[y]) {
                             bwdLB[y]         = newLB;
                             bwdComingFrom[y] = v;
-                            bwdUsedEdge[y]   = e;
+                            bwdUsedEdge[y]   = gIdx;
                             bwdPQ.decreaseKey(y, newLB);
-                        } else if (newLB == bwdLB[y] && e < bwdUsedEdge[y]) {
-                            // Tie-breaking: prefer lower edge index for deterministic paths.
+                        } else if (newLB == bwdLB[y] && gIdx < bwdUsedEdge[y]) {
                             bwdComingFrom[y] = v;
-                            bwdUsedEdge[y]   = e;
+                            bwdUsedEdge[y]   = gIdx;
                         }
                     } else {
-                        setBwd(y, newLB, v, e);
+                        setBwd(y, newLB, v, gIdx);
                         bwdPQ.insert(y, newLB);
                     }
                 }
@@ -287,7 +271,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
     }
 
     // -------------------------------------------------------------------------
-    // Path construction and shortcut unpacking
+    // Path construction
     // -------------------------------------------------------------------------
 
     private Path constructPath(int startIdx, int meetingNode,
@@ -297,7 +281,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
 
         nodeList.add(baseGraph.getNode(startIdx));
 
-        // --- Collect forward CH edges (source → meeting node) ---
+        // Forward part
         List<Integer> fwdEdges = new ArrayList<>();
         int curr = meetingNode;
         while (fwdComingFrom[curr] >= 0) {
@@ -305,18 +289,18 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
             curr = fwdComingFrom[curr];
         }
         Collections.reverse(fwdEdges);
-        for (int edgeIdx : fwdEdges) {
-            unpackEdge(edgeIdx, nodeList, linkList);
+        for (int gIdx : fwdEdges) {
+            unpackEdge(gIdx, nodeList, linkList);
         }
 
-        // --- Follow backward CH edges (meeting node → target) ---
+        // Backward part
         curr = meetingNode;
         while (bwdComingFrom[curr] >= 0) {
             unpackEdge(bwdUsedEdge[curr], nodeList, linkList);
             curr = bwdComingFrom[curr];
         }
 
-        // --- Compute actual travel time and disutility over the unpacked path ---
+        // Compute actual travel time and cost
         double time = startTime;
         double cost = 0.0;
         for (Link link : linkList) {
@@ -328,24 +312,16 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
         return new Path(nodeList, linkList, time - startTime, cost);
     }
 
-    /**
-     * Recursively unpacks a CH edge: appends intermediate nodes (exclusive of
-     * fromNode, inclusive of toNode) and original links to the provided lists.
-     */
-    private void unpackEdge(int edgeIdx, List<Node> nodeList, List<Link> linkList) {
-        int base     = edgeIdx * SpeedyCHGraph.EDGE_SIZE;
-        int origLink = chGraph.edgeData[base + 4];
-        int toNode   = chGraph.edgeData[base + 3];
-
-        if (origLink >= 0) {
-            linkList.add(baseGraph.getLink(origLink));
-            nodeList.add(baseGraph.getNode(toNode));
+    private void unpackEdge(int gIdx, List<Node> nodeList, List<Link> linkList) {
+        int orig = chGraph.edgeOrigLink[gIdx];
+        if (orig >= 0) {
+            linkList.add(baseGraph.getLink(orig));
+            // We need to find the toNode. For global edges, we don't store from/to directly.
+            // But the link itself carries the toNode.
+            nodeList.add(baseGraph.getLink(orig).getToNode());
         } else {
-            // Shortcut: recursively unpack sub-edges via middleNode.
-            int lower1 = chGraph.edgeData[base + 6];
-            int lower2 = chGraph.edgeData[base + 7];
-            unpackEdge(lower1, nodeList, linkList);
-            unpackEdge(lower2, nodeList, linkList);
+            unpackEdge(chGraph.edgeLower1[gIdx], nodeList, linkList);
+            unpackEdge(chGraph.edgeLower2[gIdx], nodeList, linkList);
         }
     }
 

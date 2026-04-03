@@ -6,174 +6,99 @@ import org.matsim.api.core.v01.network.Node;
 /**
  * CH (Contraction Hierarchies) overlay graph built on top of a {@link SpeedyGraph}.
  *
- * <p>After contraction, edges are separated into:
- * <ul>
- *   <li><b>Upward edges</b> (level[from] &lt; level[to]): stored in the out-up adjacency of
- *       {@code fromNode}. Used by the <em>forward</em> CH search.</li>
- *   <li><b>Downward edges</b> (level[from] &gt; level[to]): stored in the down-in adjacency of
- *       {@code toNode}. Used by the <em>backward</em> CH search.</li>
- * </ul>
+ * <h3>Memory layout (CSR – Compressed Sparse Row)</h3>
+ * <p>Upward out-edges and downward in-edges are stored in two separate, contiguous
+ * {@code int[]} arrays ({@link #upEdges}, {@link #dnEdges}).  For each node the
+ * offset into that array and the number of edges are stored in
+ * {@link #upOff}/{@link #upLen} and {@link #dnOff}/{@link #dnLen}.
+ * This gives O(1) random access per node and sequential memory access when
+ * iterating a node's edges — far better cache behaviour than a linked list.
  *
- * <p>Edge data layout – {@value #EDGE_SIZE} ints per edge:
+ * <p>Per-edge data (4 ints each, packed tightly):
  * <pre>
- *   [0] next out-up  edge for fromNode  (linked-list pointer; -1 if last or downward edge)
- *   [1] next down-in edge for toNode    (linked-list pointer; -1 if last or upward edge)
- *   [2] fromNode index
- *   [3] toNode   index
- *   [4] originalLinkIndex  (&gt;=0 for real edges, -1 for shortcuts)
- *   [5] middleNode         (-1 for real edges)
- *   [6] lowerEdge1 index   (edge from→middle; -1 for real edges)
- *   [7] lowerEdge2 index   (edge middle→to;   -1 for real edges)
+ *   [0] toNode / fromNode index   (toNode for up-edges, fromNode for dn-edges)
+ *   [1] originalLinkIndex         (≥0 for real edges, -1 for shortcuts)
+ *   [2] lowerEdge1 index          (-1 for real edges)
+ *   [3] lowerEdge2 index          (-1 for real edges)
  * </pre>
  *
- * <p>Node data layout – {@value #NODE_SIZE} ints per node:
- * <pre>
- *   [0] first out-up  edge of this node (forward  search)
- *   [1] first down-in edge of this node (backward search)
- * </pre>
+ * <h3>TTF layout (flat contiguous)</h3>
+ * <p>{@link #ttf} is a single {@code double[edgeCount * NUM_BINS]} array where
+ * {@code ttf[e * NUM_BINS + k]} is the travel time for edge {@code e} departing
+ * in time bin {@code k}. This avoids the pointer chase of {@code double[][]}.
  *
  * @author Implementation for CCH/CATCHUp router
  */
 public class SpeedyCHGraph {
 
-    static final int NODE_SIZE = 2;
-    static final int EDGE_SIZE = 8;
+    /** Ints per edge in the CSR edge arrays. */
+    static final int E_STRIDE = 4;
+    static final int E_NODE   = 0; // toNode (up) or fromNode (dn)
+    static final int E_ORIG   = 1; // originalLinkIndex
+    static final int E_LOW1   = 2; // lowerEdge1
+    static final int E_LOW2   = 3; // lowerEdge2
 
     final int nodeCount;
-    final int edgeCount;
-    final int[] nodeData;   // NODE_SIZE ints per node
-    final int[] edgeData;   // EDGE_SIZE ints per edge
-    final int[] nodeLevel;  // CH level per node (0 = least important, nodeCount-1 = most important)
-    final double[] edgeWeights; // static lower-bound weights (= min TTF per edge after time-dep customization)
 
-    // Time-dependent Travel Time Functions (TTF) – filled by SpeedyCHTTFCustomizer.
-    // ttf[edgeIdx][binIdx] = travel time (seconds) for departure in time bin binIdx.
-    double[][] ttf;    // null until SpeedyCHTTFCustomizer has run
-    double[] minTTF;   // precomputed per-edge minimum over all time bins; null until computed
+    // --- upward out-edges (used by forward search) ---
+    final int   upEdgeCount;
+    final int[] upOff;       // upOff[node] = start index in upEdges for this node
+    final int[] upLen;       // upLen[node] = number of upward edges for this node
+    final int[] upEdges;     // E_STRIDE ints per edge, packed
+    final int[] upGlobalIdx; // maps local up-edge ordinal → global edge index (for TTF/weight lookup)
+
+    // --- downward in-edges (used by backward search) ---
+    final int   dnEdgeCount;
+    final int[] dnOff;
+    final int[] dnLen;
+    final int[] dnEdges;
+    final int[] dnGlobalIdx;
+
+    // --- per-edge (global index) data ---
+    final int totalEdgeCount;       // = upEdgeCount + dnEdgeCount (every edge appears in exactly one list)
+    final double[] edgeWeights;     // edgeWeights[globalIdx]
+    final int[]    edgeOrigLink;    // originalLinkIndex per global edge
+    final int[]    edgeLower1;      // lowerEdge1 per global edge
+    final int[]    edgeLower2;      // lowerEdge2 per global edge
+
+    // Time-dependent TTF – flat contiguous array.
+    // ttf[globalIdx * NUM_BINS + bin] = travel time (seconds).
+    double[] ttf;
+    double[] minTTF;
 
     private final SpeedyGraph baseGraph;
 
-    SpeedyCHGraph(SpeedyGraph baseGraph, int nodeCount, int edgeCount,
-                  int[] nodeData, int[] edgeData, int[] nodeLevel) {
-        this.baseGraph = baseGraph;
-        this.nodeCount = nodeCount;
-        this.edgeCount = edgeCount;
-        this.nodeData = nodeData;
-        this.edgeData = edgeData;
-        this.nodeLevel = nodeLevel;
-        this.edgeWeights = new double[edgeCount];
-        // Pre-allocate TTF arrays so customization can reuse them across iterations.
-        this.ttf    = new double[edgeCount][SpeedyCHTTFCustomizer.NUM_BINS];
-        this.minTTF = new double[edgeCount];
+    SpeedyCHGraph(SpeedyGraph baseGraph, int nodeCount,
+                  int upEdgeCount, int[] upOff, int[] upLen, int[] upEdges, int[] upGlobalIdx,
+                  int dnEdgeCount, int[] dnOff, int[] dnLen, int[] dnEdges, int[] dnGlobalIdx,
+                  int totalEdgeCount, int[] edgeOrigLink, int[] edgeLower1, int[] edgeLower2) {
+        this.baseGraph      = baseGraph;
+        this.nodeCount      = nodeCount;
+        this.upEdgeCount    = upEdgeCount;
+        this.upOff          = upOff;
+        this.upLen          = upLen;
+        this.upEdges        = upEdges;
+        this.upGlobalIdx    = upGlobalIdx;
+        this.dnEdgeCount    = dnEdgeCount;
+        this.dnOff          = dnOff;
+        this.dnLen          = dnLen;
+        this.dnEdges        = dnEdges;
+        this.dnGlobalIdx    = dnGlobalIdx;
+        this.totalEdgeCount = totalEdgeCount;
+        this.edgeOrigLink   = edgeOrigLink;
+        this.edgeLower1     = edgeLower1;
+        this.edgeLower2     = edgeLower2;
+        this.edgeWeights    = new double[totalEdgeCount];
+        // Pre-allocate flat TTF arrays.
+        this.ttf    = new double[totalEdgeCount * SpeedyCHTTFCustomizer.NUM_BINS];
+        this.minTTF = new double[totalEdgeCount];
     }
 
     SpeedyGraph getBaseGraph() {
         return baseGraph;
     }
 
-    /** Returns the original MATSim {@link Link} for a real edge, or {@code null} for a shortcut. */
-    Link getLink(int edgeIndex) {
-        int linkIdx = edgeData[edgeIndex * EDGE_SIZE + 4];
-        if (linkIdx < 0) return null;
-        return baseGraph.getLink(linkIdx);
-    }
-
     Node getNode(int nodeIndex) {
         return baseGraph.getNode(nodeIndex);
-    }
-
-    /** Returns an iterator for upward out-edges of a node (used in forward search). */
-    UpwardOutEdgeIterator getUpwardOutEdgeIterator() {
-        return new UpwardOutEdgeIterator(this);
-    }
-
-    /** Returns an iterator for downward in-edges of a node (used in backward search). */
-    DownwardInEdgeIterator getDownwardInEdgeIterator() {
-        return new DownwardInEdgeIterator(this);
-    }
-
-    // -------------------------------------------------------------------------
-    // Iterator implementations
-    // -------------------------------------------------------------------------
-
-    /**
-     * Iterates over upward out-edges of a node: edges (node → w) where level[node] &lt; level[w].
-     * Used by the <em>forward</em> CH search.
-     */
-    static final class UpwardOutEdgeIterator {
-        private final SpeedyCHGraph chGraph;
-        private int nodeIdx = -1;
-        private int edgeIdx = -1;
-
-        UpwardOutEdgeIterator(SpeedyCHGraph chGraph) {
-            this.chGraph = chGraph;
-        }
-
-        void reset(int nodeIdx) {
-            this.nodeIdx = nodeIdx;
-            this.edgeIdx = -1;
-        }
-
-        boolean next() {
-            if (nodeIdx < 0) return false;
-            edgeIdx = (edgeIdx < 0)
-                    ? chGraph.nodeData[nodeIdx * NODE_SIZE]
-                    : chGraph.edgeData[edgeIdx * EDGE_SIZE];
-            if (edgeIdx < 0) {
-                nodeIdx = -1;
-                return false;
-            }
-            return true;
-        }
-
-        int getEdgeIndex()         { return edgeIdx; }
-        int getFromNode()          { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 2]; }
-        int getToNode()            { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 3]; }
-        double getWeight()         { return chGraph.edgeWeights[edgeIdx]; }
-        int getOriginalLinkIndex() { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 4]; }
-        int getMiddleNode()        { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 5]; }
-        int getLowerEdge1()        { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 6]; }
-        int getLowerEdge2()        { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 7]; }
-    }
-
-    /**
-     * Iterates over downward in-edges of a node: edges (y → node) where level[y] &gt; level[node].
-     * Used by the <em>backward</em> CH search (traversed in reverse: node ← y).
-     */
-    static final class DownwardInEdgeIterator {
-        private final SpeedyCHGraph chGraph;
-        private int nodeIdx = -1;
-        private int edgeIdx = -1;
-
-        DownwardInEdgeIterator(SpeedyCHGraph chGraph) {
-            this.chGraph = chGraph;
-        }
-
-        void reset(int nodeIdx) {
-            this.nodeIdx = nodeIdx;
-            this.edgeIdx = -1;
-        }
-
-        boolean next() {
-            if (nodeIdx < 0) return false;
-            edgeIdx = (edgeIdx < 0)
-                    ? chGraph.nodeData[nodeIdx * NODE_SIZE + 1]
-                    : chGraph.edgeData[edgeIdx * EDGE_SIZE + 1];
-            if (edgeIdx < 0) {
-                nodeIdx = -1;
-                return false;
-            }
-            return true;
-        }
-
-        int getEdgeIndex()         { return edgeIdx; }
-        /** The higher-level node that points to {@code nodeIdx} via this downward edge. */
-        int getFromNode()          { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 2]; }
-        int getToNode()            { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 3]; }
-        double getWeight()         { return chGraph.edgeWeights[edgeIdx]; }
-        int getOriginalLinkIndex() { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 4]; }
-        int getMiddleNode()        { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 5]; }
-        int getLowerEdge1()        { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 6]; }
-        int getLowerEdge2()        { return chGraph.edgeData[edgeIdx * EDGE_SIZE + 7]; }
     }
 }

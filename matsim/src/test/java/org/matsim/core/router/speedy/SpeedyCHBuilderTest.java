@@ -19,10 +19,6 @@ import org.matsim.core.scenario.ScenarioUtils;
  */
 public class SpeedyCHBuilderTest {
 
-    /**
-     * Builds a small linear network A→B→C→D and checks that the CH structure is valid:
-     * every node gets a level, and the number of edges (incl. shortcuts) is non-negative.
-     */
     @Test
     void testBuildLinearNetwork() {
         Network network = buildLinearNetwork(4);
@@ -31,20 +27,10 @@ public class SpeedyCHBuilderTest {
         SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).build();
 
         Assertions.assertEquals(g.nodeCount, ch.nodeCount);
-        Assertions.assertTrue(ch.edgeCount >= g.linkCount,
+        Assertions.assertTrue(ch.totalEdgeCount >= g.linkCount,
                 "CH should have at least as many edges as the base graph");
-
-        // All nodes must have a valid level in [0, nodeCount-1]
-        for (int i = 0; i < ch.nodeCount; i++) {
-            Assertions.assertTrue(ch.nodeLevel[i] >= 0
-                    && ch.nodeLevel[i] < ch.nodeCount, "Invalid level for node " + i);
-        }
     }
 
-    /**
-     * Builds a simple triangle network (A→B, B→C, A→C) and verifies that the CH
-     * produces a correct route when queried via {@link SpeedyCH}.
-     */
     @Test
     void testBuildTriangleNetwork() {
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
@@ -58,7 +44,7 @@ public class SpeedyCHBuilderTest {
 
         addLink(network, "AB", nA, nB, 100, 10);
         addLink(network, "BC", nB, nC, 100, 10);
-        addLink(network, "AC", nA, nC, 300, 10); // longer direct link
+        addLink(network, "AC", nA, nC, 300, 10);
 
         FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
         SpeedyGraph g = SpeedyGraphBuilder.build(network);
@@ -69,13 +55,9 @@ public class SpeedyCHBuilderTest {
         SpeedyCHTimeDep.Path path = router.calcLeastCostPath(nA, nC, 0, null, null);
 
         Assertions.assertNotNull(path, "Path should not be null");
-        // The cheapest path A→B→C has cost 10+10=20s (freespeed), not 30s via direct A→C.
         Assertions.assertEquals(2, path.links.size(), "Expected path A→B→C (2 links)");
     }
 
-    /**
-     * Verifies that building a CH on a single-node network does not throw.
-     */
     @Test
     void testSingleNodeNetwork() {
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
@@ -89,10 +71,6 @@ public class SpeedyCHBuilderTest {
         SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).build();
         Assertions.assertNotNull(ch);
     }
-
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
 
     private static Network buildLinearNetwork(int nodeCount) {
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());

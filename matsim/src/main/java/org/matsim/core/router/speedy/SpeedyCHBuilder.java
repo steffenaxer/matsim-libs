@@ -429,44 +429,94 @@ public class SpeedyCHBuilder {
     }
 
     // -------------------------------------------------------------------------
-    // Phase 3 – build SpeedyCHGraph
+    // Phase 3 – build SpeedyCHGraph (CSR layout)
     // -------------------------------------------------------------------------
 
     private SpeedyCHGraph buildCHGraph() {
-        int[] nodeData = new int[nodeCount * SpeedyCHGraph.NODE_SIZE];
-        Arrays.fill(nodeData, -1);
-        int[] edgeData = new int[buildEdgeCount * SpeedyCHGraph.EDGE_SIZE];
-        Arrays.fill(edgeData, -1);
-
+        // 1. Count up/dn edges per node
+        int[] upCount = new int[nodeCount];
+        int[] dnCount = new int[nodeCount];
         for (int bi = 0; bi < buildEdgeCount; bi++) {
-            int bBase = bi * BE_SIZE;
-            int cBase = bi * SpeedyCHGraph.EDGE_SIZE;
-            edgeData[cBase + 2] = buildEdgeData[bBase + BE_FROM];
-            edgeData[cBase + 3] = buildEdgeData[bBase + BE_TO];
-            edgeData[cBase + 4] = buildEdgeData[bBase + BE_ORIG];
-            edgeData[cBase + 5] = buildEdgeData[bBase + BE_MID];
-            edgeData[cBase + 6] = buildEdgeData[bBase + BE_LOW1];
-            edgeData[cBase + 7] = buildEdgeData[bBase + BE_LOW2];
+            int bBase    = bi * BE_SIZE;
+            int fromNode = buildEdgeData[bBase + BE_FROM];
+            int toNode   = buildEdgeData[bBase + BE_TO];
+            int lvFrom   = nodeLevel[fromNode];
+            int lvTo     = nodeLevel[toNode];
+            if (lvFrom < lvTo) {
+                upCount[fromNode]++;
+            } else if (lvFrom > lvTo) {
+                dnCount[toNode]++;
+            }
         }
 
-        for (int bi = buildEdgeCount - 1; bi >= 0; bi--) {
-            int cBase    = bi * SpeedyCHGraph.EDGE_SIZE;
-            int fromNode = edgeData[cBase + 2];
-            int toNode   = edgeData[cBase + 3];
+        // 2. Compute CSR offsets
+        int[] upOff = new int[nodeCount];
+        int[] dnOff = new int[nodeCount];
+        int totalUp = 0, totalDn = 0;
+        for (int n = 0; n < nodeCount; n++) {
+            upOff[n] = totalUp; totalUp += upCount[n];
+            dnOff[n] = totalDn; totalDn += dnCount[n];
+        }
+
+        // 3. Allocate CSR edge arrays and global-index arrays
+        int S = SpeedyCHGraph.E_STRIDE;
+        int[] upEdges     = new int[totalUp * S];
+        int[] upGlobalIdx = new int[totalUp];
+        int[] dnEdges     = new int[totalDn * S];
+        int[] dnGlobalIdx = new int[totalDn];
+
+        // Global edge arrays (build-edge index is the global index)
+        int[] edgeOrigLink = new int[buildEdgeCount];
+        int[] edgeLower1   = new int[buildEdgeCount];
+        int[] edgeLower2   = new int[buildEdgeCount];
+
+        // Fill global edge data
+        for (int bi = 0; bi < buildEdgeCount; bi++) {
+            int bBase = bi * BE_SIZE;
+            edgeOrigLink[bi] = buildEdgeData[bBase + BE_ORIG];
+            edgeLower1[bi]   = buildEdgeData[bBase + BE_LOW1];
+            edgeLower2[bi]   = buildEdgeData[bBase + BE_LOW2];
+        }
+
+        // 4. Fill CSR arrays (use upCount/dnCount as cursors, reset to 0 first)
+        int[] upCursor = new int[nodeCount];
+        int[] dnCursor = new int[nodeCount];
+
+        for (int bi = 0; bi < buildEdgeCount; bi++) {
+            int bBase    = bi * BE_SIZE;
+            int fromNode = buildEdgeData[bBase + BE_FROM];
+            int toNode   = buildEdgeData[bBase + BE_TO];
+            int origLink = buildEdgeData[bBase + BE_ORIG];
+            int lower1   = buildEdgeData[bBase + BE_LOW1];
+            int lower2   = buildEdgeData[bBase + BE_LOW2];
             int lvFrom   = nodeLevel[fromNode];
             int lvTo     = nodeLevel[toNode];
 
             if (lvFrom < lvTo) {
-                edgeData[cBase] = nodeData[fromNode * SpeedyCHGraph.NODE_SIZE];
-                nodeData[fromNode * SpeedyCHGraph.NODE_SIZE] = bi;
+                // Upward edge: stored in fromNode's up-list
+                int slot = upOff[fromNode] + upCursor[fromNode]++;
+                int eBase = slot * S;
+                upEdges[eBase + SpeedyCHGraph.E_NODE] = toNode;
+                upEdges[eBase + SpeedyCHGraph.E_ORIG] = origLink;
+                upEdges[eBase + SpeedyCHGraph.E_LOW1] = lower1;
+                upEdges[eBase + SpeedyCHGraph.E_LOW2] = lower2;
+                upGlobalIdx[slot] = bi;
             } else if (lvFrom > lvTo) {
-                edgeData[cBase + 1] = nodeData[toNode * SpeedyCHGraph.NODE_SIZE + 1];
-                nodeData[toNode * SpeedyCHGraph.NODE_SIZE + 1] = bi;
+                // Downward edge: stored in toNode's dn-list
+                int slot = dnOff[toNode] + dnCursor[toNode]++;
+                int eBase = slot * S;
+                dnEdges[eBase + SpeedyCHGraph.E_NODE] = fromNode; // the higher-level node
+                dnEdges[eBase + SpeedyCHGraph.E_ORIG] = origLink;
+                dnEdges[eBase + SpeedyCHGraph.E_LOW1] = lower1;
+                dnEdges[eBase + SpeedyCHGraph.E_LOW2] = lower2;
+                dnGlobalIdx[slot] = bi;
             }
         }
 
-        return new SpeedyCHGraph(graph, nodeCount, buildEdgeCount,
-                nodeData, edgeData, nodeLevel);
+        return new SpeedyCHGraph(graph, nodeCount,
+                totalUp, upOff, upCount, upEdges, upGlobalIdx,
+                totalDn, dnOff, dnCount, dnEdges, dnGlobalIdx,
+                buildEdgeCount, edgeOrigLink, edgeLower1, edgeLower2);
     }
 
     // -------------------------------------------------------------------------
