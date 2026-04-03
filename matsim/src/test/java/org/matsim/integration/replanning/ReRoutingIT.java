@@ -130,7 +130,7 @@ public class ReRoutingIT {
 		controler.getConfig().controller().setCreateGraphs(false);
 		controler.getConfig().controller().setDumpDataAtEnd(false);
 		controler.run();
-		this.evaluate("plans_speedyALT.xml.gz");
+		this.evaluate();
 	}
 
 	private void evaluate() throws MalformedURLException {

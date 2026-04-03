@@ -44,7 +44,12 @@ public class SpeedyCHGraph {
     final int[] nodeData;   // NODE_SIZE ints per node
     final int[] edgeData;   // EDGE_SIZE ints per edge
     final int[] nodeLevel;  // CH level per node (0 = least important, nodeCount-1 = most important)
-    final double[] edgeWeights; // customizable edge weights
+    final double[] edgeWeights; // static lower-bound weights (= min TTF per edge after time-dep customization)
+
+    // Time-dependent Travel Time Functions (TTF) – filled by SpeedyCHTTFCustomizer.
+    // ttf[edgeIdx][binIdx] = travel time (seconds) for departure in time bin binIdx.
+    double[][] ttf;    // null until SpeedyCHTTFCustomizer has run
+    double[] minTTF;   // precomputed per-edge minimum over all time bins; null until computed
 
     private final SpeedyGraph baseGraph;
 

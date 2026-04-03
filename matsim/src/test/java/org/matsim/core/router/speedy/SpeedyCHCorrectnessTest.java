@@ -21,27 +21,26 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Correctness test: 500 random OD pairs on the equil network.
- * SpeedyCH must agree with SpeedyDijkstra to within 1e-6 cost difference.
+ * Correctness tests for the time-dependent CATCHUp router ({@link SpeedyCHTimeDep}).
+ *
+ * <p>Uses {@link FreespeedTravelTimeAndDisutility} which makes TTFs constant over time,
+ * so the CATCHUp result must agree with {@link SpeedyDijkstra} to within 1e-6 cost.
  */
 public class SpeedyCHCorrectnessTest {
 
-    private static final int NUM_QUERIES     = 500;
-    private static final double COST_TOLERANCE = 1e-6;
+    private static final int    NUM_QUERIES     = 500;
+    private static final double COST_TOLERANCE  = 1e-6;
 
     @Test
     void testRandomODPairsEquilNetwork() {
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
         new MatsimNetworkReader(scenario.getNetwork()).readFile("test/scenarios/equil/network.xml");
-        Network network = scenario.getNetwork();
-
-        runCorrectnessTest(network);
+        runCorrectnessTest(scenario.getNetwork());
     }
 
     @Test
     void testRandomODPairsSmallGrid() {
-        Network network = buildGridNetwork(5);
-        runCorrectnessTest(network);
+        runCorrectnessTest(buildGridNetwork(5));
     }
 
     private void runCorrectnessTest(Network network) {
@@ -49,12 +48,12 @@ public class SpeedyCHCorrectnessTest {
 
         SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
 
-        // Build SpeedyCH
+        // Build time-dependent CATCHUp router.
         SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).build();
-        new SpeedyCHCustomizer().customize(chGraph, tc);
-        SpeedyCH chRouter = new SpeedyCH(chGraph, tc, tc);
+        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+        SpeedyCHTimeDep chRouter = new SpeedyCHTimeDep(chGraph, tc, tc);
 
-        // Build SpeedyDijkstra (reference)
+        // Reference: SpeedyDijkstra.
         SpeedyDijkstra dijkstra = new SpeedyDijkstra(baseGraph, tc, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
@@ -68,16 +67,16 @@ public class SpeedyCHCorrectnessTest {
             Node src = nodeList.get(rng.nextInt(n));
             Node dst = nodeList.get(rng.nextInt(n));
 
-            Path chPath  = chRouter.calcLeastCostPath(src, dst, 0.0, null, null);
-            Path dijPath = dijkstra.calcLeastCostPath(src, dst, 0.0, null, null);
+            Path chPath  = chRouter.calcLeastCostPath(src, dst, 8.0 * 3600, null, null);
+            Path dijPath = dijkstra.calcLeastCostPath(src, dst, 8.0 * 3600, null, null);
 
             if (chPath == null && dijPath == null) continue;
 
             Assertions.assertNotNull(chPath,
-                    "SpeedyCH returned null but Dijkstra found a path from "
+                    "SpeedyCHTimeDep returned null but Dijkstra found a path from "
                             + src.getId() + " to " + dst.getId());
             Assertions.assertNotNull(dijPath,
-                    "SpeedyDijkstra returned null but SpeedyCH found a path from "
+                    "SpeedyDijkstra returned null but SpeedyCHTimeDep found a path from "
                             + src.getId() + " to " + dst.getId());
 
             double chCost  = chPath.travelCost;
@@ -85,20 +84,20 @@ public class SpeedyCHCorrectnessTest {
 
             if (Math.abs(chCost - dijCost) > COST_TOLERANCE) {
                 mismatches++;
-                System.err.printf("MISMATCH %s→%s: CH=%.6f  Dijkstra=%.6f%n",
+                System.err.printf("MISMATCH %s→%s: CATCHUp=%.6f  Dijkstra=%.6f%n",
                         src.getId(), dst.getId(), chCost, dijCost);
             }
         }
 
         Assertions.assertEquals(0, mismatches,
-                mismatches + " cost mismatches found out of " + NUM_QUERIES + " queries.");
+                mismatches + " cost mismatches out of " + NUM_QUERIES + " queries.");
     }
 
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
-    /** Builds an N×N directed grid network (edges go right and down). */
+    /** Builds an N×N bidirectional grid network. */
     private static Network buildGridNetwork(int n) {
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
         Network network = scenario.getNetwork();
@@ -112,16 +111,15 @@ public class SpeedyCHCorrectnessTest {
                 nodes[r][c] = node;
             }
         }
-        // Edges: right, left, down, up
         for (int r = 0; r < n; r++) {
             for (int c = 0; c < n; c++) {
                 if (c + 1 < n) {
-                    addLink(network, r + "_" + c + "R", nodes[r][c], nodes[r][c + 1], 100, 10);
-                    addLink(network, r + "_" + c + "L", nodes[r][c + 1], nodes[r][c], 100, 10);
+                    addLink(network, r + "_" + c + "R", nodes[r][c],     nodes[r][c + 1], 100, 10);
+                    addLink(network, r + "_" + c + "L", nodes[r][c + 1], nodes[r][c],     100, 10);
                 }
                 if (r + 1 < n) {
-                    addLink(network, r + "_" + c + "D", nodes[r][c], nodes[r + 1][c], 100, 10);
-                    addLink(network, r + "_" + c + "U", nodes[r + 1][c], nodes[r][c], 100, 10);
+                    addLink(network, r + "_" + c + "D", nodes[r][c],     nodes[r + 1][c], 100, 10);
+                    addLink(network, r + "_" + c + "U", nodes[r + 1][c], nodes[r][c],     100, 10);
                 }
             }
         }
@@ -139,3 +137,4 @@ public class SpeedyCHCorrectnessTest {
         network.addLink(link);
     }
 }
+

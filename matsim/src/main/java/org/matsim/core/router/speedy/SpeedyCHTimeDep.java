@@ -19,39 +19,46 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Bidirectional Contraction Hierarchies (CH) shortest-path query.
+ * Time-dependent CATCHUp bidirectional CH query.
  *
+ * <p>Requires a {@link SpeedyCHGraph} whose {@link SpeedyCHTTFCustomizer} has already been
+ * applied (i.e., {@link SpeedyCHGraph#ttf} and {@link SpeedyCHGraph#minTTF} are non-null).
+ *
+ * <h3>Algorithm</h3>
  * <ul>
- *   <li><b>Forward search</b> from source: relaxes upward out-edges only
- *       ({@link SpeedyCHGraph.UpwardOutEdgeIterator}).</li>
- *   <li><b>Backward search</b> from target: relaxes downward in-edges in reverse
- *       ({@link SpeedyCHGraph.DownwardInEdgeIterator}).</li>
- *   <li>The <em>meeting node</em> minimises {@code fwdCost[v] + bwdCost[v]}.</li>
- *   <li>Shortcuts are unpacked recursively via middleNode / lowerEdge1 / lowerEdge2.</li>
+ *   <li><b>Forward search</b> from source: evaluates {@code ttf[e][ bin(currentTime) ]} at each
+ *       relaxed edge; tracks <em>absolute arrival time</em> at every node.</li>
+ *   <li><b>Backward search</b> from target: uses {@code minTTF[e]} (the per-edge minimum
+ *       travel time over all time bins) as a conservative FIFO lower bound.</li>
+ *   <li><b>Meeting node</b>: the node that minimises
+ *       {@code fwdArrival[v] + bwdLowerBound[v]}.</li>
+ *   <li><b>Stopping criterion</b>: {@code fwdPQ.minArrival + bwdPQ.minLB >= bestBound}.</li>
+ *   <li><b>Path reconstruction</b>: shortcuts are unpacked recursively; actual travel times
+ *       and disutilities are recomputed by a forward pass over the original links.</li>
  * </ul>
  *
- * <p>This implementation is <b>not thread-safe</b>. Every thread must use its own instance,
- * but the underlying {@link SpeedyCHGraph} may be shared.
+ * <p>This implementation is <b>not thread-safe</b>. Every thread must own a separate instance;
+ * the underlying {@link SpeedyCHGraph} may be shared.
  *
  * @author Implementation for CCH/CATCHUp router
  */
-public class SpeedyCH implements LeastCostPathCalculator {
+public class SpeedyCHTimeDep implements LeastCostPathCalculator {
 
-    private static final Logger LOG = LogManager.getLogger(SpeedyCH.class);
+    private static final Logger LOG = LogManager.getLogger(SpeedyCHTimeDep.class);
 
     private final SpeedyCHGraph chGraph;
     private final SpeedyGraph   baseGraph;
     private final TravelTime       tt;
     private final TravelDisutility td;
 
-    // Forward-search per-node data
-    private final double[] fwdCost;
+    // Forward search: tracks absolute arrival times.
+    private final double[] fwdArrival;   // absolute arrival time at node
     private final int[]    fwdComingFrom;
     private final int[]    fwdUsedEdge;
     private final int[]    fwdIterIds;
 
-    // Backward-search per-node data
-    private final double[] bwdCost;
+    // Backward search: tracks lower-bound remaining travel times.
+    private final double[] bwdLB;        // lower-bound remaining time to target
     private final int[]    bwdComingFrom;
     private final int[]    bwdUsedEdge;
     private final int[]    bwdIterIds;
@@ -64,19 +71,23 @@ public class SpeedyCH implements LeastCostPathCalculator {
     private final SpeedyCHGraph.UpwardOutEdgeIterator  outUpIter;
     private final SpeedyCHGraph.DownwardInEdgeIterator downInIter;
 
-    public SpeedyCH(SpeedyCHGraph chGraph, TravelTime tt, TravelDisutility td) {
+    public SpeedyCHTimeDep(SpeedyCHGraph chGraph, TravelTime tt, TravelDisutility td) {
+        if (chGraph.ttf == null || chGraph.minTTF == null) {
+            throw new IllegalArgumentException(
+                    "SpeedyCHGraph has no TTF data. Run SpeedyCHTTFCustomizer first.");
+        }
         this.chGraph   = chGraph;
         this.baseGraph = chGraph.getBaseGraph();
         this.tt        = tt;
         this.td        = td;
 
         int n = chGraph.nodeCount;
-        this.fwdCost       = new double[n];
+        this.fwdArrival    = new double[n];
         this.fwdComingFrom = new int[n];
         this.fwdUsedEdge   = new int[n];
         this.fwdIterIds    = new int[n];
 
-        this.bwdCost       = new double[n];
+        this.bwdLB         = new double[n];
         this.bwdComingFrom = new int[n];
         this.bwdUsedEdge   = new int[n];
         this.bwdIterIds    = new int[n];
@@ -129,105 +140,108 @@ public class SpeedyCH implements LeastCostPathCalculator {
     }
 
     // -------------------------------------------------------------------------
-    // Bidirectional CH query
+    // Bidirectional CATCHUp query
     // -------------------------------------------------------------------------
 
     private Path calcLeastCostPathImpl(int startIdx, int endIdx,
                                        double startTime, Person person, Vehicle vehicle) {
         advanceIteration();
 
-        // Trivial case
+        // Trivial same-node case.
         if (startIdx == endIdx) {
             return new Path(
                     Collections.singletonList(baseGraph.getNode(startIdx)),
                     Collections.emptyList(), 0.0, 0.0);
         }
 
-        // Initialize forward search
-        setFwd(startIdx, 0.0, -1, -1);
+        // Initialize forward search (absolute arrival times).
+        setFwd(startIdx, startTime, -1, -1);
         fwdPQ.clear();
-        fwdPQ.insert(startIdx, 0.0);
+        fwdPQ.insert(startIdx, startTime);
 
-        // Initialize backward search
+        // Initialize backward search (lower-bound remaining times).
         setBwd(endIdx, 0.0, -1, -1);
         bwdPQ.clear();
         bwdPQ.insert(endIdx, 0.0);
 
-        double bestCost   = Double.POSITIVE_INFINITY;
+        double bestBound   = Double.POSITIVE_INFINITY;
         int    meetingNode = -1;
 
         while (!fwdPQ.isEmpty() || !bwdPQ.isEmpty()) {
-            // Stopping criterion: no path cheaper than bestCost can still be discovered.
-            double fMin = fwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : fwdCost[fwdPQ.peek()];
-            double bMin = bwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : bwdCost[bwdPQ.peek()];
-            if (fMin + bMin >= bestCost) break;
+            // Stopping criterion: fwdMin + bwdMin >= best proven lower bound.
+            double fMin = fwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : fwdArrival[fwdPQ.peek()];
+            double bMin = bwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : bwdLB[bwdPQ.peek()];
+            if (fMin + bMin >= bestBound) break;
 
-            // Choose the side with the smaller tentative minimum.
+            // Expand the side with the smaller key.
             boolean expandForward = !fwdPQ.isEmpty()
                     && (bwdPQ.isEmpty() || fMin <= bMin);
 
             if (expandForward) {
-                int v    = fwdPQ.poll();
-                double d = fwdCost[v];
+                int v      = fwdPQ.poll();
+                double arr = fwdArrival[v];
 
-                // Check meeting point.
+                // Update meeting point.
                 if (bwdIterIds[v] == currentIteration) {
-                    double total = d + bwdCost[v];
-                    if (total < bestCost) {
-                        bestCost    = total;
+                    double bound = arr + bwdLB[v];
+                    if (bound < bestBound) {
+                        bestBound   = bound;
                         meetingNode = v;
                     }
                 }
 
-                // Relax upward out-edges.
+                // Relax upward out-edges (time-dependent TTF lookup).
+                int bin = SpeedyCHTTFCustomizer.timeToBin(arr);
                 outUpIter.reset(v);
                 while (outUpIter.next()) {
-                    int    e       = outUpIter.getEdgeIndex();
-                    int    w       = outUpIter.getToNode();
-                    double newCost = d + chGraph.edgeWeights[e];
+                    int    e          = outUpIter.getEdgeIndex();
+                    int    w          = outUpIter.getToNode();
+                    double travelTime = chGraph.ttf[e][bin];
+                    double newArr     = arr + travelTime;
+
                     if (fwdIterIds[w] == currentIteration) {
-                        if (newCost < fwdCost[w]) {
-                            fwdCost[w] = newCost;
+                        if (newArr < fwdArrival[w]) {
+                            fwdArrival[w]    = newArr;
                             fwdComingFrom[w] = v;
                             fwdUsedEdge[w]   = e;
-                            fwdPQ.decreaseKey(w, newCost);
+                            fwdPQ.decreaseKey(w, newArr);
                         }
                     } else {
-                        setFwd(w, newCost, v, e);
-                        fwdPQ.insert(w, newCost);
+                        setFwd(w, newArr, v, e);
+                        fwdPQ.insert(w, newArr);
                     }
                 }
 
             } else {
-                int v    = bwdPQ.poll();
-                double d = bwdCost[v];
+                int v   = bwdPQ.poll();
+                double lb = bwdLB[v];
 
-                // Check meeting point.
+                // Update meeting point.
                 if (fwdIterIds[v] == currentIteration) {
-                    double total = fwdCost[v] + d;
-                    if (total < bestCost) {
-                        bestCost    = total;
+                    double bound = fwdArrival[v] + lb;
+                    if (bound < bestBound) {
+                        bestBound   = bound;
                         meetingNode = v;
                     }
                 }
 
-                // Relax downward in-edges (backward search goes from y via edge y→v, so
-                // we update y's backward cost as bwdCost[y] = bwdCost[v] + w(y→v)).
+                // Relax downward in-edges using minTTF lower bounds.
                 downInIter.reset(v);
                 while (downInIter.next()) {
-                    int    e       = downInIter.getEdgeIndex();
-                    int    y       = downInIter.getFromNode(); // higher-level node
-                    double newCost = d + chGraph.edgeWeights[e];
+                    int    e      = downInIter.getEdgeIndex();
+                    int    y      = downInIter.getFromNode(); // higher-level predecessor
+                    double newLB  = lb + chGraph.minTTF[e];
+
                     if (bwdIterIds[y] == currentIteration) {
-                        if (newCost < bwdCost[y]) {
-                            bwdCost[y] = newCost;
+                        if (newLB < bwdLB[y]) {
+                            bwdLB[y]         = newLB;
                             bwdComingFrom[y] = v;
                             bwdUsedEdge[y]   = e;
-                            bwdPQ.decreaseKey(y, newCost);
+                            bwdPQ.decreaseKey(y, newLB);
                         }
                     } else {
-                        setBwd(y, newCost, v, e);
-                        bwdPQ.insert(y, newCost);
+                        setBwd(y, newLB, v, e);
+                        bwdPQ.insert(y, newLB);
                     }
                 }
             }
@@ -248,7 +262,7 @@ public class SpeedyCH implements LeastCostPathCalculator {
 
         nodeList.add(baseGraph.getNode(startIdx));
 
-        // --- Forward part: collect CH edges from meeting node back to source, then reverse ---
+        // --- Collect forward CH edges (source → meeting node) ---
         List<Integer> fwdEdges = new ArrayList<>();
         int curr = meetingNode;
         while (fwdComingFrom[curr] >= 0) {
@@ -259,16 +273,15 @@ public class SpeedyCH implements LeastCostPathCalculator {
         for (int edgeIdx : fwdEdges) {
             unpackEdge(edgeIdx, nodeList, linkList);
         }
-        // meetingNode is now the last entry in nodeList (or startIdx if no forward edges).
 
-        // --- Backward part: follow bwdComingFrom chain from meeting node to target ---
+        // --- Follow backward CH edges (meeting node → target) ---
         curr = meetingNode;
         while (bwdComingFrom[curr] >= 0) {
             unpackEdge(bwdUsedEdge[curr], nodeList, linkList);
             curr = bwdComingFrom[curr];
         }
 
-        // Compute actual travel time and cost by replaying the unpacked links.
+        // --- Compute actual travel time and disutility over the unpacked path ---
         double time = startTime;
         double cost = 0.0;
         for (Link link : linkList) {
@@ -281,8 +294,8 @@ public class SpeedyCH implements LeastCostPathCalculator {
     }
 
     /**
-     * Recursively unpacks a CH edge, appending intermediate nodes (exclusive of fromNode,
-     * inclusive of toNode) and original links to the provided lists.
+     * Recursively unpacks a CH edge: appends intermediate nodes (exclusive of
+     * fromNode, inclusive of toNode) and original links to the provided lists.
      */
     private void unpackEdge(int edgeIdx, List<Node> nodeList, List<Link> linkList) {
         int base     = edgeIdx * SpeedyCHGraph.EDGE_SIZE;
@@ -290,15 +303,12 @@ public class SpeedyCH implements LeastCostPathCalculator {
         int toNode   = chGraph.edgeData[base + 3];
 
         if (origLink >= 0) {
-            // Real edge.
             linkList.add(baseGraph.getLink(origLink));
             nodeList.add(baseGraph.getNode(toNode));
         } else {
-            // Shortcut: unpack via middleNode.
+            // Shortcut: recursively unpack sub-edges via middleNode.
             int lower1 = chGraph.edgeData[base + 6];
             int lower2 = chGraph.edgeData[base + 7];
-            // lower1 = edge from→middle (adds nodes/links up to middle).
-            // lower2 = edge middle→to   (adds nodes/links up to toNode).
             unpackEdge(lower1, nodeList, linkList);
             unpackEdge(lower2, nodeList, linkList);
         }
@@ -317,15 +327,15 @@ public class SpeedyCH implements LeastCostPathCalculator {
         }
     }
 
-    private void setFwd(int node, double cost, int comingFrom, int usedEdge) {
-        fwdCost[node]       = cost;
+    private void setFwd(int node, double arrival, int comingFrom, int usedEdge) {
+        fwdArrival[node]    = arrival;
         fwdComingFrom[node] = comingFrom;
         fwdUsedEdge[node]   = usedEdge;
         fwdIterIds[node]    = currentIteration;
     }
 
-    private void setBwd(int node, double cost, int comingFrom, int usedEdge) {
-        bwdCost[node]       = cost;
+    private void setBwd(int node, double lb, int comingFrom, int usedEdge) {
+        bwdLB[node]         = lb;
         bwdComingFrom[node] = comingFrom;
         bwdUsedEdge[node]   = usedEdge;
         bwdIterIds[node]    = currentIteration;

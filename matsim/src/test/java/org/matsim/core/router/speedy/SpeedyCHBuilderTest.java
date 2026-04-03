@@ -63,10 +63,10 @@ public class SpeedyCHBuilderTest {
         FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
         SpeedyGraph g = SpeedyGraphBuilder.build(network);
         SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).build();
-        new SpeedyCHCustomizer().customize(ch, tc);
+        new SpeedyCHTTFCustomizer().customize(ch, tc, tc);
 
-        SpeedyCH router = new SpeedyCH(ch, tc, tc);
-        SpeedyCH.Path path = router.calcLeastCostPath(nA, nC, 0, null, null);
+        SpeedyCHTimeDep router = new SpeedyCHTimeDep(ch, tc, tc);
+        SpeedyCHTimeDep.Path path = router.calcLeastCostPath(nA, nC, 0, null, null);
 
         Assertions.assertNotNull(path, "Path should not be null");
         // The cheapest path A→B→C has cost 10+10=20s (freespeed), not 30s via direct A→C.

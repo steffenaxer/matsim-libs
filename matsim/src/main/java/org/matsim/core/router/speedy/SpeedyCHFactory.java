@@ -12,16 +12,18 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Factory for {@link SpeedyCH} instances.
+ * Factory for the time-dependent CATCHUp router ({@link SpeedyCHTimeDep}).
  *
- * <p>The base {@link SpeedyGraph} is cached per {@link Network}.
- * The CH contraction and customization are performed on every
- * {@link #createPathCalculator} call (re-customization strategy, Phase 1).
- * Caching of the CH structure keyed by (network, travelDisutility) is a
+ * <p>The base {@link SpeedyGraph} is cached per {@link Network}.  On every
+ * {@link #createPathCalculator} call the CH is contracted with static lower-bound
+ * weights ({@link SpeedyCHBuilder}) and then time-dependently customised
+ * ({@link SpeedyCHTTFCustomizer}) before a fresh {@link SpeedyCHTimeDep} instance
+ * is returned.
+ *
+ * <p>This class is {@link Singleton} and thread-safe: every call returns a new,
+ * independent {@link SpeedyCHTimeDep} instance backed by a newly customised graph.
+ * Caching of the CH structure keyed by (network, travelCosts) is a planned
  * future optimisation.
- *
- * <p>This class is {@link Singleton} and thread-safe: every call returns a
- * fresh, non-shared {@link SpeedyCH} instance.
  *
  * @author Implementation for CCH/CATCHUp router
  */
@@ -40,9 +42,13 @@ public class SpeedyCHFactory implements LeastCostPathCalculatorFactory {
 
         SpeedyGraph baseGraph = baseGraphs.computeIfAbsent(network, SpeedyGraphBuilder::build);
 
+        // Build CH structure (contraction uses static lower-bound weights).
         SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, travelCosts).build();
-        new SpeedyCHCustomizer().customize(chGraph, travelCosts);
 
-        return new SpeedyCH(chGraph, travelTimes, travelCosts);
+        // Customise with time-dependent TTFs.
+        new SpeedyCHTTFCustomizer().customize(chGraph, travelTimes, travelCosts);
+
+        return new SpeedyCHTimeDep(chGraph, travelTimes, travelCosts);
     }
 }
+

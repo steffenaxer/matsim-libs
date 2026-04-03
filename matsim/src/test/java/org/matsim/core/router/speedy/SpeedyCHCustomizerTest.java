@@ -15,16 +15,16 @@ import org.matsim.core.router.costcalculators.FreespeedTravelTimeAndDisutility;
 import org.matsim.core.scenario.ScenarioUtils;
 
 /**
- * Basic sanity tests for {@link SpeedyCHCustomizer}.
+ * Basic sanity tests for {@link SpeedyCHTTFCustomizer}.
  */
 public class SpeedyCHCustomizerTest {
 
     /**
-     * On a linear network A→B→C, after customization the weight of each real edge must
-     * equal getLinkMinimumTravelDisutility for that link.
+     * After TTF customization of a linear A→B→C network, every TTF bin value for
+     * each real edge must equal the link's freespeed travel time (constant over time bins).
      */
     @Test
-    void testRealEdgeWeights() {
+    void testRealEdgeTTFValues() {
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
         Network network = scenario.getNetwork();
         NetworkFactory nf = network.getFactory();
@@ -40,30 +40,37 @@ public class SpeedyCHCustomizerTest {
         FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
         SpeedyGraph g = SpeedyGraphBuilder.build(network);
         SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).build();
-        new SpeedyCHCustomizer().customize(ch, tc);
+        new SpeedyCHTTFCustomizer().customize(ch, tc, tc);
 
-        // Verify that all real edges have non-negative weights.
+        Assertions.assertNotNull(ch.ttf,    "ttf array must be populated");
+        Assertions.assertNotNull(ch.minTTF, "minTTF array must be populated");
+
+        // For freespeed travel time the TTF is constant across all bins.
         for (int e = 0; e < ch.edgeCount; e++) {
             int origLink = ch.edgeData[e * SpeedyCHGraph.EDGE_SIZE + 4];
             if (origLink >= 0) {
                 Link link = g.getLink(origLink);
-                double expected = tc.getLinkMinimumTravelDisutility(link);
-                Assertions.assertEquals(expected, ch.edgeWeights[e], 1e-9,
-                        "Real edge weight mismatch for link " + link.getId());
+                double expected = tc.getLinkTravelTime(link, 0.0, null, null);
+                for (int k = 0; k < SpeedyCHTTFCustomizer.NUM_BINS; k++) {
+                    Assertions.assertEquals(expected, ch.ttf[e][k], 1e-9,
+                            "Real edge TTF bin " + k + " mismatch for link " + link.getId());
+                }
+                Assertions.assertEquals(expected, ch.minTTF[e], 1e-9,
+                        "minTTF mismatch for link " + link.getId());
             }
         }
     }
 
     /**
-     * Shortcut weights must equal the sum of their sub-edge weights.
+     * Shortcut TTF values must be consistent with the CATCHUp composition formula:
+     * {@code ttf[shortcut][k] == ttf[lower1][k] + ttf[lower2][ bin(k*BIN_SIZE + ttf[lower1][k]) ]}
      */
     @Test
-    void testShortcutWeights() {
+    void testShortcutTTFComposition() {
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
         Network network = scenario.getNetwork();
         NetworkFactory nf = network.getFactory();
 
-        // Create a diamond: A→B, A→C, B→D, C→D to encourage shortcut A→D
         Node nA = nf.createNode(Id.createNodeId("A"), new Coord(0, 0));
         Node nB = nf.createNode(Id.createNodeId("B"), new Coord(100, 100));
         Node nC = nf.createNode(Id.createNodeId("C"), new Coord(100, -100));
@@ -79,18 +86,23 @@ public class SpeedyCHCustomizerTest {
         FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
         SpeedyGraph g = SpeedyGraphBuilder.build(network);
         SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).build();
-        new SpeedyCHCustomizer().customize(ch, tc);
+        new SpeedyCHTTFCustomizer().customize(ch, tc, tc);
 
-        // Verify shortcut weights.
+        // Verify composition for every shortcut.
         for (int e = 0; e < ch.edgeCount; e++) {
-            int base     = e * SpeedyCHGraph.EDGE_SIZE;
-            int origLink = ch.edgeData[base + 4];
-            int lower1   = ch.edgeData[base + 6];
-            int lower2   = ch.edgeData[base + 7];
-            if (origLink < 0 && lower1 >= 0 && lower2 >= 0) {
-                double expected = ch.edgeWeights[lower1] + ch.edgeWeights[lower2];
-                Assertions.assertEquals(expected, ch.edgeWeights[e], 1e-9,
-                        "Shortcut edge " + e + " weight mismatch");
+            int base   = e * SpeedyCHGraph.EDGE_SIZE;
+            int orig   = ch.edgeData[base + 4];
+            int lower1 = ch.edgeData[base + 6];
+            int lower2 = ch.edgeData[base + 7];
+            if (orig < 0 && lower1 >= 0 && lower2 >= 0) {
+                for (int k = 0; k < SpeedyCHTTFCustomizer.NUM_BINS; k++) {
+                    double t1          = ch.ttf[lower1][k];
+                    int    arrBin      = SpeedyCHTTFCustomizer.timeToBin(k * SpeedyCHTTFCustomizer.BIN_SIZE + t1);
+                    double t2          = ch.ttf[lower2][arrBin];
+                    double expected    = t1 + t2;
+                    Assertions.assertEquals(expected, ch.ttf[e][k], 1e-9,
+                            "Shortcut " + e + " TTF bin " + k + " mismatch");
+                }
             }
         }
     }
