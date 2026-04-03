@@ -228,7 +228,7 @@ public class SpeedyCHBuilder {
     // -------------------------------------------------------------------------
 
     private boolean hasWitness(int source, int target, int avoidNode, double maxCost) {
-        return witnessSearch(source, target, avoidNode, maxCost) <= maxCost;
+        return witnessSearch(source, target, avoidNode, maxCost) < maxCost;
     }
 
     private double witnessSearch(int source, int target, int avoidNode, double maxCost) {
