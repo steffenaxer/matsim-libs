@@ -78,6 +78,13 @@ public class SpeedyCHBuilder {
     private final int[]    witnessHops;
     private final DAryMinHeap witnessHeap;
 
+    // Dedup lookup: generation-stamped best-cost for existing out-edges from source u.
+    // dedupGeneration is bumped per in-neighbour u; dedupGen[w] == dedupGeneration
+    // means dedupBest[w] holds the cost of the cheapest existing edge u→w.
+    private int        dedupGeneration = 0;
+    private final int[]    dedupGen;
+    private final double[] dedupBest;
+
     // Scratch arrays reused across batched witness searches
     private int[]    scratchTargets;     // out-neighbor node indices
     private double[] scratchMaxCosts;    // max cost u→v→w for each target
@@ -127,6 +134,9 @@ public class SpeedyCHBuilder {
         this.witnessCost    = new double[nodeCount];
         this.witnessHops    = new int[nodeCount];
         this.witnessHeap    = new DAryMinHeap(nodeCount, 4);
+
+        this.dedupGen  = new int[nodeCount];
+        this.dedupBest = new double[nodeCount];
 
         this.scratchTargets    = new int[64];
         this.scratchMaxCosts   = new double[64];
@@ -360,6 +370,19 @@ public class SpeedyCHBuilder {
             // Run one bounded Dijkstra from u, avoiding node.
             batchedWitnessSearch(u, node, globalMaxCost, HOP_LIMIT, SETTLED_LIMIT);
 
+            // Build O(1) dedup lookup: best existing out-edge cost from u to each neighbor.
+            dedupGeneration++;
+            int uOOff = outOff[u], uOLen = outLen[u];
+            for (int k = 0; k < uOLen; k++) {
+                int ex = outBuf[uOOff + k];
+                int target = buildEdgeData[ex * BE_SIZE + BE_TO];
+                double eCost = buildEdgeWeights[ex];
+                if (dedupGen[target] != dedupGeneration || eCost < dedupBest[target]) {
+                    dedupGen[target]  = dedupGeneration;
+                    dedupBest[target] = eCost;
+                }
+            }
+
             // Check each target.
             for (int t = 0; t < numTargets; t++) {
                 int w = scratchTargets[t];
@@ -371,20 +394,10 @@ public class SpeedyCHBuilder {
                         ? witnessCost[w] : Double.POSITIVE_INFINITY;
                 if (witnessCostToW <= shortcutCost) continue; // witness exists
 
-                // Check if existing edge u→w is already at least as cheap.
-                boolean superseded = false;
-                int uOOff = outOff[u], uOLen = outLen[u];
-                for (int k = 0; k < uOLen; k++) {
-                    int ex = outBuf[uOOff + k];
-                    if (buildEdgeData[ex * BE_SIZE + BE_TO] == w
-                            && buildEdgeWeights[ex] <= shortcutCost) {
-                        superseded = true;
-                        break;
-                    }
-                }
-                if (!superseded) {
-                    addBuildEdge(u, w, -1, node, inIdx, scratchOutEdgeIdx[t], shortcutCost);
-                }
+                // O(1) check: existing edge u→w already at least as cheap?
+                if (dedupGen[w] == dedupGeneration && dedupBest[w] <= shortcutCost) continue;
+
+                addBuildEdge(u, w, -1, node, inIdx, scratchOutEdgeIdx[t], shortcutCost);
             }
         }
     }
