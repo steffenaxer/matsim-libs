@@ -17,6 +17,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Time-dependent CATCHUp bidirectional CH query.
@@ -168,6 +169,24 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
         bwdPQ.clear();
         bwdPQ.insert(endIdx, 0.0);
 
+        // With turn restrictions, also seed backward search from colored copies of the
+        // destination node and forward search from colored copies of the source node.
+        Optional<TurnRestrictionsContext> trOpt = baseGraph.getTurnRestrictions();
+        if (trOpt.isPresent()) {
+            for (TurnRestrictionsContext.ColoredNode cn : trOpt.get().coloredNodes) {
+                int origIdx = cn.node().getId().index();
+                int coloredIdx = cn.index();
+                if (origIdx == endIdx && coloredIdx != endIdx) {
+                    setBwd(coloredIdx, 0.0, -1, -1);
+                    bwdPQ.insert(coloredIdx, 0.0);
+                }
+                if (origIdx == startIdx && coloredIdx != startIdx) {
+                    setFwd(coloredIdx, startTime, 0.0, -1, -1);
+                    fwdPQ.insert(coloredIdx, 0.0);
+                }
+            }
+        }
+
         double bestBound   = Double.POSITIVE_INFINITY;
         int    meetingNode = -1;
 
@@ -216,6 +235,11 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                             fwdComingFrom[w] = v;
                             fwdUsedEdge[w]   = e;
                             fwdPQ.decreaseKey(w, newCost);
+                        } else if (newCost == fwdCost[w] && e < fwdUsedEdge[w]) {
+                            // Tie-breaking: prefer lower edge index for deterministic paths.
+                            fwdArrival[w]    = newArr;
+                            fwdComingFrom[w] = v;
+                            fwdUsedEdge[w]   = e;
                         }
                     } else {
                         setFwd(w, newArr, newCost, v, e);
@@ -249,6 +273,10 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                             bwdComingFrom[y] = v;
                             bwdUsedEdge[y]   = e;
                             bwdPQ.decreaseKey(y, newLB);
+                        } else if (newLB == bwdLB[y] && e < bwdUsedEdge[y]) {
+                            // Tie-breaking: prefer lower edge index for deterministic paths.
+                            bwdComingFrom[y] = v;
+                            bwdUsedEdge[y]   = e;
                         }
                     } else {
                         setBwd(y, newLB, v, e);
