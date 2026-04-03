@@ -51,8 +51,9 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
     private final TravelTime       tt;
     private final TravelDisutility td;
 
-    // Forward search: tracks absolute arrival times.
-    private final double[] fwdArrival;   // absolute arrival time at node
+    // Forward search: tracks both absolute arrival times and relative travel times.
+    private final double[] fwdArrival;   // absolute arrival time at node (for TTF bin lookup)
+    private final double[] fwdCost;      // relative travel time from source (for PQ key and stopping)
     private final int[]    fwdComingFrom;
     private final int[]    fwdUsedEdge;
     private final int[]    fwdIterIds;
@@ -83,6 +84,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
 
         int n = chGraph.nodeCount;
         this.fwdArrival    = new double[n];
+        this.fwdCost       = new double[n];
         this.fwdComingFrom = new int[n];
         this.fwdUsedEdge   = new int[n];
         this.fwdIterIds    = new int[n];
@@ -154,10 +156,12 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                     Collections.emptyList(), 0.0, 0.0);
         }
 
-        // Initialize forward search (absolute arrival times).
-        setFwd(startIdx, startTime, -1, -1);
+        // Initialize forward search.
+        // PQ is keyed by relative travel time from source (fwdCost).
+        // fwdArrival stores absolute arrival time for TTF bin lookups.
+        setFwd(startIdx, startTime, 0.0, -1, -1);
         fwdPQ.clear();
-        fwdPQ.insert(startIdx, startTime);
+        fwdPQ.insert(startIdx, 0.0);
 
         // Initialize backward search (lower-bound remaining times).
         setBwd(endIdx, 0.0, -1, -1);
@@ -168,22 +172,27 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
         int    meetingNode = -1;
 
         while (!fwdPQ.isEmpty() || !bwdPQ.isEmpty()) {
-            // Stopping criterion: fwdMin + bwdMin >= best proven lower bound.
-            double fMin = fwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : fwdArrival[fwdPQ.peek()];
+            // Stopping criterion.  A meeting can involve:
+            //  (a) two unsettled nodes           → cost ≥ fMin + bMin
+            //  (b) fwd-unsettled, bwd-settled     → cost ≥ fMin
+            //  (c) fwd-settled,   bwd-unsettled   → cost ≥ bMin
+            // So the overall lower bound on any future meeting is min(fMin, bMin).
+            double fMin = fwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : fwdCost[fwdPQ.peek()];
             double bMin = bwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : bwdLB[bwdPQ.peek()];
-            if (fMin + bMin >= bestBound) break;
+            if (Math.min(fMin, bMin) >= bestBound) break;
 
-            // Expand the side with the smaller key.
+            // Expand the side with the smaller key (both are relative travel times).
             boolean expandForward = !fwdPQ.isEmpty()
                     && (bwdPQ.isEmpty() || fMin <= bMin);
 
             if (expandForward) {
                 int v      = fwdPQ.poll();
                 double arr = fwdArrival[v];
+                double cost = fwdCost[v];
 
                 // Update meeting point.
                 if (bwdIterIds[v] == currentIteration) {
-                    double bound = arr + bwdLB[v];
+                    double bound = cost + bwdLB[v];
                     if (bound < bestBound) {
                         bestBound   = bound;
                         meetingNode = v;
@@ -198,17 +207,19 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                     int    w          = outUpIter.getToNode();
                     double travelTime = chGraph.ttf[e][bin];
                     double newArr     = arr + travelTime;
+                    double newCost    = cost + travelTime;
 
                     if (fwdIterIds[w] == currentIteration) {
-                        if (newArr < fwdArrival[w]) {
+                        if (newCost < fwdCost[w]) {
                             fwdArrival[w]    = newArr;
+                            fwdCost[w]       = newCost;
                             fwdComingFrom[w] = v;
                             fwdUsedEdge[w]   = e;
-                            fwdPQ.decreaseKey(w, newArr);
+                            fwdPQ.decreaseKey(w, newCost);
                         }
                     } else {
-                        setFwd(w, newArr, v, e);
-                        fwdPQ.insert(w, newArr);
+                        setFwd(w, newArr, newCost, v, e);
+                        fwdPQ.insert(w, newCost);
                     }
                 }
 
@@ -218,7 +229,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
 
                 // Update meeting point.
                 if (fwdIterIds[v] == currentIteration) {
-                    double bound = fwdArrival[v] + lb;
+                    double bound = fwdCost[v] + lb;
                     if (bound < bestBound) {
                         bestBound   = bound;
                         meetingNode = v;
@@ -327,8 +338,9 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
         }
     }
 
-    private void setFwd(int node, double arrival, int comingFrom, int usedEdge) {
+    private void setFwd(int node, double arrival, double cost, int comingFrom, int usedEdge) {
         fwdArrival[node]    = arrival;
+        fwdCost[node]       = cost;
         fwdComingFrom[node] = comingFrom;
         fwdUsedEdge[node]   = usedEdge;
         fwdIterIds[node]    = currentIteration;
