@@ -70,6 +70,7 @@ public class SpeedyCHBuilder {
     private int[]   outLen;
     private int[][] inEdges;
     private int[]   inLen;
+    private Object[] adjLocks;  // per-node locks for adjacency list mutation
 
     // CH state
     private final int[]     nodeLevel;
@@ -186,9 +187,11 @@ public class SpeedyCHBuilder {
         this.outLen   = new int[nodeCount];
         this.inEdges  = new int[nodeCount][];
         this.inLen    = new int[nodeCount];
+        this.adjLocks = new Object[nodeCount];
         for (int i = 0; i < nodeCount; i++) {
             outEdges[i] = new int[perNode];
             inEdges[i]  = new int[perNode];
+            adjLocks[i] = new Object();
         }
 
         this.witnessIterIds = new int[nodeCount];
@@ -270,8 +273,7 @@ public class SpeedyCHBuilder {
     // ---- per-node adjacency helpers ----
 
     private void adjOutAdd(int node, int edgeIdx) {
-        // Per-node synchronization: only blocks threads touching the same node
-        synchronized (outEdges) {
+        synchronized (adjLocks[node]) {
             int len = outLen[node];
             int[] arr = outEdges[node];
             if (len >= arr.length) {
@@ -282,7 +284,7 @@ public class SpeedyCHBuilder {
         }
     }
     private void adjInAdd(int node, int edgeIdx) {
-        synchronized (inEdges) {
+        synchronized (adjLocks[node]) {
             int len = inLen[node];
             int[] arr = inEdges[node];
             if (len >= arr.length) {
@@ -457,8 +459,10 @@ public class SpeedyCHBuilder {
             }
 
             totalContracted += roundNodes;
-            LOG.info("  … contracted {}/{} nodes, round {}/{} ({} edges so far)",
-                    totalContracted, nodeCount, r + 1, rounds.size(), buildEdgeCounter.get());
+            LOG.info("  … contracted {}/{} nodes ({}%), depth {}/{} ({} edges so far)",
+                    totalContracted, nodeCount,
+                    (int) (100.0 * totalContracted / nodeCount),
+                    r + 1, rounds.size(), buildEdgeCounter.get());
         }
 
         if (pool != null) {
@@ -558,7 +562,7 @@ public class SpeedyCHBuilder {
         for (int node : cellNodes) {
             // Count active in-degree to decide parallelism strategy
             int[] iArr = inEdges[node];
-            int iLen = this.inLen[node];
+            int iLen = Math.min(this.inLen[node], iArr.length);  // clamp: unsynchronized read
             int activeInDeg = 0;
             for (int j = 0; j < iLen; j++) {
                 int u = buildEdgeData[iArr[j] * BE_SIZE + BE_FROM];
@@ -598,9 +602,9 @@ public class SpeedyCHBuilder {
     private void contractNodeIntraParallel(int node, ForkJoinPool pool,
                                             ThreadLocal<WitnessContext> tlCtx) {
         int[] oArr = outEdges[node];
-        int oLen = outLen[node];
+        int oLen = Math.min(outLen[node], oArr.length);  // clamp: unsynchronized read
         int[] iArr = inEdges[node];
-        int iLen = inLen[node];
+        int iLen = Math.min(inLen[node], iArr.length);   // clamp: unsynchronized read
 
         // Collect active out-neighbors (targets)
         int numTargets = 0;
@@ -660,7 +664,7 @@ public class SpeedyCHBuilder {
                 // Dedup lookup
                 ctx.dedupGeneration++;
                 int[] uOutArr = outEdges[u];
-                int uOLen = outLen[u];
+                int uOLen = Math.min(outLen[u], uOutArr.length);  // clamp: unsynchronized read
                 for (int k = 0; k < uOLen; k++) {
                     int ex = uOutArr[k];
                     int target = buildEdgeData[ex * BE_SIZE + BE_TO];
@@ -926,9 +930,9 @@ public class SpeedyCHBuilder {
      */
     private void contractNodeBatchedCtx(int node, WitnessContext ctx) {
         int[] oArr = outEdges[node];
-        int oLen = outLen[node];
+        int oLen = Math.min(outLen[node], oArr.length);  // clamp: unsynchronized read
         int[] iArr = inEdges[node];
-        int iLen = inLen[node];
+        int iLen = Math.min(inLen[node], iArr.length);   // clamp: unsynchronized read
 
         int numTargets = 0;
         for (int i = 0; i < oLen; i++) {
@@ -964,7 +968,7 @@ public class SpeedyCHBuilder {
             // Dedup lookup (read shared state — stale reads are conservative)
             ctx.dedupGeneration++;
             int[] uOutArr = outEdges[u];
-            int uOLen = outLen[u];
+            int uOLen = Math.min(outLen[u], uOutArr.length);  // clamp: unsynchronized read
             for (int k = 0; k < uOLen; k++) {
                 int ex = uOutArr[k];
                 int target = buildEdgeData[ex * BE_SIZE + BE_TO];
@@ -1026,7 +1030,7 @@ public class SpeedyCHBuilder {
             if (++settled > settledLimit) break;
 
             int[] vOutArr = outEdges[v];
-            int vOLen = outLen[v];
+            int vOLen = Math.min(outLen[v], vOutArr.length);  // clamp: unsynchronized read
             for (int i = 0; i < vOLen; i++) {
                 int edgeIdx = vOutArr[i];
                 int toNode = buildEdgeData[edgeIdx * BE_SIZE + BE_TO];
