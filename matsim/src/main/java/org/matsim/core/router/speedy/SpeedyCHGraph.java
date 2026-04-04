@@ -89,13 +89,23 @@ public class SpeedyCHGraph {
     // Ensures lower (component) edges are processed before their parent shortcuts.
     final int[] customizeOrder;
 
+    // Node levels (contraction rank): nodeLevel[i] = level of node i.
+    // Level 0 = contracted first, nodeCount-1 = contracted last.
+    // Used by CH-based LeastCostPathTree for the downward sweep.
+    final int[] nodeLevel;
+
+    // Precomputed sweep order: nodes sorted by DECREASING level (highest first).
+    // sweepOrder[0] = node with highest level (contracted last).
+    // Used for the downward sweep in CH one-to-all search.
+    final int[] sweepOrder;
+
     private final SpeedyGraph baseGraph;
 
     SpeedyCHGraph(SpeedyGraph baseGraph, int nodeCount,
                   int upEdgeCount, int[] upOff, int[] upLen, int[] upEdges, double[] upWeights,
                   int dnEdgeCount, int[] dnOff, int[] dnLen, int[] dnEdges, double[] dnWeights,
                   int totalEdgeCount, int[] edgeOrigLink, int[] edgeLower1, int[] edgeLower2,
-                  int[] customizeOrder) {
+                  int[] customizeOrder, int[] nodeLevel) {
         this.baseGraph      = baseGraph;
         this.nodeCount      = nodeCount;
         this.upEdgeCount    = upEdgeCount;
@@ -113,7 +123,22 @@ public class SpeedyCHGraph {
         this.edgeLower1     = edgeLower1;
         this.edgeLower2     = edgeLower2;
         this.customizeOrder = customizeOrder;
+        this.nodeLevel      = nodeLevel;
         this.edgeWeights    = new double[totalEdgeCount];
+
+        // Precompute sweep order: nodes sorted by decreasing level
+        this.sweepOrder = new int[nodeCount];
+        for (int i = 0; i < nodeCount; i++) sweepOrder[i] = i;
+        // Sort by decreasing nodeLevel using a simple insertion sort partitioned
+        // by level (levels are contiguous 0..nodeCount-1, so we can use inverse mapping).
+        int[] invLevel = new int[nodeCount];
+        for (int i = 0; i < nodeCount; i++) {
+            invLevel[nodeLevel[i]] = i;
+        }
+        for (int i = 0; i < nodeCount; i++) {
+            sweepOrder[i] = invLevel[nodeCount - 1 - i];
+        }
+
         // Pre-allocate bin-major flat TTF arrays.
         this.ttf    = new double[SpeedyCHTTFCustomizer.NUM_BINS * totalEdgeCount];
         this.minTTF = new double[totalEdgeCount];

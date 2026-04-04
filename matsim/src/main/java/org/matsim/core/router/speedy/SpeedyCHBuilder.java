@@ -1201,7 +1201,7 @@ public class SpeedyCHBuilder {
                 totalUp, upOff, upCount, upEdges, upWeights,
                 totalDn, dnOff, dnCount, dnEdges, dnWeights,
                 totalEdgeCount, edgeOrigLink, edgeLower1, edgeLower2,
-                customizeOrder);
+                customizeOrder, nodeLevel);
     }
 
     // -------------------------------------------------------------------------
