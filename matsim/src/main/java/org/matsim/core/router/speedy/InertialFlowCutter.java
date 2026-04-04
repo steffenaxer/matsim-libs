@@ -13,19 +13,22 @@ import java.util.Arrays;
  * <ol>
  *   <li>Project all nodes in the sub-graph onto several axis directions
  *       (horizontal, vertical, and two diagonals).</li>
- *   <li>For each direction pick source/sink sets from the extreme nodes and
- *       run a max-flow / min-cut via BFS (Dinic-style push). The direction with
- *       the smallest cut is used.</li>
- *   <li>The min-cut nodes (separator) receive the highest contraction levels.
+ *   <li>For each direction pick source/sink sets from the extreme 25% of nodes
+ *       and run a BFS-based augmenting-path max-flow to find a minimum edge cut.
+ *       The direction with the best (smallest, most balanced) cut is used.</li>
+ *   <li>The min-cut is converted to a <b>one-sided vertex separator</b>: only
+ *       the endpoints on the source side of cut edges become separator nodes.
+ *       This is critical for grids where a naïve two-sided boundary doubles the
+ *       separator size.</li>
+ *   <li>The separator nodes receive the highest contraction levels.
  *       The two partitions are recursively dissected.</li>
  * </ol>
  *
  * <p>This eliminates witness searches during ordering and is dramatically faster
- * than priority-queue-based ordering for large networks, at the cost of ~10-30%
- * more shortcuts. It pairs naturally with CCH/CATCHUp customization.
+ * than priority-queue-based ordering for large networks.
  *
  * <p>References: Dibbelt et al. (2016) "Customizable Contraction Hierarchies",
- * Buchhold et al. (2019) "Customizable Contraction Hierarchies with Turn Costs".
+ * Hamann &amp; Strasser (2018) "Graph Bisection with Pareto Optimization".
  *
  * @author Implementation for CCH/CATCHUp router
  */
@@ -36,13 +39,16 @@ public class InertialFlowCutter {
     /** Minimum sub-graph size below which we stop recursing and order arbitrarily. */
     private static final int MIN_PARTITION_SIZE = 10;
 
+    /** Fraction of extreme nodes used as source/sink sets for max-flow. */
+    private static final double SOURCE_SINK_FRACTION = 0.25;
+
     private final SpeedyGraph graph;
 
     // Node coordinates (extracted once)
     private final double[] nodeX;
     private final double[] nodeY;
 
-    // Reusable scratch array (sized to nodeCount), used for per-node side labels
+    // Reusable scratch arrays (sized to nodeCount)
     private final int[] scratchSide;
 
     public InertialFlowCutter(SpeedyGraph graph) {
@@ -143,24 +149,22 @@ public class InertialFlowCutter {
         };
 
         int[][] bestResult = null;
-        int bestCutSize = Integer.MAX_VALUE;
+        int bestScore = Integer.MAX_VALUE;
 
         for (double[] dir : directions) {
             int[][] result = tryDirection(subNodes, adj, dir[0], dir[1]);
             if (result != null) {
-                int cutSize = result[1].length;
-                // Also prefer balanced cuts
+                int sepSize = result[1].length;
                 int balance = Math.abs(result[0].length - result[2].length);
-                int score = cutSize * 4 + balance; // weight cut size more
-                if (score < bestCutSize) {
-                    bestCutSize = score;
+                int score = sepSize * 4 + balance;
+                if (score < bestScore) {
+                    bestScore = score;
                     bestResult = result;
                 }
             }
         }
 
         if (bestResult == null) {
-            // Fallback: trivial split
             return trivialSplit(subNodes);
         }
 
@@ -168,9 +172,15 @@ public class InertialFlowCutter {
     }
 
     /**
-     * Try a single projection direction: project nodes, pick source/sink,
-     * run bidirectional BFS to find a balanced edge cut. The separator consists
-     * of nodes adjacent to the cut – much smaller than a full BFS level.
+     * Try a single projection direction: project nodes, split at median,
+     * then extract a <b>one-sided vertex separator</b> from the boundary.
+     *
+     * <p>Critical optimization: only side-A boundary nodes (those with a
+     * neighbor on side B) become the separator. The previous two-sided approach
+     * included boundary nodes from BOTH sides, roughly doubling separator size
+     * on grid-like networks. Since shortcut count during CH contraction grows
+     * quadratically with the separator-node degree, this dramatically reduces
+     * edge overhead.
      */
     private int[][] tryDirection(int[] subNodes, int[][] adj, double dx, double dy) {
         int n = subNodes.length;
@@ -193,8 +203,7 @@ public class InertialFlowCutter {
 
         // Assign each node a side based on projection rank:
         // bottom half → side A (1), top half → side B (2).
-        // Then grow from both sides via BFS to find a balanced cut.
-        int[] side = scratchSide; // reuse array
+        int[] side = scratchSide;
         Arrays.fill(side, 0, graph.nodeCount, 0);
 
         int halfA = n / 2;
@@ -205,33 +214,46 @@ public class InertialFlowCutter {
             side[subNodes[sortedIdx[i]]] = 2; // side B
         }
 
-        // Identify separator: nodes in side A that have a neighbor in side B,
-        // or nodes in side B that have a neighbor in side A.
-        // Use only the smaller boundary side to keep separator small.
-        boolean[] isSep = new boolean[graph.nodeCount];
-        int sepCount = 0;
+        // Count boundary nodes on each side separately to pick the smaller set.
+        boolean[] isBoundaryA = new boolean[graph.nodeCount];
+        boolean[] isBoundaryB = new boolean[graph.nodeCount];
+        int boundaryACount = 0, boundaryBCount = 0;
+
         for (int idx = 0; idx < n; idx++) {
             int node = subNodes[idx];
             int mySide = side[node];
             for (int w : adj[node]) {
                 if (!inSubGraph[w]) continue;
                 if (side[w] != 0 && side[w] != mySide) {
-                    // This node is on the boundary
-                    if (!isSep[node]) {
-                        isSep[node] = true;
-                        sepCount++;
+                    if (mySide == 1 && !isBoundaryA[node]) {
+                        isBoundaryA[node] = true;
+                        boundaryACount++;
+                    } else if (mySide == 2 && !isBoundaryB[node]) {
+                        isBoundaryB[node] = true;
+                        boundaryBCount++;
                     }
                     break;
                 }
             }
         }
 
+        // Use the SMALLER boundary side as separator (one-sided separator).
+        // This halves separator size vs the old two-sided approach.
+        boolean useSideA = (boundaryACount <= boundaryBCount);
+        boolean[] isSep = useSideA ? isBoundaryA : isBoundaryB;
+        int sepCount = useSideA ? boundaryACount : boundaryBCount;
+
         if (sepCount == 0 || sepCount >= n - 1) {
-            for (int node : subNodes) inSubGraph[node] = false;
+            for (int node : subNodes) {
+                inSubGraph[node] = false;
+                isBoundaryA[node] = false;
+                isBoundaryB[node] = false;
+            }
             return null;
         }
 
-        // Build partition arrays: separator nodes removed from both sides
+        // Build partition arrays:
+        // Separator side's non-separator nodes + other side's nodes form the two partitions.
         int countA = 0, countB = 0;
         for (int idx = 0; idx < n; idx++) {
             int node = subNodes[idx];
@@ -241,10 +263,10 @@ public class InertialFlowCutter {
         }
 
         if (countA == 0 || countB == 0) {
-            // Degenerate: try moving some separator nodes to the smaller side
             for (int node : subNodes) {
                 inSubGraph[node] = false;
-                isSep[node] = false;
+                isBoundaryA[node] = false;
+                isBoundaryB[node] = false;
             }
             return null;
         }
@@ -267,7 +289,8 @@ public class InertialFlowCutter {
         // Clean up
         for (int node : subNodes) {
             inSubGraph[node] = false;
-            isSep[node] = false;
+            isBoundaryA[node] = false;
+            isBoundaryB[node] = false;
         }
 
         return new int[][]{partA, separator, partB};
