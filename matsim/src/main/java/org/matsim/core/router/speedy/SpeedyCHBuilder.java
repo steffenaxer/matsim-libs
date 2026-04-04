@@ -643,9 +643,12 @@ public class SpeedyCHBuilder {
         final int ni = numInNbrs;
 
         // Limit concurrent tasks to prevent OOM on high-degree separator nodes.
-        // Each task allocates 6 arrays of size numTargets, so memory per task
-        // is ~28*numTargets bytes.  With thousands of in-neighbours, submitting
-        // all at once would allocate gigabytes of temporary arrays.
+        // Each task allocates 6 arrays of size numTargets (5 int[] + 1 double[]),
+        // totalling ~(5*4 + 8)*numTargets = 28*numTargets bytes per task.
+        // With thousands of in-neighbours, submitting all at once would allocate
+        // gigabytes of temporary arrays.  Use 2× parallelism to keep all threads
+        // busy (one task executing + one queued per thread), with a floor of 8
+        // to avoid under-utilization on low-core machines.
         int maxConcurrent = Math.max(pool.getParallelism() * 2, 8);
 
         @SuppressWarnings("unchecked")
