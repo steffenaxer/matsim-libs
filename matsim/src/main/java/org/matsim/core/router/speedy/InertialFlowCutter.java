@@ -139,9 +139,12 @@ public class InertialFlowCutter {
      * Returns [partitionA, separator, partitionB].
      */
     private int[][] findSeparator(int[] subNodes, int[][] adj) {
-        // Try 4 projection directions and pick the one with smallest cut
+        // Try 8 projection directions and pick the one with smallest cut.
+        // The 4 additional intermediate directions improve separator quality
+        // on networks where the optimal cut is between the cardinal/diagonal axes.
         double[][] directions = {
-            {1, 0}, {0, 1}, {1, 1}, {1, -1}
+            {1, 0}, {0, 1}, {1, 1}, {1, -1},
+            {2, 1}, {1, 2}, {2, -1}, {1, -2}
         };
 
         int[][] bestResult = null;

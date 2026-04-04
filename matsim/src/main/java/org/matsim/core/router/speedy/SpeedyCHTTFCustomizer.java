@@ -19,10 +19,13 @@ import org.matsim.core.router.util.TravelTime;
  */
 public class SpeedyCHTTFCustomizer {
 
-    /** Number of time bins covering a full 24-hour day. */
+    /** Number of time bins covering a full 24-hour day.
+     *  Aligned with the MATSim default {@code travelTimeBinSize} of 900 s (15 min)
+     *  in {@link org.matsim.core.config.groups.TravelTimeCalculatorConfigGroup}. */
     public static final int NUM_BINS = 96;
 
-    /** Duration of each time bin in seconds (15 minutes). */
+    /** Duration of each time bin in seconds (15 minutes).
+     *  Matches the MATSim default {@code travelTimeBinSize} of 900 s. */
     public static final double BIN_SIZE = 900.0; // 15 min × 96 = 24 h
 
     /** Precomputed reciprocal for fast bin computation. */
@@ -37,6 +40,8 @@ public class SpeedyCHTTFCustomizer {
         double[] ttf      = chGraph.ttf;
         double[] minTTF   = chGraph.minTTF;
         double[] weights  = chGraph.edgeWeights;
+        double[] ttfHash  = chGraph.ttfHash;
+        boolean[] dirty   = new boolean[edgeCount];
 
         for (int e = 0; e < edgeCount; e++) {
             int eOff = e * NUM_BINS;
@@ -45,17 +50,30 @@ public class SpeedyCHTTFCustomizer {
             if (origLink[e] >= 0) {
                 // Real edge: sample TravelTime at each bin start
                 Link link = baseGraph.getLink(origLink[e]);
+                double sum = 0;
                 for (int k = 0; k < NUM_BINS; k++) {
                     double t = tt.getLinkTravelTime(link, k * BIN_SIZE, null, null);
                     ttf[eOff + k] = t;
+                    sum += t;
                     if (t < min) min = t;
                 }
+                // Check if TTF changed since last customization
+                if (sum != ttfHash[e]) {
+                    dirty[e] = true;
+                    ttfHash[e] = sum;
+                }
             } else {
-                // Shortcut: CATCHUp composition
+                // Shortcut: skip recomposition if both lower edges are unchanged
                 int l1 = lower1[e];
                 int l2 = lower2[e];
+                if (!dirty[l1] && !dirty[l2]) {
+                    // TTF unchanged — reuse cached values
+                    continue;
+                }
+                dirty[e] = true;
                 int l1Off = l1 * NUM_BINS;
                 int l2Off = l2 * NUM_BINS;
+                double sum = 0;
                 for (int k = 0; k < NUM_BINS; k++) {
                     double t1         = ttf[l1Off + k];
                     double arrivalSec = k * BIN_SIZE + t1;
@@ -63,8 +81,10 @@ public class SpeedyCHTTFCustomizer {
                     double t2         = ttf[l2Off + arrBin];
                     double composed   = t1 + t2;
                     ttf[eOff + k] = composed;
+                    sum += composed;
                     if (composed < min) min = composed;
                 }
+                ttfHash[e] = sum;
             }
 
             minTTF[e]  = min;

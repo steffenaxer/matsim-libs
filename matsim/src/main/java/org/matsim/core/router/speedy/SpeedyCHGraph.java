@@ -74,6 +74,10 @@ public class SpeedyCHGraph {
     double[] ttf;
     double[] minTTF;
 
+    // Change detection for incremental TTF customization.
+    // ttfHash[globalIdx] = sum of TTF bins; NaN until first customization.
+    double[] ttfHash;
+
     private final SpeedyGraph baseGraph;
 
     SpeedyCHGraph(SpeedyGraph baseGraph, int nodeCount,
@@ -100,6 +104,8 @@ public class SpeedyCHGraph {
         // Pre-allocate flat TTF arrays.
         this.ttf    = new double[totalEdgeCount * SpeedyCHTTFCustomizer.NUM_BINS];
         this.minTTF = new double[totalEdgeCount];
+        this.ttfHash = new double[totalEdgeCount];
+        java.util.Arrays.fill(this.ttfHash, Double.NaN);
     }
 
     SpeedyGraph getBaseGraph() {
