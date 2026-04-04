@@ -440,7 +440,6 @@ public class SpeedyCHBuilder {
         ThreadLocal<WitnessContext> tlCtx = ThreadLocal.withInitial(() -> new WitnessContext(nodeCount));
 
         int totalContracted = 0;
-        int logInterval = Math.max(nodeCount / 10, 1);
 
         for (int r = 0; r < rounds.size(); r++) {
             List<int[]> round = rounds.get(r);
@@ -476,10 +475,8 @@ public class SpeedyCHBuilder {
             }
 
             totalContracted += roundNodes;
-            if (totalContracted / logInterval > (totalContracted - roundNodes) / logInterval) {
-                LOG.info("  … contracted {}/{} nodes, round {}/{} ({} edges so far)",
-                        totalContracted, nodeCount, r + 1, rounds.size(), buildEdgeCount);
-            }
+            LOG.info("  … contracted {}/{} nodes, round {}/{} ({} edges so far)",
+                    totalContracted, nodeCount, r + 1, rounds.size(), buildEdgeCount);
         }
 
         if (pool != null) {
