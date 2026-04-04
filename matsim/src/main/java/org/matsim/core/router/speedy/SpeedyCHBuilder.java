@@ -597,7 +597,10 @@ public class SpeedyCHBuilder {
      * <p>Each parallel task uses a {@code ThreadLocal} WitnessContext and
      * writes results into its own small per-in-neighbour result arrays,
      * avoiding the integer-overflow risk of a single combined array.
-     * After all tasks complete, shortcuts are added in one synchronized batch.
+     *
+     * <p>Tasks are submitted in bounded batches to prevent memory exhaustion
+     * on high-degree separator nodes (e.g. inDeg=5000) where submitting all
+     * tasks at once would allocate gigabytes of temporary arrays concurrently.
      */
     private void contractNodeIntraParallel(int node, ForkJoinPool pool,
                                             ThreadLocal<WitnessContext> tlCtx) {
@@ -639,14 +642,22 @@ public class SpeedyCHBuilder {
         final int nt = numTargets;
         final int ni = numInNbrs;
 
-        // Each task produces its own small result — no shared array needed
+        // Limit concurrent tasks to prevent OOM on high-degree separator nodes.
+        // Each task allocates 6 arrays of size numTargets, so memory per task
+        // is ~28*numTargets bytes.  With thousands of in-neighbours, submitting
+        // all at once would allocate gigabytes of temporary arrays.
+        int maxConcurrent = Math.max(pool.getParallelism() * 2, 8);
+
         @SuppressWarnings("unchecked")
-        ForkJoinTask<InNbrShortcuts>[] tasks = new ForkJoinTask[ni];
+        ForkJoinTask<InNbrShortcuts>[] batch = new ForkJoinTask[Math.min(ni, maxConcurrent)];
+        int submitted = 0;
+        int nextToJoin = 0;
+
         for (int idx = 0; idx < ni; idx++) {
             final int u = inNbrs[idx];
             final int inIdx = inIdxArr[idx];
 
-            tasks[idx] = pool.submit(() -> {
+            batch[submitted % batch.length] = pool.submit(() -> {
                 WitnessContext ctx = tlCtx.get();
                 double wUV = buildEdgeWeights[inIdx];
 
@@ -701,15 +712,27 @@ public class SpeedyCHBuilder {
                 }
                 return new InNbrShortcuts(scF, scT, scM, scL1, scL2, scC, count);
             });
+            submitted++;
+
+            // When the batch is full, drain completed tasks before submitting more
+            if (submitted - nextToJoin >= batch.length) {
+                InNbrShortcuts sc = batch[nextToJoin % batch.length].join();
+                for (int s = 0; s < sc.count; s++) {
+                    addBuildEdge(sc.from[s], sc.to[s], -1,
+                            sc.mid[s], sc.low1[s], sc.low2[s], sc.cost[s]);
+                }
+                nextToJoin++;
+            }
         }
 
-        // Wait for all witness searches to complete and add shortcuts
-        for (ForkJoinTask<InNbrShortcuts> task : tasks) {
-            InNbrShortcuts sc = task.join();
+        // Drain remaining tasks
+        while (nextToJoin < submitted) {
+            InNbrShortcuts sc = batch[nextToJoin % batch.length].join();
             for (int s = 0; s < sc.count; s++) {
                 addBuildEdge(sc.from[s], sc.to[s], -1,
                         sc.mid[s], sc.low1[s], sc.low2[s], sc.cost[s]);
             }
+            nextToJoin++;
         }
     }
 
