@@ -790,9 +790,9 @@ public class SpeedyCHBuilder {
      */
     private void contractNodeBatched(int node) {
         int[] oArr = outEdges[node];
-        int oLen = outLen[node];
+        int oLen = Math.min(outLen[node], oArr.length);  // clamp: unsynchronized read
         int[] iArr = inEdges[node];
-        int iLen = inLen[node];
+        int iLen = Math.min(inLen[node], iArr.length);   // clamp: unsynchronized read
 
         // Collect active out-neighbors and their costs through node.
         int numTargets = 0;
@@ -834,7 +834,7 @@ public class SpeedyCHBuilder {
             // Build O(1) dedup lookup: best existing out-edge cost from u to each neighbor.
             dedupGeneration++;
             int[] uOutArr = outEdges[u];
-            int uOLen = outLen[u];
+            int uOLen = Math.min(outLen[u], uOutArr.length);  // clamp: unsynchronized read
             for (int k = 0; k < uOLen; k++) {
                 int ex = uOutArr[k];
                 int target = buildEdgeData[ex * BE_SIZE + BE_TO];
@@ -894,7 +894,7 @@ public class SpeedyCHBuilder {
             if (++settled > settledLimit) break; // prevent unbounded exploration
 
             int[] vOutArr = outEdges[v];
-            int vOLen = outLen[v];
+            int vOLen = Math.min(outLen[v], vOutArr.length);  // clamp: unsynchronized read
             for (int i = 0; i < vOLen; i++) {
                 int edgeIdx = vOutArr[i];
                 int toNode = buildEdgeData[edgeIdx * BE_SIZE + BE_TO];
