@@ -13,11 +13,10 @@ import java.util.Arrays;
  * <ol>
  *   <li>Project all nodes in the sub-graph onto several axis directions
  *       (horizontal, vertical, and two diagonals).</li>
- *   <li>For each direction pick source/sink sets from the extreme 25% of nodes
- *       and run a BFS-based augmenting-path max-flow to find a minimum edge cut.
- *       The direction with the best (smallest, most balanced) cut is used.</li>
- *   <li>The min-cut is converted to a <b>one-sided vertex separator</b>: only
- *       the endpoints on the source side of cut edges become separator nodes.
+ *   <li>For each direction, split nodes at the projection median into two halves.
+ *       The direction with the best (smallest, most balanced) separator is used.</li>
+ *   <li>The boundary is converted to a <b>one-sided vertex separator</b>: only
+ *       nodes on the smaller boundary side become separator nodes.
  *       This is critical for grids where a naïve two-sided boundary doubles the
  *       separator size.</li>
  *   <li>The separator nodes receive the highest contraction levels.
@@ -38,9 +37,6 @@ public class InertialFlowCutter {
 
     /** Minimum sub-graph size below which we stop recursing and order arbitrarily. */
     private static final int MIN_PARTITION_SIZE = 10;
-
-    /** Fraction of extreme nodes used as source/sink sets for max-flow. */
-    private static final double SOURCE_SINK_FRACTION = 0.25;
 
     private final SpeedyGraph graph;
 
