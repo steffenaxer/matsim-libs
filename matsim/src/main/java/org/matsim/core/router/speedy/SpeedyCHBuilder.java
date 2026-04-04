@@ -597,15 +597,24 @@ public class SpeedyCHBuilder {
     }
 
     /**
+     * A small record holding the shortcuts discovered by one in-neighbour's
+     * witness search.  Each parallel task creates its own instance, avoiding
+     * the need for a single shared array whose size (inDeg × outDeg) can
+     * overflow {@code int} on large networks.
+     */
+    private record InNbrShortcuts(int[] from, int[] to, int[] mid,
+                                  int[] low1, int[] low2, double[] cost, int count) { }
+
+    /**
      * Contract a single node with witness searches parallelized across
      * in-neighbours.  Each in-neighbour's witness search is independent
      * (it explores the graph from u, avoiding node v, to find witnesses
      * for all out-neighbours w), so they can safely run concurrently.
      *
      * <p>Each parallel task uses a {@code ThreadLocal} WitnessContext and
-     * writes results into a pre-allocated slot of shared result arrays
-     * (no contention since each task writes to its own slot).  After all
-     * tasks complete, shortcuts are added in one synchronized batch.
+     * writes results into its own small per-in-neighbour result arrays,
+     * avoiding the integer-overflow risk of a single combined array.
+     * After all tasks complete, shortcuts are added in one synchronized batch.
      */
     private void contractNodeIntraParallel(int node, ForkJoinPool pool,
                                             ThreadLocal<WitnessContext> tlCtx) {
@@ -614,7 +623,6 @@ public class SpeedyCHBuilder {
 
         // Collect active out-neighbors (targets)
         int numTargets = 0;
-        // Use thread-safe local arrays (not the builder's scratch arrays)
         int[] targets  = new int[oLen];
         double[] tgtCosts = new double[oLen];
         int[] tgtEdge  = new int[oLen];
@@ -643,28 +651,17 @@ public class SpeedyCHBuilder {
         }
         if (numInNbrs == 0) return;
 
-        // Pre-allocate result arrays: each in-neighbor can produce at most numTargets shortcuts.
-        // Layout: inNeighborSlot * numTargets + targetIndex
         final int nt = numTargets;
         final int ni = numInNbrs;
-        final int slotSize = nt;
-        int[] scFrom  = new int[ni * slotSize];
-        int[] scTo    = new int[ni * slotSize];
-        int[] scMid   = new int[ni * slotSize];
-        int[] scLow1  = new int[ni * slotSize];
-        int[] scLow2  = new int[ni * slotSize];
-        double[] scCostArr = new double[ni * slotSize];
-        int[] scCountPerNbr = new int[ni];
 
-        // Submit parallel witness search tasks
-        List<ForkJoinTask<?>> tasks = new ArrayList<>(ni);
+        // Each task produces its own small result — no shared array needed
+        @SuppressWarnings("unchecked")
+        ForkJoinTask<InNbrShortcuts>[] tasks = new ForkJoinTask[ni];
         for (int idx = 0; idx < ni; idx++) {
-            final int nbIdx = idx;
             final int u = inNbrs[idx];
             final int inIdx = inEdges[idx];
-            final int offset = nbIdx * slotSize;
 
-            tasks.add(pool.submit(() -> {
+            tasks[idx] = pool.submit(() -> {
                 WitnessContext ctx = tlCtx.get();
                 double wUV = buildEdgeWeights[inIdx];
 
@@ -692,7 +689,10 @@ public class SpeedyCHBuilder {
                     }
                 }
 
-                // Collect needed shortcuts into this in-neighbor's result slot
+                // Collect needed shortcuts for this in-neighbour
+                int[] scF = new int[nt], scT = new int[nt], scM = new int[nt];
+                int[] scL1 = new int[nt], scL2 = new int[nt];
+                double[] scC = new double[nt];
                 int count = 0;
                 for (int t = 0; t < nt; t++) {
                     int w = targets[t];
@@ -705,33 +705,25 @@ public class SpeedyCHBuilder {
 
                     if (ctx.dedupGen[w] == ctx.dedupGeneration && ctx.dedupBest[w] <= shortcutCost) continue;
 
-                    int pos = offset + count;
-                    scFrom[pos]    = u;
-                    scTo[pos]      = w;
-                    scMid[pos]     = node;
-                    scLow1[pos]    = inIdx;
-                    scLow2[pos]    = tgtEdge[t];
-                    scCostArr[pos] = shortcutCost;
+                    scF[count]  = u;
+                    scT[count]  = w;
+                    scM[count]  = node;
+                    scL1[count] = inIdx;
+                    scL2[count] = tgtEdge[t];
+                    scC[count]  = shortcutCost;
                     count++;
                 }
-                scCountPerNbr[nbIdx] = count;
-            }));
+                return new InNbrShortcuts(scF, scT, scM, scL1, scL2, scC, count);
+            });
         }
 
-        // Wait for all witness searches to complete
-        for (ForkJoinTask<?> task : tasks) {
-            task.join();
-        }
-
-        // Batch-add all shortcuts under one lock
+        // Wait for all witness searches to complete and batch-add shortcuts
         synchronized (this) {
-            for (int idx = 0; idx < ni; idx++) {
-                int off = idx * slotSize;
-                int cnt = scCountPerNbr[idx];
-                for (int s = 0; s < cnt; s++) {
-                    int pos = off + s;
-                    addBuildEdge(scFrom[pos], scTo[pos], -1,
-                            scMid[pos], scLow1[pos], scLow2[pos], scCostArr[pos]);
+            for (ForkJoinTask<InNbrShortcuts> task : tasks) {
+                InNbrShortcuts sc = task.join();
+                for (int s = 0; s < sc.count; s++) {
+                    addBuildEdge(sc.from[s], sc.to[s], -1,
+                            sc.mid[s], sc.low1[s], sc.low2[s], sc.cost[s]);
                 }
             }
         }
