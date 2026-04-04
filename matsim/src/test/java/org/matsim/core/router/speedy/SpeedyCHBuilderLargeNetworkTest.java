@@ -124,19 +124,20 @@ public class SpeedyCHBuilderLargeNetworkTest {
         // ---- Console summary ----
         System.out.println();
         System.out.println("=== CH Benchmark Results (baseline: SpeedyALT) ===");
-        System.out.printf("%-16s %7s %7s | %8s %8s %8s | %7s | %8s %8s %10s%n",
+        System.out.printf("%-16s %7s %7s | %8s %8s %8s | %7s | %8s %8s %10s %8s %10s%n",
                 "Network", "Nodes", "Links",
                 "Wit(ms)", "ND(ms)", "Ord(ms)",
                 "EdgeOvh",
-                "ALT(µs)", "CH(µs)", "Speedup");
-        System.out.println("-".repeat(110));
+                "ALT(µs)", "CHtd(µs)", "Spd(td)", "CHst(µs)", "Spd(st)");
+        System.out.println("-".repeat(130));
 
         for (BenchmarkResult r : results) {
-            System.out.printf("%-16s %7d %7d | %8d %8d %8d | %+6.1f%% | %8.0f %8.0f %9.1fx%n",
+            System.out.printf("%-16s %7d %7d | %8d %8d %8d | %+6.1f%% | %8.0f %8.0f %9.1fx %8.0f %9.1fx%n",
                     r.name, r.nodes, r.links,
                     r.witnessBuildMs, r.ndTotalMs, r.ndOrdMs,
                     r.edgeOverheadPct,
-                    r.altQueryUs, r.chQueryUs, r.speedupVsALT);
+                    r.altQueryUs, r.chTimeDepQueryUs, r.speedupTimeDepVsALT,
+                    r.chStaticQueryUs, r.speedupStaticVsALT);
         }
         System.out.println();
 
@@ -210,8 +211,9 @@ public class SpeedyCHBuilderLargeNetworkTest {
             BenchmarkResult r = benchmarkNetwork("Berlin-v7.0", network);
             System.out.printf("  Build: witness=%dms  ND=%dms (ord=%dms)  EdgeOverhead=%+.1f%%%n",
                     r.witnessBuildMs, r.ndTotalMs, r.ndOrdMs, r.edgeOverheadPct);
-            System.out.printf("  Query: ALT=%.0fµs  CH=%.0fµs  Speedup=%.1fx%n",
-                    r.altQueryUs, r.chQueryUs, r.speedupVsALT);
+            System.out.printf("  Query: ALT=%.0fµs  CHtd=%.0fµs  CHst=%.0fµs  SpeedupTD=%.1fx  SpeedupST=%.1fx%n",
+                    r.altQueryUs, r.chTimeDepQueryUs, r.chStaticQueryUs,
+                    r.speedupTimeDepVsALT, r.speedupStaticVsALT);
 
             // Correctness test
             runCorrectnessTest(network);
@@ -228,7 +230,8 @@ public class SpeedyCHBuilderLargeNetworkTest {
             String name, int nodes, int links,
             long witnessBuildMs, long ndTotalMs, long ndOrdMs, long ndConMs,
             int witnessEdges, int ndEdges, double edgeOverheadPct,
-            double altQueryUs, double chQueryUs, double speedupVsALT) {
+            double altQueryUs, double chTimeDepQueryUs, double chStaticQueryUs,
+            double speedupTimeDepVsALT, double speedupStaticVsALT) {
     }
 
     // -----------------------------------------------------------------------
@@ -317,28 +320,31 @@ public class SpeedyCHBuilderLargeNetworkTest {
 
         double edgeOverhead = ((double) chN.totalEdgeCount / Math.max(1, chW.totalEdgeCount) - 1) * 100;
 
-        // ---- Setup query routers: ND-CH and SpeedyALT ----
+        // ---- Setup query routers: ND-CH (time-dep + static) and SpeedyALT ----
         new SpeedyCHTTFCustomizer().customize(chN, tc, tc);
-        SpeedyCHTimeDep ndRouter = new SpeedyCHTimeDep(chN, tc, tc);
+        SpeedyCHTimeDep ndTimeDep = new SpeedyCHTimeDep(chN, tc, tc);
+        SpeedyCH ndStatic = new SpeedyCH(chN, tc, tc);
         SpeedyALTData altData = new SpeedyALTData(gN, Math.min(ALT_LANDMARKS, gN.nodeCount), tc, 1);
         SpeedyALT altRouter = new SpeedyALT(altData, tc, tc);
 
-        // ---- Query benchmark: ND-CH vs SpeedyALT ----
+        // ---- Query benchmark: ND-CH (time-dep + static) vs SpeedyALT ----
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
         int n = nodeList.size();
         Random rng = new Random(42);
 
-        // Warm up both routers
+        // Warm up all routers
         for (int i = 0; i < 20; i++) {
             Node s = nodeList.get(rng.nextInt(n));
             Node d = nodeList.get(rng.nextInt(n));
-            ndRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            ndTimeDep.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            ndStatic.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
             altRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
         }
 
         rng = new Random(123); // fresh seed for timed queries
         long altTimeNs = 0;
-        long chTimeNs = 0;
+        long chTimeDepNs = 0;
+        long chStaticNs = 0;
         for (int i = 0; i < BENCHMARK_QUERIES; i++) {
             Node s = nodeList.get(rng.nextInt(n));
             Node d = nodeList.get(rng.nextInt(n));
@@ -348,18 +354,24 @@ public class SpeedyCHBuilderLargeNetworkTest {
             altTimeNs += System.nanoTime() - t0;
 
             t0 = System.nanoTime();
-            ndRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            chTimeNs += System.nanoTime() - t0;
+            ndTimeDep.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            chTimeDepNs += System.nanoTime() - t0;
+
+            t0 = System.nanoTime();
+            ndStatic.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            chStaticNs += System.nanoTime() - t0;
         }
 
-        double altQueryUs = altTimeNs / (BENCHMARK_QUERIES * 1000.0);
-        double chQueryUs  = chTimeNs  / (BENCHMARK_QUERIES * 1000.0);
-        double speedup = (double) altTimeNs / Math.max(1, chTimeNs);
+        double altQueryUs     = altTimeNs     / (BENCHMARK_QUERIES * 1000.0);
+        double chTimeDepUs    = chTimeDepNs   / (BENCHMARK_QUERIES * 1000.0);
+        double chStaticUs     = chStaticNs    / (BENCHMARK_QUERIES * 1000.0);
+        double speedupTimeDep = (double) altTimeNs / Math.max(1, chTimeDepNs);
+        double speedupStatic  = (double) altTimeNs / Math.max(1, chStaticNs);
 
         return new BenchmarkResult(name, nodeCount, linkCount,
                 witnessMs, ndTotalMs, ndOrdMs, ndConMs,
                 chW.totalEdgeCount, chN.totalEdgeCount, edgeOverhead,
-                altQueryUs, chQueryUs, speedup);
+                altQueryUs, chTimeDepUs, chStaticUs, speedupTimeDep, speedupStatic);
     }
 
     // -----------------------------------------------------------------------
@@ -373,13 +385,15 @@ public class SpeedyCHBuilderLargeNetworkTest {
                 pw.println("network\tnodes\tlinks\t"
                         + "witness_build_ms\tnd_total_ms\tnd_ord_ms\tnd_con_ms\t"
                         + "witness_edges\tnd_edges\tedge_overhead_pct\t"
-                        + "alt_query_us\tch_query_us\tspeedup_vs_alt");
+                        + "alt_query_us\tch_timedep_query_us\tch_static_query_us\t"
+                        + "speedup_timedep_vs_alt\tspeedup_static_vs_alt");
                 for (BenchmarkResult r : results) {
-                    pw.printf("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.1f\t%.1f\t%.1f\t%.2f%n",
+                    pw.printf("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.1f\t%.1f\t%.1f\t%.1f\t%.2f\t%.2f%n",
                             r.name, r.nodes, r.links,
                             r.witnessBuildMs, r.ndTotalMs, r.ndOrdMs, r.ndConMs,
                             r.witnessEdges, r.ndEdges, r.edgeOverheadPct,
-                            r.altQueryUs, r.chQueryUs, r.speedupVsALT);
+                            r.altQueryUs, r.chTimeDepQueryUs, r.chStaticQueryUs,
+                            r.speedupTimeDepVsALT, r.speedupStaticVsALT);
                 }
             }
             System.out.println("Results written to " + RESULTS_FILE);

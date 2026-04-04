@@ -31,5 +31,8 @@ public class SpeedyCHCustomizer {
                 weights[e] = weights[lower1[e]] + weights[lower2[e]];
             }
         }
+
+        // Propagate weights into colocated CSR weight arrays
+        SpeedyCHTTFCustomizer.propagateWeightsToCSR(chGraph);
     }
 }

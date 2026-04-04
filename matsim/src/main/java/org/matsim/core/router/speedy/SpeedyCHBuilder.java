@@ -538,12 +538,12 @@ public class SpeedyCHBuilder {
             dnOff[n] = totalDn; totalDn += dnCount[n];
         }
 
-        // 3. Allocate CSR edge arrays and global-index arrays
+        // 3. Allocate CSR edge arrays and colocated weight arrays
         int S = SpeedyCHGraph.E_STRIDE;
-        int[] upEdges     = new int[totalUp * S];
-        int[] upGlobalIdx = new int[totalUp];
-        int[] dnEdges     = new int[totalDn * S];
-        int[] dnGlobalIdx = new int[totalDn];
+        int[] upEdges      = new int[totalUp * S];
+        double[] upWeights = new double[totalUp];
+        int[] dnEdges      = new int[totalDn * S];
+        double[] dnWeights = new double[totalDn];
 
         // Global edge arrays (build-edge index is the global index)
         int[] edgeOrigLink = new int[buildEdgeCount];
@@ -580,7 +580,8 @@ public class SpeedyCHBuilder {
                 upEdges[eBase + SpeedyCHGraph.E_ORIG] = origLink;
                 upEdges[eBase + SpeedyCHGraph.E_LOW1] = lower1;
                 upEdges[eBase + SpeedyCHGraph.E_LOW2] = lower2;
-                upGlobalIdx[slot] = bi;
+                upEdges[eBase + SpeedyCHGraph.E_GIDX] = bi;
+                upWeights[slot] = buildEdgeWeights[bi];
             } else if (lvFrom > lvTo) {
                 // Downward edge: stored in toNode's dn-list
                 int slot = dnOff[toNode] + dnCursor[toNode]++;
@@ -589,13 +590,14 @@ public class SpeedyCHBuilder {
                 dnEdges[eBase + SpeedyCHGraph.E_ORIG] = origLink;
                 dnEdges[eBase + SpeedyCHGraph.E_LOW1] = lower1;
                 dnEdges[eBase + SpeedyCHGraph.E_LOW2] = lower2;
-                dnGlobalIdx[slot] = bi;
+                dnEdges[eBase + SpeedyCHGraph.E_GIDX] = bi;
+                dnWeights[slot] = buildEdgeWeights[bi];
             }
         }
 
         return new SpeedyCHGraph(graph, nodeCount,
-                totalUp, upOff, upCount, upEdges, upGlobalIdx,
-                totalDn, dnOff, dnCount, dnEdges, dnGlobalIdx,
+                totalUp, upOff, upCount, upEdges, upWeights,
+                totalDn, dnOff, dnCount, dnEdges, dnWeights,
                 buildEdgeCount, edgeOrigLink, edgeLower1, edgeLower2);
     }
 

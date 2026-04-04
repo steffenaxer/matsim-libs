@@ -55,8 +55,10 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
     private final DAryMinHeap bwdPQ;
 
     // Local references for hot-path access (avoid field dereference chains)
-    private final int[]    upOff, upLen, upEdges, upGlobalIdx;
-    private final int[]    dnOff, dnLen, dnEdges, dnGlobalIdx;
+    private final int[]    upOff, upLen, upEdges;
+    private final double[] upWeights;
+    private final int[]    dnOff, dnLen, dnEdges;
+    private final double[] dnWeights;
     private final double[] ttf;
     private final double[] minTTF;
 
@@ -86,16 +88,16 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
         this.bwdPQ = new DAryMinHeap(n, 6);
 
         // Cache array references for hot-path
-        this.upOff       = chGraph.upOff;
-        this.upLen       = chGraph.upLen;
-        this.upEdges     = chGraph.upEdges;
-        this.upGlobalIdx = chGraph.upGlobalIdx;
-        this.dnOff       = chGraph.dnOff;
-        this.dnLen       = chGraph.dnLen;
-        this.dnEdges     = chGraph.dnEdges;
-        this.dnGlobalIdx = chGraph.dnGlobalIdx;
-        this.ttf         = chGraph.ttf;
-        this.minTTF      = chGraph.minTTF;
+        this.upOff     = chGraph.upOff;
+        this.upLen     = chGraph.upLen;
+        this.upEdges   = chGraph.upEdges;
+        this.upWeights = chGraph.upWeights;
+        this.dnOff     = chGraph.dnOff;
+        this.dnLen     = chGraph.dnLen;
+        this.dnEdges   = chGraph.dnEdges;
+        this.dnWeights = chGraph.dnWeights;
+        this.ttf       = chGraph.ttf;
+        this.minTTF    = chGraph.minTTF;
     }
 
     @Override
@@ -204,7 +206,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                 for (int slot = uOff; slot < uEnd; slot++) {
                     int eBase      = slot * S;
                     int w          = upEdges[eBase]; // toNode
-                    int gIdx       = upGlobalIdx[slot];
+                    int gIdx       = upEdges[eBase + SpeedyCHGraph.E_GIDX];
                     double tTime   = ttf[gIdx * NUM_BINS + bin];
                     double newArr  = arr + tTime;
                     double newCost = cost + tTime;
@@ -245,7 +247,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                 for (int slot = dOff; slot < dEnd; slot++) {
                     int eBase = slot * S;
                     int y     = dnEdges[eBase]; // fromNode (higher-level)
-                    int gIdx  = dnGlobalIdx[slot];
+                    int gIdx  = dnEdges[eBase + SpeedyCHGraph.E_GIDX];
                     double newLB = lb + minTTF[gIdx];
 
                     if (bwdIterIds[y] == currentIteration) {

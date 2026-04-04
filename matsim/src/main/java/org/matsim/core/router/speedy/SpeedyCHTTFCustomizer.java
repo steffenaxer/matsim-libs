@@ -70,6 +70,30 @@ public class SpeedyCHTTFCustomizer {
             minTTF[e]  = min;
             weights[e] = min;
         }
+
+        // Propagate weights into colocated CSR weight arrays for cache-local access
+        propagateWeightsToCSR(chGraph);
+    }
+
+    /**
+     * Copies global edgeWeights into the colocated upWeights/dnWeights arrays
+     * so that the query hot-path reads weight from the same cache region as
+     * the target-node index.
+     */
+    static void propagateWeightsToCSR(SpeedyCHGraph chGraph) {
+        int S = SpeedyCHGraph.E_STRIDE;
+        // Upward edges
+        int upTotal = chGraph.upEdgeCount;
+        for (int slot = 0; slot < upTotal; slot++) {
+            int gIdx = chGraph.upEdges[slot * S + SpeedyCHGraph.E_GIDX];
+            chGraph.upWeights[slot] = chGraph.edgeWeights[gIdx];
+        }
+        // Downward edges
+        int dnTotal = chGraph.dnEdgeCount;
+        for (int slot = 0; slot < dnTotal; slot++) {
+            int gIdx = chGraph.dnEdges[slot * S + SpeedyCHGraph.E_GIDX];
+            chGraph.dnWeights[slot] = chGraph.edgeWeights[gIdx];
+        }
     }
 
     /**
