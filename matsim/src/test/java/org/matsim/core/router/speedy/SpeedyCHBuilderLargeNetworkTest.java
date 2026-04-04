@@ -16,7 +16,17 @@ import org.matsim.core.router.costcalculators.FreespeedTravelTimeAndDisutility;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.scenario.ScenarioUtils;
 
-import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintWriter;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -25,18 +35,26 @@ import java.util.Random;
  * Large-scale tests and benchmarks for nested-dissection-ordered CH contraction
  * ({@link InertialFlowCutter} + {@link SpeedyCHBuilder#buildWithOrder}).
  *
+ * <p>Benchmarks use <b>SpeedyALT</b> (A* with Landmarks) as the query baseline,
+ * since it is the standard production router in MATSim.
+ *
  * <p>Tests on real and large synthetic networks to evaluate performance and correctness
  * at realistic scales:
  * <ul>
  *   <li><b>Real networks</b>: Berlin (11.5k nodes)</li>
- *   <li><b>Synthetic large grids</b>: up to 40,000 nodes with perturbed coordinates</li>
+ *   <li><b>Synthetic large grids</b>: up to 22,500 nodes with perturbed coordinates</li>
  *   <li><b>Berlin v7.0</b>: ~65k nodes, loaded from URL when accessible</li>
  * </ul>
+ *
+ * <p>Results are written to {@code target/ch-benchmark-results.tsv} for post-processing.
  */
 public class SpeedyCHBuilderLargeNetworkTest {
 
     private static final int    NUM_QUERIES    = 500;
+    private static final int    BENCHMARK_QUERIES = 200;
+    private static final int    ALT_LANDMARKS  = 16;
     private static final double COST_TOLERANCE = 1e-6;
+    private static final String RESULTS_FILE   = "target/ch-benchmark-results.tsv";
 
     // -----------------------------------------------------------------------
     // Correctness tests on real natural road networks
@@ -50,7 +68,7 @@ public class SpeedyCHBuilderLargeNetworkTest {
     @Test
     void testNDCorrectnessBerlinNetwork() {
         Network network = loadNetwork("test/scenarios/berlin/network.xml.gz");
-        System.out.printf("%nBerlin network: %,d nodes, %,d links%n",
+        System.out.printf("Berlin network: %,d nodes, %,d links%n",
                 network.getNodes().size(), network.getLinks().size());
         runCorrectnessTest(network);
     }
@@ -66,7 +84,7 @@ public class SpeedyCHBuilderLargeNetworkTest {
     @Test
     void testNDCorrectnessLargeGrid100x100() {
         Network network = buildPerturbedGrid(100, 42);
-        System.out.printf("%n100x100 perturbed grid: %,d nodes, %,d links%n",
+        System.out.printf("100x100 perturbed grid: %,d nodes, %,d links%n",
                 network.getNodes().size(), network.getLinks().size());
         runCorrectnessTest(network);
     }
@@ -78,40 +96,52 @@ public class SpeedyCHBuilderLargeNetworkTest {
     @Test
     void testNDCorrectnessLargeGrid150x150() {
         Network network = buildPerturbedGrid(150, 42);
-        System.out.printf("%n150x150 perturbed grid: %,d nodes, %,d links%n",
+        System.out.printf("150x150 perturbed grid: %,d nodes, %,d links%n",
                 network.getNodes().size(), network.getLinks().size());
         runCorrectnessTest(network);
     }
 
     // -----------------------------------------------------------------------
-    // Multi-network benchmark
+    // Multi-network benchmark (baseline: SpeedyALT)
     // -----------------------------------------------------------------------
 
     /**
-     * Comprehensive benchmark comparing ND vs witness-based CH ordering across
-     * all available real and synthetic networks.
+     * Comprehensive benchmark comparing ND-ordered CH vs SpeedyALT (production baseline).
      *
-     * <p>Reports build time, edge count, shortcut overhead, and query throughput.
+     * <p>Reports CH build time, edge overhead, and query speedup vs SpeedyALT.
+     * Results are dumped to {@value RESULTS_FILE} as a tab-separated file.
      */
     @Test
     void benchmarkAllNetworks() {
-        System.out.printf("%n%n╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗%n");
-        System.out.printf(    "║                            CH Build & Query Benchmark – ND vs Witness-based                                     ║%n");
-        System.out.printf(    "╠════════════════════════╤═══════╤═══════╤═══════════╤═══════════╤══════════╤══════════╤═══════════╤════════════════╣%n");
-        System.out.printf(    "║ Network                │ Nodes │ Links │ Witness   │ ND total  │  ND ord  │ ND contr │ Edge ovhd │ Query speedup ║%n");
-        System.out.printf(    "║                        │       │       │ build(ms) │ build(ms) │  (ms)    │   (ms)   │   (%%)     │ ND/Dijkstra   ║%n");
-        System.out.printf(    "╠════════════════════════╪═══════╪═══════╪═══════════╪═══════════╪══════════╪══════════╪═══════════╪════════════════╣%n");
+        List<BenchmarkResult> results = new ArrayList<>();
 
-        // Berlin (existing test network ~11.5k)
-        benchmarkNetwork("Berlin-11k",
-                loadNetwork("test/scenarios/berlin/network.xml.gz"));
+        results.add(benchmarkNetwork("Berlin-11k",
+                loadNetwork("test/scenarios/berlin/network.xml.gz")));
+        results.add(benchmarkNetwork("Grid-50x50",  buildPerturbedGrid(50, 42)));
+        results.add(benchmarkNetwork("Grid-100x100", buildPerturbedGrid(100, 42)));
+        results.add(benchmarkNetwork("Grid-150x150", buildPerturbedGrid(150, 42)));
 
-        // Large synthetic grids
-        benchmarkNetwork("Grid-50x50",  buildPerturbedGrid(50, 42));
-        benchmarkNetwork("Grid-100x100", buildPerturbedGrid(100, 42));
-        benchmarkNetwork("Grid-150x150", buildPerturbedGrid(150, 42));
+        // ---- Console summary ----
+        System.out.println();
+        System.out.println("=== CH Benchmark Results (baseline: SpeedyALT) ===");
+        System.out.printf("%-16s %7s %7s | %8s %8s %8s | %7s | %8s %8s %10s%n",
+                "Network", "Nodes", "Links",
+                "Wit(ms)", "ND(ms)", "Ord(ms)",
+                "EdgeOvh",
+                "ALT(µs)", "CH(µs)", "Speedup");
+        System.out.println("-".repeat(110));
 
-        System.out.printf("╚════════════════════════╧═══════╧═══════╧═══════════╧═══════════╧══════════╧══════════╧═══════════╧════════════════╝%n%n");
+        for (BenchmarkResult r : results) {
+            System.out.printf("%-16s %7d %7d | %8d %8d %8d | %+6.1f%% | %8.0f %8.0f %9.1fx%n",
+                    r.name, r.nodes, r.links,
+                    r.witnessBuildMs, r.ndTotalMs, r.ndOrdMs,
+                    r.edgeOverheadPct,
+                    r.altQueryUs, r.chQueryUs, r.speedupVsALT);
+        }
+        System.out.println();
+
+        // ---- Write TSV file ----
+        writeResultsFile(results);
     }
 
     // -----------------------------------------------------------------------
@@ -129,18 +159,31 @@ public class SpeedyCHBuilderLargeNetworkTest {
     @Test
     void testNDCorrectnessBerlinV70Network() {
         String url = "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/berlin/berlin-v7.0/input/berlin-v7.0-network.xml.gz";
-        String localPath = "/tmp/berlin-v7.0-network.xml.gz";
+        java.nio.file.Path localPath = Paths.get("/tmp/berlin-v7.0-network.xml.gz");
 
-        // Try to download if not cached
-        File f = new File(localPath);
-        if (!f.exists() || f.length() < 1000) {
+        // Download with native Java HTTP client if not already cached
+        if (!Files.exists(localPath) || fileSize(localPath) < 1000) {
             try {
-                var pb = new ProcessBuilder("curl", "-sL", "-o", localPath, url);
-                pb.redirectErrorStream(true);
-                Process p = pb.start();
-                int exit = p.waitFor();
-                if (exit != 0 || !f.exists() || f.length() < 1000) {
-                    System.out.println("SKIPPED: Berlin v7.0 network not accessible (download failed).");
+                HttpClient client = HttpClient.newBuilder()
+                        .connectTimeout(Duration.ofSeconds(10))
+                        .followRedirects(HttpClient.Redirect.NORMAL)
+                        .build();
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(url))
+                        .timeout(Duration.ofSeconds(60))
+                        .GET()
+                        .build();
+                HttpResponse<InputStream> response = client.send(request,
+                        HttpResponse.BodyHandlers.ofInputStream());
+                if (response.statusCode() != 200) {
+                    System.out.println("SKIPPED: Berlin v7.0 network not accessible (HTTP " + response.statusCode() + ").");
+                    return;
+                }
+                try (InputStream in = response.body()) {
+                    Files.copy(in, localPath, StandardCopyOption.REPLACE_EXISTING);
+                }
+                if (fileSize(localPath) < 1000) {
+                    System.out.println("SKIPPED: Berlin v7.0 network download too small.");
                     return;
                 }
             } catch (Exception e) {
@@ -152,22 +195,40 @@ public class SpeedyCHBuilderLargeNetworkTest {
         // Load and test
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
         try {
-            new MatsimNetworkReader(scenario.getNetwork()).readFile(localPath);
+            new MatsimNetworkReader(scenario.getNetwork()).readFile(localPath.toString());
         } catch (Exception e) {
             System.out.println("SKIPPED: Berlin v7.0 network could not be parsed: " + e.getMessage());
             return;
         }
 
         Network network = scenario.getNetwork();
-        int nodeCount = network.getNodes().size();
-        int linkCount = network.getLinks().size();
-        System.out.printf("%nBerlin v7.0 network: %,d nodes, %,d links%n", nodeCount, linkCount);
+        System.out.printf("Berlin v7.0 network: %,d nodes, %,d links%n",
+                network.getNodes().size(), network.getLinks().size());
 
-        // Benchmark
-        benchmarkNetwork("Berlin-v7.0", network);
+        try {
+            // Benchmark + print single-row table
+            BenchmarkResult r = benchmarkNetwork("Berlin-v7.0", network);
+            System.out.printf("  Build: witness=%dms  ND=%dms (ord=%dms)  EdgeOverhead=%+.1f%%%n",
+                    r.witnessBuildMs, r.ndTotalMs, r.ndOrdMs, r.edgeOverheadPct);
+            System.out.printf("  Query: ALT=%.0fµs  CH=%.0fµs  Speedup=%.1fx%n",
+                    r.altQueryUs, r.chQueryUs, r.speedupVsALT);
 
-        // Correctness test
-        runCorrectnessTest(network);
+            // Correctness test
+            runCorrectnessTest(network);
+        } catch (OutOfMemoryError e) {
+            System.out.println("SKIPPED: Berlin v7.0 benchmark/correctness test: insufficient heap (" + e.getMessage() + ").");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Benchmark result record
+    // -----------------------------------------------------------------------
+
+    private record BenchmarkResult(
+            String name, int nodes, int links,
+            long witnessBuildMs, long ndTotalMs, long ndOrdMs, long ndConMs,
+            int witnessEdges, int ndEdges, double edgeOverheadPct,
+            double altQueryUs, double chQueryUs, double speedupVsALT) {
     }
 
     // -----------------------------------------------------------------------
@@ -186,7 +247,7 @@ public class SpeedyCHBuilderLargeNetworkTest {
         new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
         SpeedyCHTimeDep chRouter = new SpeedyCHTimeDep(chGraph, tc, tc);
 
-        // Reference: Dijkstra
+        // Reference: Dijkstra (exact baseline for correctness)
         SpeedyDijkstra dijkstra = new SpeedyDijkstra(baseGraph, tc, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
@@ -222,12 +283,10 @@ public class SpeedyCHBuilderLargeNetworkTest {
     }
 
     // -----------------------------------------------------------------------
-    // Helper: benchmark a single network
+    // Helper: benchmark a single network (returns structured result)
     // -----------------------------------------------------------------------
 
-    private void benchmarkNetwork(String name, Network network) {
-        if (network == null) return;
-
+    private BenchmarkResult benchmarkNetwork(String name, Network network) {
         FreespeedTravelTimeAndDisutility tc =
                 new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
         int nodeCount = network.getNodes().size();
@@ -235,9 +294,7 @@ public class SpeedyCHBuilderLargeNetworkTest {
 
         // ---- Witness-based CH build ----
         SpeedyGraph gW = SpeedyGraphBuilder.build(network);
-        // Warm up
-        new SpeedyCHBuilder(gW, tc).build();
-        // Timed run
+        new SpeedyCHBuilder(gW, tc).build(); // warm-up
         gW = SpeedyGraphBuilder.build(network);
         long witnessStart = System.nanoTime();
         SpeedyCHGraph chW = new SpeedyCHBuilder(gW, tc).build();
@@ -245,17 +302,14 @@ public class SpeedyCHBuilderLargeNetworkTest {
 
         // ---- ND-ordered CH build ----
         SpeedyGraph gN = SpeedyGraphBuilder.build(network);
-        // Warm up
-        {
+        { // warm-up
             int[] warmOrder = new InertialFlowCutter(gN).computeOrder();
             new SpeedyCHBuilder(gN, tc).buildWithOrder(warmOrder);
         }
-        // Timed run
         gN = SpeedyGraphBuilder.build(network);
         long ndStart = System.nanoTime();
-        long ndOrdStart = System.nanoTime();
         int[] order = new InertialFlowCutter(gN).computeOrder();
-        long ndOrdMs = (System.nanoTime() - ndOrdStart) / 1_000_000;
+        long ndOrdMs = (System.nanoTime() - ndStart) / 1_000_000;
         long ndConStart = System.nanoTime();
         SpeedyCHGraph chN = new SpeedyCHBuilder(gN, tc).buildWithOrder(order);
         long ndConMs = (System.nanoTime() - ndConStart) / 1_000_000;
@@ -263,43 +317,75 @@ public class SpeedyCHBuilderLargeNetworkTest {
 
         double edgeOverhead = ((double) chN.totalEdgeCount / Math.max(1, chW.totalEdgeCount) - 1) * 100;
 
-        // ---- Query performance (ND-CH vs Dijkstra) ----
+        // ---- Setup query routers: ND-CH and SpeedyALT ----
         new SpeedyCHTTFCustomizer().customize(chN, tc, tc);
         SpeedyCHTimeDep ndRouter = new SpeedyCHTimeDep(chN, tc, tc);
-        SpeedyDijkstra dijkstra = new SpeedyDijkstra(gN, tc, tc);
+        SpeedyALTData altData = new SpeedyALTData(gN, Math.min(ALT_LANDMARKS, gN.nodeCount), tc, 1);
+        SpeedyALT altRouter = new SpeedyALT(altData, tc, tc);
 
+        // ---- Query benchmark: ND-CH vs SpeedyALT ----
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
         int n = nodeList.size();
         Random rng = new Random(42);
-        int queryCount = Math.min(200, NUM_QUERIES);
 
-        // Warm up queries
+        // Warm up both routers
         for (int i = 0; i < 20; i++) {
             Node s = nodeList.get(rng.nextInt(n));
             Node d = nodeList.get(rng.nextInt(n));
             ndRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            dijkstra.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            altRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
         }
-        rng = new Random(123);  // fresh seed for timing
 
-        long dijkTimeNs = 0;
+        rng = new Random(123); // fresh seed for timed queries
+        long altTimeNs = 0;
         long chTimeNs = 0;
-        for (int i = 0; i < queryCount; i++) {
+        for (int i = 0; i < BENCHMARK_QUERIES; i++) {
             Node s = nodeList.get(rng.nextInt(n));
             Node d = nodeList.get(rng.nextInt(n));
 
             long t0 = System.nanoTime();
-            dijkstra.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            dijkTimeNs += System.nanoTime() - t0;
+            altRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            altTimeNs += System.nanoTime() - t0;
 
             t0 = System.nanoTime();
             ndRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
             chTimeNs += System.nanoTime() - t0;
         }
-        double querySpeedup = (double) dijkTimeNs / Math.max(1, chTimeNs);
 
-        System.out.printf("║ %-22s │ %5d │ %5d │ %7d   │ %7d   │ %6d   │ %6d   │ %+7.1f%%  │    %5.1fx      ║%n",
-                name, nodeCount, linkCount, witnessMs, ndTotalMs, ndOrdMs, ndConMs, edgeOverhead, querySpeedup);
+        double altQueryUs = altTimeNs / (BENCHMARK_QUERIES * 1000.0);
+        double chQueryUs  = chTimeNs  / (BENCHMARK_QUERIES * 1000.0);
+        double speedup = (double) altTimeNs / Math.max(1, chTimeNs);
+
+        return new BenchmarkResult(name, nodeCount, linkCount,
+                witnessMs, ndTotalMs, ndOrdMs, ndConMs,
+                chW.totalEdgeCount, chN.totalEdgeCount, edgeOverhead,
+                altQueryUs, chQueryUs, speedup);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper: write results to TSV file
+    // -----------------------------------------------------------------------
+
+    private static void writeResultsFile(List<BenchmarkResult> results) {
+        try {
+            Files.createDirectories(Paths.get("target"));
+            try (PrintWriter pw = new PrintWriter(RESULTS_FILE)) {
+                pw.println("network\tnodes\tlinks\t"
+                        + "witness_build_ms\tnd_total_ms\tnd_ord_ms\tnd_con_ms\t"
+                        + "witness_edges\tnd_edges\tedge_overhead_pct\t"
+                        + "alt_query_us\tch_query_us\tspeedup_vs_alt");
+                for (BenchmarkResult r : results) {
+                    pw.printf("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.1f\t%.1f\t%.1f\t%.2f%n",
+                            r.name, r.nodes, r.links,
+                            r.witnessBuildMs, r.ndTotalMs, r.ndOrdMs, r.ndConMs,
+                            r.witnessEdges, r.ndEdges, r.edgeOverheadPct,
+                            r.altQueryUs, r.chQueryUs, r.speedupVsALT);
+                }
+            }
+            System.out.println("Results written to " + RESULTS_FILE);
+        } catch (IOException e) {
+            System.err.println("Failed to write results file: " + e.getMessage());
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -379,5 +465,13 @@ public class SpeedyCHBuilderLargeNetworkTest {
         link.setCapacity(1800);
         link.setNumberOfLanes(1);
         network.addLink(link);
+    }
+
+    private static long fileSize(java.nio.file.Path path) {
+        try {
+            return Files.size(path);
+        } catch (IOException e) {
+            return 0;
+        }
     }
 }
