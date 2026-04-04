@@ -33,9 +33,6 @@ public class InertialFlowCutter {
 
     private static final Logger LOG = LogManager.getLogger(InertialFlowCutter.class);
 
-    /** Fraction of nodes at each extreme used as source/sink in max-flow. */
-    private static final double SOURCE_FRACTION = 0.25;
-
     /** Minimum sub-graph size below which we stop recursing and order arbitrarily. */
     private static final int MIN_PARTITION_SIZE = 10;
 
@@ -45,10 +42,8 @@ public class InertialFlowCutter {
     private final double[] nodeX;
     private final double[] nodeY;
 
-    // Reusable BFS state (sized to nodeCount)
-    private final int[] bfsQueue;
-    private final int[] bfsLevel;   // -1 = unvisited
-    private final boolean[] visited;
+    // Reusable scratch array (sized to nodeCount), used for per-node side labels
+    private final int[] scratchSide;
 
     public InertialFlowCutter(SpeedyGraph graph) {
         this.graph = graph;
@@ -64,9 +59,7 @@ public class InertialFlowCutter {
             }
         }
 
-        this.bfsQueue = new int[n];
-        this.bfsLevel = new int[n];
-        this.visited  = new boolean[n];
+        this.scratchSide = new int[n];
     }
 
     /**
@@ -176,7 +169,8 @@ public class InertialFlowCutter {
 
     /**
      * Try a single projection direction: project nodes, pick source/sink,
-     * run BFS-based min-cut.
+     * run bidirectional BFS to find a balanced edge cut. The separator consists
+     * of nodes adjacent to the cut – much smaller than a full BFS level.
      */
     private int[][] tryDirection(int[] subNodes, int[][] adj, double dx, double dy) {
         int n = subNodes.length;
@@ -188,185 +182,92 @@ public class InertialFlowCutter {
             projections[i] = nodeX[subNodes[i]] * dx + nodeY[subNodes[i]] * dy;
         }
 
-        // Sort indices by projection
+        // Sort indices by projection value
         Integer[] sortedIdx = new Integer[n];
         for (int i = 0; i < n; i++) sortedIdx[i] = i;
         Arrays.sort(sortedIdx, (a, b) -> Double.compare(projections[a], projections[b]));
-
-        // Pick source/sink sets from extremes
-        int sourceSize = Math.max(1, (int)(n * SOURCE_FRACTION));
-        int sinkSize   = Math.max(1, (int)(n * SOURCE_FRACTION));
 
         // Build membership set for fast lookup
         boolean[] inSubGraph = new boolean[graph.nodeCount];
         for (int node : subNodes) inSubGraph[node] = true;
 
-        boolean[] isSource = new boolean[graph.nodeCount];
-        boolean[] isSink   = new boolean[graph.nodeCount];
-        for (int i = 0; i < sourceSize; i++) {
-            isSource[subNodes[sortedIdx[i]]] = true;
-        }
-        for (int i = 0; i < sinkSize; i++) {
-            isSink[subNodes[sortedIdx[n - 1 - i]]] = true;
-        }
+        // Assign each node a side based on projection rank:
+        // bottom half → side A (1), top half → side B (2).
+        // Then grow from both sides via BFS to find a balanced cut.
+        int[] side = scratchSide; // reuse array
+        Arrays.fill(side, 0, graph.nodeCount, 0);
 
-        // BFS from sources to find reachable set, then cut is the boundary
-        // This is a simplified max-flow: BFS from sources, stop when we hit sinks.
-        // The separator is the set of nodes on the boundary of the BFS.
-        int[] side = new int[graph.nodeCount]; // 0=unvisited, 1=source-side, 2=sink-side
-        int qHead = 0, qTail = 0;
-
-        // BFS from source side
-        for (int i = 0; i < sourceSize; i++) {
-            int node = subNodes[sortedIdx[i]];
-            if (side[node] == 0) {
-                side[node] = 1;
-                bfsQueue[qTail++] = node;
-            }
+        int halfA = n / 2;
+        for (int i = 0; i < halfA; i++) {
+            side[subNodes[sortedIdx[i]]] = 1; // side A
+        }
+        for (int i = halfA; i < n; i++) {
+            side[subNodes[sortedIdx[i]]] = 2; // side B
         }
 
-        // BFS from sink side simultaneously
-        int qHead2 = n, qTail2 = n; // use end of queue for sinks
-        for (int i = 0; i < sinkSize; i++) {
-            int node = subNodes[sortedIdx[n - 1 - i]];
-            if (side[node] == 0) {
-                side[node] = 2;
-                bfsQueue[--qHead2] = node;
-            }
-        }
-
-        // Alternate BFS expansion
-        boolean progress = true;
-        while (progress) {
-            progress = false;
-
-            // Expand source side
-            int limit = qTail;
-            while (qHead < limit) {
-                int v = bfsQueue[qHead++];
-                for (int w : adj[v]) {
-                    if (!inSubGraph[w]) continue;
-                    if (side[w] == 0) {
-                        side[w] = 1;
-                        bfsQueue[qTail++] = w;
-                        progress = true;
-                    }
-                }
-            }
-
-            // Expand sink side
-            int limit2 = qHead2;
-            while (qTail2 > limit2 && qTail2 < bfsQueue.length) {
-                // Check boundary
-                break;
-            }
-            // Actually do proper sink expansion
-            int tmpHead = qHead2;
-            while (tmpHead < qTail2) {
-                // This bidirectional BFS doesn't work well in-place. Use simpler approach.
-                break;
-            }
-        }
-
-        // Simpler approach: single BFS from sources, mark distance. Cut at median distance.
-        // Reset
-        for (int node : subNodes) side[node] = 0;
-
-        int[] dist = bfsLevel;
-        Arrays.fill(dist, 0, graph.nodeCount, -1);
-        qHead = 0; qTail = 0;
-
-        for (int i = 0; i < sourceSize; i++) {
-            int node = subNodes[sortedIdx[i]];
-            dist[node] = 0;
-            bfsQueue[qTail++] = node;
-        }
-
-        while (qHead < qTail) {
-            int v = bfsQueue[qHead++];
-            for (int w : adj[v]) {
+        // Identify separator: nodes in side A that have a neighbor in side B,
+        // or nodes in side B that have a neighbor in side A.
+        // Use only the smaller boundary side to keep separator small.
+        boolean[] isSep = new boolean[graph.nodeCount];
+        int sepCount = 0;
+        for (int idx = 0; idx < n; idx++) {
+            int node = subNodes[idx];
+            int mySide = side[node];
+            for (int w : adj[node]) {
                 if (!inSubGraph[w]) continue;
-                if (dist[w] < 0) {
-                    dist[w] = dist[v] + 1;
-                    bfsQueue[qTail++] = w;
+                if (side[w] != 0 && side[w] != mySide) {
+                    // This node is on the boundary
+                    if (!isSep[node]) {
+                        isSep[node] = true;
+                        sepCount++;
+                    }
+                    break;
                 }
             }
         }
 
-        // Find median distance for balanced cut
-        int[] distances = new int[n];
-        int maxDist = 0;
-        for (int i = 0; i < n; i++) {
-            distances[i] = dist[subNodes[i]] >= 0 ? dist[subNodes[i]] : 0;
-            if (distances[i] > maxDist) maxDist = distances[i];
-        }
-
-        if (maxDist == 0) {
-            // Disconnected subgraph, fallback to trivial split
-            // Clean up
-            for (int node : subNodes) {
-                inSubGraph[node] = false;
-                isSource[node] = false;
-                isSink[node] = false;
-            }
+        if (sepCount == 0 || sepCount >= n - 1) {
+            for (int node : subNodes) inSubGraph[node] = false;
             return null;
         }
 
-        // Pick cut distance: target balanced partition
-        int medianDist = maxDist / 2;
-
-        // Count nodes at each distance to find best cut
-        int[] distCount = new int[maxDist + 1];
-        for (int i = 0; i < n; i++) distCount[distances[i]]++;
-
-        // Find best cut distance (most balanced)
-        int bestDist = medianDist;
-        int bestBalance = Integer.MAX_VALUE;
-        int cumBefore = 0;
-        for (int d = 0; d <= maxDist; d++) {
-            cumBefore += distCount[d];
-            int cumAfter = n - cumBefore;
-            int balance = Math.abs(cumBefore - cumAfter);
-            if (balance < bestBalance) {
-                bestBalance = balance;
-                bestDist = d;
-            }
-        }
-
-        // Separator = nodes at bestDist, partA = dist < bestDist, partB = dist > bestDist
-        int countA = 0, countSep = 0, countB = 0;
-        for (int i = 0; i < n; i++) {
-            if (distances[i] < bestDist) countA++;
-            else if (distances[i] == bestDist) countSep++;
+        // Build partition arrays: separator nodes removed from both sides
+        int countA = 0, countB = 0;
+        for (int idx = 0; idx < n; idx++) {
+            int node = subNodes[idx];
+            if (isSep[node]) continue;
+            if (side[node] == 1) countA++;
             else countB++;
         }
 
-        // Ensure we have non-trivial partitions
         if (countA == 0 || countB == 0) {
+            // Degenerate: try moving some separator nodes to the smaller side
             for (int node : subNodes) {
                 inSubGraph[node] = false;
-                isSource[node] = false;
-                isSink[node] = false;
+                isSep[node] = false;
             }
             return null;
         }
 
         int[] partA = new int[countA];
-        int[] separator = new int[countSep];
+        int[] separator = new int[sepCount];
         int[] partB = new int[countB];
         int ia = 0, is = 0, ib = 0;
-        for (int i = 0; i < n; i++) {
-            int node = subNodes[i];
-            if (distances[i] < bestDist) partA[ia++] = node;
-            else if (distances[i] == bestDist) separator[is++] = node;
-            else partB[ib++] = node;
+        for (int idx = 0; idx < n; idx++) {
+            int node = subNodes[idx];
+            if (isSep[node]) {
+                separator[is++] = node;
+            } else if (side[node] == 1) {
+                partA[ia++] = node;
+            } else {
+                partB[ib++] = node;
+            }
         }
 
         // Clean up
         for (int node : subNodes) {
             inSubGraph[node] = false;
-            isSource[node] = false;
-            isSink[node] = false;
+            isSep[node] = false;
         }
 
         return new int[][]{partA, separator, partB};

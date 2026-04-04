@@ -461,7 +461,7 @@ public class SpeedyCHBuilder {
 
     /**
      * Runs a single bounded Dijkstra from {@code source}, avoiding {@code avoidNode},
-     * up to {@code maxCost} and {@value HOP_LIMIT} hops. After return, callers can
+     * up to {@code maxCost} and {@code hopLimit} hops. After return, callers can
      * read {@code witnessCost[target]} for any target to check if a witness exists.
      */
     private void batchedWitnessSearch(int source, int avoidNode, double maxCost,

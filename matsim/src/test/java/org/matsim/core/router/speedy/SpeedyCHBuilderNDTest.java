@@ -143,6 +143,111 @@ public class SpeedyCHBuilderNDTest {
         Assertions.assertTrue(ch2.totalEdgeCount >= g2.linkCount);
     }
 
+    // ---- large natural road network tests ----
+
+    /**
+     * Correctness test on the Berlin road network (~11.5k nodes, ~27.6k links).
+     * Runs 500 random OD pairs comparing ND-ordered CH against Dijkstra.
+     */
+    @Test
+    void testNDOrderCorrectnessBerlinNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork())
+                .readFile("test/scenarios/berlin/network.xml.gz");
+        Network network = scenario.getNetwork();
+        System.out.printf("%nBerlin network: %d nodes, %d links%n",
+                network.getNodes().size(), network.getLinks().size());
+        runCorrectnessTest(network);
+    }
+
+    /**
+     * Benchmark ND vs witness-based ordering on the Berlin road network.
+     * This is a realistic-scale test with a natural road graph topology.
+     */
+    @Test
+    void benchmarkNDvsWitnessBasedBerlinNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork())
+                .readFile("test/scenarios/berlin/network.xml.gz");
+        Network network = scenario.getNetwork();
+        int nodeCount = network.getNodes().size();
+        int linkCount = network.getLinks().size();
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
+
+        System.out.printf("%n=== CH Build Benchmark (Berlin network: %d nodes, %d links) ===%n",
+                nodeCount, linkCount);
+
+        // Warm up JVM with a smaller build
+        {
+            SpeedyGraph g = SpeedyGraphBuilder.build(network);
+            new SpeedyCHBuilder(g, tc).build();
+        }
+
+        // Benchmark witness-based ordering
+        long witnessStart = System.nanoTime();
+        SpeedyGraph g1 = SpeedyGraphBuilder.build(network);
+        SpeedyCHGraph ch1 = new SpeedyCHBuilder(g1, tc).build();
+        long witnessMs = (System.nanoTime() - witnessStart) / 1_000_000;
+
+        // Benchmark ND ordering
+        long ndStart = System.nanoTime();
+        SpeedyGraph g2 = SpeedyGraphBuilder.build(network);
+        long ndOrderStart = System.nanoTime();
+        int[] order = new InertialFlowCutter(g2).computeOrder();
+        long ndOrderMs = (System.nanoTime() - ndOrderStart) / 1_000_000;
+        long ndContractStart = System.nanoTime();
+        SpeedyCHGraph ch2 = new SpeedyCHBuilder(g2, tc).buildWithOrder(order);
+        long ndContractMs = (System.nanoTime() - ndContractStart) / 1_000_000;
+        long ndTotalMs = (System.nanoTime() - ndStart) / 1_000_000;
+
+        System.out.printf("  Witness-based:  %,d ms, %,d total edges%n", witnessMs, ch1.totalEdgeCount);
+        System.out.printf("  ND total:       %,d ms, %,d total edges%n", ndTotalMs, ch2.totalEdgeCount);
+        System.out.printf("    ND ordering:  %,d ms%n", ndOrderMs);
+        System.out.printf("    ND contract:  %,d ms%n", ndContractMs);
+        System.out.printf("  Speedup:        %.2fx%n", (double) witnessMs / Math.max(1, ndTotalMs));
+        System.out.printf("  Edge overhead:  %.1f%%%n",
+                ((double) ch2.totalEdgeCount / Math.max(1, ch1.totalEdgeCount) - 1) * 100);
+        System.out.println();
+
+        // Verify correctness of ND-built CH on random queries
+        new SpeedyCHTTFCustomizer().customize(ch2, tc, tc);
+        SpeedyCHTimeDep ndRouter = new SpeedyCHTimeDep(ch2, tc, tc);
+        SpeedyDijkstra dijkstra = new SpeedyDijkstra(g2, tc, tc);
+
+        List<Node> nodeList = new ArrayList<>(network.getNodes().values());
+        int n = nodeList.size();
+        Random rng = new Random(42);
+        int mismatches = 0;
+
+        for (int i = 0; i < NUM_QUERIES; i++) {
+            Node src = nodeList.get(rng.nextInt(n));
+            Node dst = nodeList.get(rng.nextInt(n));
+
+            Path ndPath  = ndRouter.calcLeastCostPath(src, dst, 8.0 * 3600, null, null);
+            Path dijPath = dijkstra.calcLeastCostPath(src, dst, 8.0 * 3600, null, null);
+
+            if (ndPath == null && dijPath == null) continue;
+
+            Assertions.assertNotNull(ndPath,
+                    "ND-CH returned null but Dijkstra found path " + src.getId() + "→" + dst.getId());
+            Assertions.assertNotNull(dijPath,
+                    "Dijkstra returned null but ND-CH found path " + src.getId() + "→" + dst.getId());
+
+            if (Math.abs(ndPath.travelCost - dijPath.travelCost) > COST_TOLERANCE) {
+                mismatches++;
+                System.err.printf("MISMATCH %s→%s: ND-CH=%.6f  Dijkstra=%.6f%n",
+                        src.getId(), dst.getId(), ndPath.travelCost, dijPath.travelCost);
+            }
+        }
+
+        Assertions.assertEquals(0, mismatches,
+                mismatches + "/" + NUM_QUERIES + " Berlin queries had cost mismatches.");
+
+        // Both should produce valid CH
+        Assertions.assertTrue(ch1.totalEdgeCount >= g1.linkCount);
+        Assertions.assertTrue(ch2.totalEdgeCount >= g2.linkCount);
+    }
+
     // ---- helpers ----
 
     private void runCorrectnessTest(Network network) {
