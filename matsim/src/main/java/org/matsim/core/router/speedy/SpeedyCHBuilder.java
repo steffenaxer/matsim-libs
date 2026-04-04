@@ -4,7 +4,11 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.core.router.util.TravelDisutility;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
 
 /**
  * Builds a {@link SpeedyCHGraph} from a {@link SpeedyGraph} using the
@@ -89,6 +93,42 @@ public class SpeedyCHBuilder {
     private int[]    scratchTargets;     // out-neighbor node indices
     private double[] scratchMaxCosts;    // max cost u→v→w for each target
     private int[]    scratchOutEdgeIdx;  // the out-edge index v→w for each target
+
+    /**
+     * Per-thread witness search state, used for parallel contraction.
+     * Each thread gets its own context to avoid sharing mutable state.
+     */
+    static class WitnessContext {
+        int witnessIteration = 0;
+        final int[] witnessIterIds;
+        final double[] witnessCost;
+        final int[] witnessHops;
+        final DAryMinHeap witnessHeap;
+
+        int dedupGeneration = 0;
+        final int[] dedupGen;
+        final double[] dedupBest;
+
+        int[] scratchTargets = new int[64];
+        double[] scratchMaxCosts = new double[64];
+        int[] scratchOutEdgeIdx = new int[64];
+
+        WitnessContext(int nodeCount) {
+            this.witnessIterIds = new int[nodeCount];
+            this.witnessCost = new double[nodeCount];
+            this.witnessHops = new int[nodeCount];
+            this.witnessHeap = new DAryMinHeap(nodeCount, 4);
+            this.dedupGen = new int[nodeCount];
+            this.dedupBest = new double[nodeCount];
+        }
+
+        void growScratch() {
+            int newLen = scratchTargets.length * 2;
+            scratchTargets    = Arrays.copyOf(scratchTargets, newLen);
+            scratchMaxCosts   = Arrays.copyOf(scratchMaxCosts, newLen);
+            scratchOutEdgeIdx = Arrays.copyOf(scratchOutEdgeIdx, newLen);
+        }
+    }
 
     public SpeedyCHBuilder(SpeedyGraph graph, TravelDisutility td) {
         this.graph     = graph;
@@ -177,6 +217,32 @@ public class SpeedyCHBuilder {
         contractNodesInOrder(order);
 
         LOG.info("CH contraction (fixed order): building overlay graph ({} edges)…", buildEdgeCount);
+        return buildCHGraph();
+    }
+
+    /**
+     * Builds a CH using a pre-computed contraction order with <b>parallel</b>
+     * contraction of independent nested-dissection cells.
+     *
+     * <p>Within each round, cells are contracted in parallel using a
+     * {@link ForkJoinPool}.  Between rounds, a barrier ensures that all
+     * cells at the current ND depth are fully contracted before moving
+     * to the next (shallower) depth.
+     *
+     * @param orderResult result from {@link InertialFlowCutter#computeOrderWithBatches()}
+     * @return the ready-to-customize CH graph.
+     */
+    public SpeedyCHGraph buildWithOrderParallel(InertialFlowCutter.NDOrderResult orderResult) {
+        LOG.info("CH contraction (parallel): importing {} links from base graph ({} nodes)…",
+                graph.linkCount, nodeCount);
+        initEdges();
+
+        LOG.info("CH contraction (parallel): contracting {} nodes with {} rounds, {} threads…",
+                nodeCount, orderResult.rounds.size(),
+                Runtime.getRuntime().availableProcessors());
+        contractNodesParallel(orderResult.order, orderResult.rounds);
+
+        LOG.info("CH contraction (parallel): building overlay graph ({} edges)…", buildEdgeCount);
         return buildCHGraph();
     }
 
@@ -306,6 +372,132 @@ public class SpeedyCHBuilder {
                 LOG.info("  … contracted {}/{} nodes ({} edges so far)",
                         level + 1, nodeCount, buildEdgeCount);
             }
+        }
+    }
+
+    /**
+     * Contracts nodes in parallel using the ND partition structure.
+     *
+     * <p>Each round contains independent cells that can be contracted in
+     * parallel.  Within each cell, nodes are contracted sequentially.
+     * A barrier between rounds ensures all cells at the current depth
+     * are complete before the next depth starts.
+     */
+    private void contractNodesParallel(int[] order, List<List<int[]>> rounds) {
+        int nThreads = Math.max(1, Runtime.getRuntime().availableProcessors());
+        ForkJoinPool pool = (nThreads > 1) ? new ForkJoinPool(nThreads) : null;
+
+        int totalContracted = 0;
+        int logInterval = Math.max(nodeCount / 10, 1);
+
+        for (int r = 0; r < rounds.size(); r++) {
+            List<int[]> round = rounds.get(r);
+
+            // Merge very small cells into chunks for better load balancing.
+            // Each chunk is a contiguous sequence of cells that will be
+            // processed by a single thread.
+            List<int[]> chunks = mergeSmallCells(round, 200);
+
+            if (chunks.size() <= 1 || pool == null) {
+                // Single chunk or single thread: contract sequentially
+                for (int[] chunk : chunks) {
+                    contractCellSequential(chunk, order);
+                }
+            } else {
+                // Multiple independent chunks: contract in parallel
+                List<ForkJoinTask<?>> tasks = new ArrayList<>(chunks.size());
+                for (int[] chunk : chunks) {
+                    tasks.add(pool.submit(() -> {
+                        WitnessContext ctx = new WitnessContext(nodeCount);
+                        contractCellWithContext(chunk, order, ctx);
+                    }));
+                }
+                // Wait for all to complete
+                for (ForkJoinTask<?> task : tasks) {
+                    task.join();
+                }
+            }
+
+            // Count contracted in this round
+            for (int[] cell : round) {
+                totalContracted += cell.length;
+            }
+            if (totalContracted / logInterval > (totalContracted - roundNodeCount(round)) / logInterval) {
+                LOG.info("  … contracted {}/{} nodes, round {}/{} ({} edges so far)",
+                        totalContracted, nodeCount, r + 1, rounds.size(), buildEdgeCount);
+            }
+        }
+
+        if (pool != null) {
+            pool.shutdown();
+        }
+    }
+
+    private static int roundNodeCount(List<int[]> round) {
+        int count = 0;
+        for (int[] cell : round) count += cell.length;
+        return count;
+    }
+
+    /**
+     * Merge small cells into larger chunks for better task granularity.
+     * Adjacent cells in the list are combined until the chunk reaches
+     * {@code minChunkSize} nodes.
+     */
+    private static List<int[]> mergeSmallCells(List<int[]> cells, int minChunkSize) {
+        if (cells.size() <= 1) return cells;
+
+        List<int[]> chunks = new ArrayList<>();
+        List<int[]> pending = new ArrayList<>();
+        int pendingSize = 0;
+
+        for (int[] cell : cells) {
+            pending.add(cell);
+            pendingSize += cell.length;
+            if (pendingSize >= minChunkSize) {
+                chunks.add(flattenCells(pending));
+                pending.clear();
+                pendingSize = 0;
+            }
+        }
+        if (!pending.isEmpty()) {
+            chunks.add(flattenCells(pending));
+        }
+        return chunks;
+    }
+
+    private static int[] flattenCells(List<int[]> cells) {
+        if (cells.size() == 1) return cells.get(0);
+        int total = 0;
+        for (int[] c : cells) total += c.length;
+        int[] result = new int[total];
+        int pos = 0;
+        for (int[] c : cells) {
+            System.arraycopy(c, 0, result, pos, c.length);
+            pos += c.length;
+        }
+        return result;
+    }
+
+    /** Contract a cell sequentially using the builder's own witness state. */
+    private void contractCellSequential(int[] cellNodes, int[] order) {
+        for (int node : cellNodes) {
+            contractNodeBatched(node);
+            contracted[node] = true;
+            nodeLevel[node]  = order[node];
+        }
+    }
+
+    /**
+     * Contract a cell using a thread-local {@link WitnessContext}.
+     * The graph mutation (addBuildEdge) is synchronized to prevent
+     * concurrent corruption of shared adjacency structures.
+     */
+    private void contractCellWithContext(int[] cellNodes, int[] order, WitnessContext ctx) {
+        for (int node : cellNodes) {
+            contractNodeBatchedCtx(node, ctx);
+            contracted[node] = true;
+            nodeLevel[node]  = order[node];
         }
     }
 
@@ -508,6 +700,123 @@ public class SpeedyCHBuilder {
         }
     }
 
+    // ---- Context-aware versions for parallel contraction ----
+
+    /**
+     * Like {@link #contractNodeBatched(int)} but uses a thread-local
+     * {@link WitnessContext} and synchronizes graph mutations.
+     */
+    private void contractNodeBatchedCtx(int node, WitnessContext ctx) {
+        int oOff = outOff[node], oLen = outLen[node];
+        int iOff = inOff[node],  iLen = inLen[node];
+
+        int numTargets = 0;
+        for (int i = 0; i < oLen; i++) {
+            int outIdx = outBuf[oOff + i];
+            int w = buildEdgeData[outIdx * BE_SIZE + BE_TO];
+            if (contracted[w] || w == node) continue;
+            if (numTargets >= ctx.scratchTargets.length) ctx.growScratch();
+            ctx.scratchTargets[numTargets]    = w;
+            ctx.scratchMaxCosts[numTargets]   = buildEdgeWeights[outIdx];
+            ctx.scratchOutEdgeIdx[numTargets] = outIdx;
+            numTargets++;
+        }
+        if (numTargets == 0) return;
+
+        for (int j = 0; j < iLen; j++) {
+            int inIdx = inBuf[iOff + j];
+            int u = buildEdgeData[inIdx * BE_SIZE + BE_FROM];
+            if (contracted[u] || u == node) continue;
+            double wUV = buildEdgeWeights[inIdx];
+
+            double globalMaxCost = 0;
+            for (int t = 0; t < numTargets; t++) {
+                if (ctx.scratchTargets[t] == u) continue;
+                double bound = wUV + ctx.scratchMaxCosts[t];
+                if (bound > globalMaxCost) globalMaxCost = bound;
+            }
+
+            batchedWitnessSearchCtx(u, node, globalMaxCost, HOP_LIMIT, SETTLED_LIMIT, ctx);
+
+            // Dedup lookup
+            ctx.dedupGeneration++;
+            int uOOff = outOff[u], uOLen = outLen[u];
+            for (int k = 0; k < uOLen; k++) {
+                int ex = outBuf[uOOff + k];
+                int target = buildEdgeData[ex * BE_SIZE + BE_TO];
+                double eCost = buildEdgeWeights[ex];
+                if (ctx.dedupGen[target] != ctx.dedupGeneration || eCost < ctx.dedupBest[target]) {
+                    ctx.dedupGen[target]  = ctx.dedupGeneration;
+                    ctx.dedupBest[target] = eCost;
+                }
+            }
+
+            for (int t = 0; t < numTargets; t++) {
+                int w = ctx.scratchTargets[t];
+                if (w == u) continue;
+                double shortcutCost = wUV + ctx.scratchMaxCosts[t];
+
+                double witnessCostToW = (ctx.witnessIterIds[w] == ctx.witnessIteration)
+                        ? ctx.witnessCost[w] : Double.POSITIVE_INFINITY;
+                if (witnessCostToW <= shortcutCost) continue;
+
+                if (ctx.dedupGen[w] == ctx.dedupGeneration && ctx.dedupBest[w] <= shortcutCost) continue;
+
+                addBuildEdgeSynchronized(u, w, -1, node, inIdx, ctx.scratchOutEdgeIdx[t], shortcutCost);
+            }
+        }
+    }
+
+    /**
+     * Like {@link #batchedWitnessSearch} but uses a thread-local context.
+     * Reads of the shared adjacency lists are unsynchronized — stale reads
+     * are conservative (miss witnesses, producing slightly more shortcuts).
+     */
+    private void batchedWitnessSearchCtx(int source, int avoidNode, double maxCost,
+                                          int hopLimit, int settledLimit,
+                                          WitnessContext ctx) {
+        ctx.witnessIteration++;
+        ctx.witnessHeap.clear();
+
+        ctx.witnessIterIds[source] = ctx.witnessIteration;
+        ctx.witnessCost[source]    = 0.0;
+        ctx.witnessHops[source]    = 0;
+        ctx.witnessHeap.insert(source, 0.0);
+
+        int settled = 0;
+        while (!ctx.witnessHeap.isEmpty()) {
+            int    v    = ctx.witnessHeap.poll();
+            double cost = ctx.witnessCost[v];
+            int    hops = ctx.witnessHops[v];
+
+            if (cost > maxCost)   break;
+            if (hops >= hopLimit) continue;
+            if (++settled > settledLimit) break;
+
+            int vOOff = outOff[v], vOLen = outLen[v];
+            for (int i = 0; i < vOLen; i++) {
+                int edgeIdx = outBuf[vOOff + i];
+                int toNode = buildEdgeData[edgeIdx * BE_SIZE + BE_TO];
+                if (toNode == avoidNode) continue;
+                if (contracted[toNode]) continue;
+
+                double newCost = cost + buildEdgeWeights[edgeIdx];
+                if (newCost > maxCost) continue;
+
+                if (ctx.witnessIterIds[toNode] != ctx.witnessIteration) {
+                    ctx.witnessCost[toNode]    = newCost;
+                    ctx.witnessHops[toNode]    = hops + 1;
+                    ctx.witnessIterIds[toNode] = ctx.witnessIteration;
+                    ctx.witnessHeap.insert(toNode, newCost);
+                } else if (newCost < ctx.witnessCost[toNode]) {
+                    ctx.witnessCost[toNode]    = newCost;
+                    ctx.witnessHops[toNode]    = hops + 1;
+                    ctx.witnessHeap.decreaseKey(toNode, newCost);
+                }
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Phase 3 – build SpeedyCHGraph (CSR layout)
     // -------------------------------------------------------------------------
@@ -650,5 +959,20 @@ public class SpeedyCHBuilder {
         adjOutAdd(from, idx);
         adjInAdd(to, idx);
         return idx;
+    }
+
+    /**
+     * Thread-safe version of {@link #addBuildEdge} for use during parallel
+     * contraction.  Uses {@code synchronized} to protect shared mutable state
+     * (edge arrays, adjacency buffers, counters).
+     *
+     * <p>The uncontested lock acquisition (~20 ns) is negligible compared to
+     * the witness search cost (~1000 node relaxations per call), so contention
+     * is minimal even with many threads.
+     */
+    private synchronized int addBuildEdgeSynchronized(int from, int to, int origLink,
+                                                       int middle, int lower1, int lower2,
+                                                       double weight) {
+        return addBuildEdge(from, to, origLink, middle, lower1, lower2, weight);
     }
 }

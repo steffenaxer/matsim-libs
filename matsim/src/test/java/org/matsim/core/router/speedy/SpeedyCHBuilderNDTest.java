@@ -96,6 +96,38 @@ public class SpeedyCHBuilderNDTest {
         runCorrectnessTest(network);
     }
 
+    // ---- parallel contraction tests ----
+
+    @Test
+    void testParallelContractionSmallGrid() {
+        Network network = buildGridNetwork(5);
+        runParallelCorrectnessTest(network);
+    }
+
+    @Test
+    void testParallelContractionLargerGrid() {
+        Network network = buildGridNetwork(15);
+        runParallelCorrectnessTest(network);
+    }
+
+    @Test
+    void testParallelContractionEquilNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork()).readFile("test/scenarios/equil/network.xml");
+        runParallelCorrectnessTest(scenario.getNetwork());
+    }
+
+    @Test
+    void testParallelContractionBerlinNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork())
+                .readFile("test/scenarios/berlin/network.xml.gz");
+        Network network = scenario.getNetwork();
+        System.out.printf("%nParallel contraction test: Berlin network (%d nodes, %d links)%n",
+                network.getNodes().size(), network.getLinks().size());
+        runParallelCorrectnessTest(network);
+    }
+
     // ---- benchmark test ----
 
     @Test
@@ -300,6 +332,64 @@ public class SpeedyCHBuilderNDTest {
         Assertions.assertEquals(0, mismatches,
                 mismatches + " cost mismatches out of " + NUM_QUERIES
                         + " queries with ND-ordered CH.");
+    }
+
+    /**
+     * Correctness test using the <b>parallel</b> contraction path
+     * ({@link SpeedyCHBuilder#buildWithOrderParallel}).
+     * Compares 500 random OD pairs against Dijkstra.
+     */
+    private void runParallelCorrectnessTest(Network network) {
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
+
+        SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
+
+        // Build ND-ordered CH using PARALLEL contraction
+        InertialFlowCutter.NDOrderResult orderResult =
+                new InertialFlowCutter(baseGraph).computeOrderWithBatches();
+        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+        SpeedyCHTimeDep chRouter = new SpeedyCHTimeDep(chGraph, tc, tc);
+
+        // Reference: SpeedyDijkstra
+        SpeedyDijkstra dijkstra = new SpeedyDijkstra(baseGraph, tc, tc);
+
+        List<Node> nodeList = new ArrayList<>(network.getNodes().values());
+        int n = nodeList.size();
+        if (n < 2) return;
+
+        Random rng = new Random(42);
+        int mismatches = 0;
+
+        for (int i = 0; i < NUM_QUERIES; i++) {
+            Node src = nodeList.get(rng.nextInt(n));
+            Node dst = nodeList.get(rng.nextInt(n));
+
+            Path chPath  = chRouter.calcLeastCostPath(src, dst, 8.0 * 3600, null, null);
+            Path dijPath = dijkstra.calcLeastCostPath(src, dst, 8.0 * 3600, null, null);
+
+            if (chPath == null && dijPath == null) continue;
+
+            Assertions.assertNotNull(chPath,
+                    "Parallel-CH returned null but Dijkstra found a path from "
+                            + src.getId() + " to " + dst.getId());
+            Assertions.assertNotNull(dijPath,
+                    "Dijkstra returned null but Parallel-CH found a path from "
+                            + src.getId() + " to " + dst.getId());
+
+            double chCost  = chPath.travelCost;
+            double dijCost = dijPath.travelCost;
+
+            if (Math.abs(chCost - dijCost) > COST_TOLERANCE) {
+                mismatches++;
+                System.err.printf("MISMATCH (parallel) %s→%s: CH=%.6f  Dijkstra=%.6f%n",
+                        src.getId(), dst.getId(), chCost, dijCost);
+            }
+        }
+
+        Assertions.assertEquals(0, mismatches,
+                mismatches + " cost mismatches out of " + NUM_QUERIES
+                        + " queries with parallel-contracted CH.");
     }
 
     private static Network buildLinearNetwork(int nodeCount) {

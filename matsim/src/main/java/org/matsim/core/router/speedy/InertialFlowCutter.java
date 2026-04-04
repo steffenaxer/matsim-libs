@@ -3,7 +3,11 @@ package org.matsim.core.router.speedy;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Computes a nested-dissection node ordering for a {@link SpeedyGraph} using
@@ -32,6 +36,28 @@ import java.util.Arrays;
  * @author Implementation for CCH/CATCHUp router
  */
 public class InertialFlowCutter {
+
+    /**
+     * Result of {@link #computeOrderWithBatches()}: contraction order plus
+     * partition structure for parallel contraction.
+     *
+     * <p>{@code rounds} is a list of "rounds" processed sequentially.
+     * Each round contains a list of independent cells that can be contracted
+     * in parallel.  Within each cell, nodes are in contraction order and must
+     * be processed sequentially.
+     *
+     * <p>Rounds are ordered from the deepest ND level (leaf cells, contracted
+     * first) to the shallowest (root separator, contracted last).
+     */
+    public static class NDOrderResult {
+        public final int[] order;
+        public final List<List<int[]>> rounds;
+
+        NDOrderResult(int[] order, List<List<int[]>> rounds) {
+            this.order = order;
+            this.rounds = rounds;
+        }
+    }
 
     private static final Logger LOG = LogManager.getLogger(InertialFlowCutter.class);
 
@@ -99,6 +125,109 @@ public class InertialFlowCutter {
 
         LOG.info("Nested dissection ordering computed for {} nodes", n);
         return order;
+    }
+
+    /**
+     * Computes a nested-dissection contraction order <b>plus</b> a partition
+     * structure for parallel contraction.
+     *
+     * <p>Nodes in different cells within the same round are guaranteed to be
+     * independent (no edges between them), so they can be contracted in
+     * parallel.  Within each cell, nodes must be contracted sequentially.
+     *
+     * @return {@link NDOrderResult} containing the contraction order and
+     *         a list of rounds of independent cells.
+     */
+    public NDOrderResult computeOrderWithBatches() {
+        int n = graph.nodeCount;
+        int[] order = new int[n];
+        Arrays.fill(order, -1);
+
+        int[] nodes = new int[n];
+        int count = 0;
+        for (int i = 0; i < n; i++) {
+            if (graph.getNode(i) != null) {
+                nodes[count++] = i;
+            }
+        }
+        nodes = Arrays.copyOf(nodes, count);
+
+        int[][] adj = buildSymmetricAdjacency();
+
+        Map<Integer, List<int[]>> cellsByDepth = new HashMap<>();
+        int[] levelCounter = new int[]{0};
+        recursiveDissectWithBatches(nodes, adj, order, levelCounter, cellsByDepth, 0);
+
+        // Fill any unassigned nodes
+        for (int i = 0; i < n; i++) {
+            if (order[i] < 0) {
+                order[i] = levelCounter[0]++;
+            }
+        }
+
+        // Convert to rounds: highest depth first (leaf cells contracted first)
+        int maxDepth = 0;
+        for (int d : cellsByDepth.keySet()) {
+            if (d > maxDepth) maxDepth = d;
+        }
+        List<List<int[]>> rounds = new ArrayList<>();
+        for (int d = maxDepth; d >= 0; d--) {
+            List<int[]> cells = cellsByDepth.get(d);
+            if (cells != null && !cells.isEmpty()) {
+                rounds.add(cells);
+            }
+        }
+
+        LOG.info("Nested dissection ordering with batches: {} nodes, {} rounds", n, rounds.size());
+        return new NDOrderResult(order, rounds);
+    }
+
+    /**
+     * Recursive dissection that also tracks partition cells by depth.
+     */
+    private void recursiveDissectWithBatches(int[] subNodes, int[][] adj, int[] order,
+                                              int[] levelCounter,
+                                              Map<Integer, List<int[]>> cellsByDepth,
+                                              int depth) {
+        if (subNodes.length <= MIN_PARTITION_SIZE) {
+            // Base case: this is a leaf cell
+            int ci = 0;
+            int[] cellOrdered = new int[subNodes.length];
+            for (int node : subNodes) {
+                if (order[node] < 0) {
+                    order[node] = levelCounter[0]++;
+                    cellOrdered[ci++] = node;
+                }
+            }
+            if (ci > 0) {
+                cellsByDepth.computeIfAbsent(depth, k -> new ArrayList<>())
+                        .add(Arrays.copyOf(cellOrdered, ci));
+            }
+            return;
+        }
+
+        int[][] result = findSeparator(subNodes, adj);
+        int[] partA     = result[0];
+        int[] separator = result[1];
+        int[] partB     = result[2];
+
+        // Recurse into partitions (children go to deeper levels)
+        recursiveDissectWithBatches(partA, adj, order, levelCounter, cellsByDepth, depth + 1);
+        recursiveDissectWithBatches(partB, adj, order, levelCounter, cellsByDepth, depth + 1);
+
+        // Separator nodes form a cell at this depth
+        int[] sepOrdered = new int[separator.length];
+        int si = 0;
+        for (int node : separator) {
+            if (order[node] < 0) {
+                order[node] = levelCounter[0]++;
+                sepOrdered[si++] = node;
+            }
+        }
+        if (si > 0) {
+            cellsByDepth.computeIfAbsent(depth, k -> new ArrayList<>())
+                    .add(Arrays.copyOf(sepOrdered, si));
+        }
     }
 
     /**
@@ -191,10 +320,9 @@ public class InertialFlowCutter {
             projections[i] = nodeX[subNodes[i]] * dx + nodeY[subNodes[i]] * dy;
         }
 
-        // Sort indices by projection value
-        Integer[] sortedIdx = new Integer[n];
-        for (int i = 0; i < n; i++) sortedIdx[i] = i;
-        Arrays.sort(sortedIdx, (a, b) -> Double.compare(projections[a], projections[b]));
+        // Sort indices by projection value using a primitive merge-sort
+        // (avoids Integer boxing and comparator overhead).
+        int[] sortedIdx = sortByProjection(projections, n);
 
         // Build membership set for fast lookup
         boolean[] inSubGraph = new boolean[graph.nodeCount];
@@ -293,6 +421,47 @@ public class InertialFlowCutter {
         }
 
         return new int[][]{partA, separator, partB};
+    }
+
+    /**
+     * Sort indices [0..n) by the corresponding projection values.
+     * Uses a merge-sort on primitive int[] to avoid boxing overhead.
+     */
+    private static int[] sortByProjection(double[] projections, int n) {
+        int[] idx = new int[n];
+        for (int i = 0; i < n; i++) idx[i] = i;
+        int[] tmp = new int[n];
+        mergeSort(idx, tmp, projections, 0, n);
+        return idx;
+    }
+
+    private static void mergeSort(int[] arr, int[] tmp, double[] keys, int lo, int hi) {
+        if (hi - lo <= 16) {
+            // Insertion sort for small ranges
+            for (int i = lo + 1; i < hi; i++) {
+                int t = arr[i];
+                double k = keys[t];
+                int j = i - 1;
+                while (j >= lo && keys[arr[j]] > k) {
+                    arr[j + 1] = arr[j];
+                    j--;
+                }
+                arr[j + 1] = t;
+            }
+            return;
+        }
+        int mid = (lo + hi) >>> 1;
+        mergeSort(arr, tmp, keys, lo, mid);
+        mergeSort(arr, tmp, keys, mid, hi);
+
+        // Merge
+        System.arraycopy(arr, lo, tmp, lo, hi - lo);
+        int i = lo, j = mid, k = lo;
+        while (i < mid && j < hi) {
+            arr[k++] = (keys[tmp[i]] <= keys[tmp[j]]) ? tmp[i++] : tmp[j++];
+        }
+        while (i < mid) arr[k++] = tmp[i++];
+        while (j < hi)  arr[k++] = tmp[j++];
     }
 
     private int[][] trivialSplit(int[] subNodes) {

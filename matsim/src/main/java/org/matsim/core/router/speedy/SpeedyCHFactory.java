@@ -65,7 +65,9 @@ public class SpeedyCHFactory implements LeastCostPathCalculatorFactory {
         SpeedyCHGraph chGraph = chGraphCache.computeIfAbsent(cacheKey, key -> {
             LOG.info("Building CH contraction for network ({} nodes, {} links) – this is a one-time cost.",
                     baseGraph.nodeCount, baseGraph.linkCount);
-            return new SpeedyCHBuilder(baseGraph, travelCosts).build();
+            InertialFlowCutter.NDOrderResult ndOrder =
+                    new InertialFlowCutter(baseGraph).computeOrderWithBatches();
+            return new SpeedyCHBuilder(baseGraph, travelCosts).buildWithOrderParallel(ndOrder);
         });
 
         // Customise with time-dependent TTFs (fast O(edges × bins) pass).

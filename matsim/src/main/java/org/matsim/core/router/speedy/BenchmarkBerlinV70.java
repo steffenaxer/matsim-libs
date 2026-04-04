@@ -64,15 +64,15 @@ public class BenchmarkBerlinV70 {
 
         // ---- 2. Build CH (ND-ordered) ----
         System.out.println();
-        System.out.println("Building CH (InertialFlowCutter order) ...");
+        System.out.println("Building CH (InertialFlowCutter order, parallel) ...");
         SpeedyGraph graph = SpeedyGraphBuilder.build(network);
 
         long t0 = System.nanoTime();
-        int[] order = new InertialFlowCutter(graph).computeOrder();
+        InertialFlowCutter.NDOrderResult orderResult = new InertialFlowCutter(graph).computeOrderWithBatches();
         long orderMs = (System.nanoTime() - t0) / 1_000_000;
 
         long t1 = System.nanoTime();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(graph, tc).buildWithOrder(order);
+        SpeedyCHGraph chGraph = new SpeedyCHBuilder(graph, tc).buildWithOrderParallel(orderResult);
         long contractionMs = (System.nanoTime() - t1) / 1_000_000;
 
         new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
