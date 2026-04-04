@@ -46,13 +46,17 @@ public class SpeedyCHBuilder {
     /** Maximum hops allowed in the witness search. */
     private static final int HOP_LIMIT = 10;
 
-    /** Maximum number of nodes settled in a single witness search.
-     *  Prevents unbounded exploration on large networks. */
+    /** Default maximum number of nodes settled in a single witness search.
+     *  Used by the priority-queue-based build() method. */
     private static final int SETTLED_LIMIT = 1000;
 
     /** Cheaper hop/settled limits for priority estimation witness search. */
     private static final int PRIO_HOP_LIMIT = 3;
     private static final int PRIO_SETTLED_LIMIT = 200;
+
+    /** Maximum number of threads to use for parallel contraction.
+     *  Capping this limits memory usage (each thread holds a ~2.5 MB WitnessContext). */
+    private static final int MAX_PARALLEL_THREADS = 8;
 
     private final SpeedyGraph graph;
     private final TravelDisutility td;
@@ -176,8 +180,8 @@ public class SpeedyCHBuilder {
         this.contractedNeighborCount  = new int[nodeCount];
 
         // Pre-size generously to avoid reallocation during contraction.
-        // Typical CH produces 3-5× the original edges.
-        int edgeCap = Math.max(graph.linkCount * 5, 16);
+        // ND ordering can produce 5-8× the original edges; use 8× to be safe.
+        int edgeCap = Math.max(graph.linkCount * 8, 16);
         this.buildEdgeData    = new int[edgeCap * BE_SIZE];
         this.buildEdgeWeights = new double[edgeCap];
 
@@ -261,10 +265,10 @@ public class SpeedyCHBuilder {
                 graph.linkCount, nodeCount);
         initEdges();
 
+        int nThreads = Math.min(Runtime.getRuntime().availableProcessors(), MAX_PARALLEL_THREADS);
         LOG.info("CH contraction (parallel): contracting {} nodes with {} rounds, {} threads…",
-                nodeCount, orderResult.rounds.size(),
-                Runtime.getRuntime().availableProcessors());
-        contractNodesParallel(orderResult.order, orderResult.rounds);
+                nodeCount, orderResult.rounds.size(), nThreads);
+        contractNodesParallel(orderResult.order, orderResult.rounds, nThreads);
 
         LOG.info("CH contraction (parallel): building overlay graph ({} edges)…", buildEdgeCounter.get());
         return buildCHGraph();
@@ -416,8 +420,7 @@ public class SpeedyCHBuilder {
      *       buffers and flushed under one lock per contracted node.</li>
      * </ul>
      */
-    private void contractNodesParallel(int[] order, List<List<int[]>> rounds) {
-        int nThreads = Math.max(1, Runtime.getRuntime().availableProcessors());
+    private void contractNodesParallel(int[] order, List<List<int[]>> rounds, int nThreads) {
         ForkJoinPool pool = (nThreads > 1) ? new ForkJoinPool(nThreads) : null;
 
         // Reuse one WitnessContext per thread across all rounds & tasks.
@@ -1225,10 +1228,11 @@ public class SpeedyCHBuilder {
         return idx;
     }
 
-    /** Grow buildEdgeData/buildEdgeWeights under a lock (rare path). */
+    /** Grow buildEdgeData/buildEdgeWeights under a lock (rare path).
+     *  Uses 1.5× growth to reduce peak memory vs 2× doubling. */
     private synchronized void growBuildEdgeStorage(int minDataLen) {
         if (minDataLen <= buildEdgeData.length) return; // another thread grew it
-        int newLen = Math.max(buildEdgeData.length * 2, minDataLen);
+        int newLen = Math.max(buildEdgeData.length + buildEdgeData.length / 2, minDataLen);
         buildEdgeData    = Arrays.copyOf(buildEdgeData, newLen);
         buildEdgeWeights = Arrays.copyOf(buildEdgeWeights, newLen / BE_SIZE);
     }
