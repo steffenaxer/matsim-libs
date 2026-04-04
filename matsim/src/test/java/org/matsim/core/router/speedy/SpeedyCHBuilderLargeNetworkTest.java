@@ -43,7 +43,7 @@ import java.util.Random;
  * <ul>
  *   <li><b>Real networks</b>: Berlin (11.5k nodes)</li>
  *   <li><b>Synthetic large grids</b>: up to 22,500 nodes with perturbed coordinates</li>
- *   <li><b>Berlin v7.0</b>: ~65k nodes, loaded from URL when accessible</li>
+ *   <li><b>Berlin v7.0</b>: ~88k nodes, loaded from URL when accessible</li>
  * </ul>
  *
  * <p>Results are written to {@code target/ch-benchmark-results.tsv} for post-processing.
@@ -149,7 +149,7 @@ public class SpeedyCHBuilderLargeNetworkTest {
     // -----------------------------------------------------------------------
 
     /**
-     * Tests the Berlin v7.0 network (~65k nodes) downloaded from the TU Berlin SVN server.
+     * Tests the Berlin v7.0 network (~88k nodes) downloaded from the TU Berlin SVN server.
      *
      * <p>This test downloads the network from:
      * {@code https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/berlin/berlin-v7.0/input/berlin-v7.0-network.xml.gz}
