@@ -43,13 +43,14 @@ public class SpeedyCHCustomizerTest {
 
         // For freespeed travel time the TTF is constant across all bins.
         int numBins = SpeedyCHTTFCustomizer.NUM_BINS;
-        for (int e = 0; e < ch.totalEdgeCount; e++) {
+        int edgeCount = ch.totalEdgeCount;
+        for (int e = 0; e < edgeCount; e++) {
             int origLink = ch.edgeOrigLink[e];
             if (origLink >= 0) {
                 Link link = g.getLink(origLink);
                 double expected = tc.getLinkTravelTime(link, 0.0, null, null);
                 for (int k = 0; k < numBins; k++) {
-                    Assertions.assertEquals(expected, ch.ttf[e * numBins + k], 1e-9,
+                    Assertions.assertEquals(expected, ch.ttf[k * edgeCount + e], 1e-9,
                             "Real edge TTF bin " + k + " mismatch for link " + link.getId());
                 }
                 Assertions.assertEquals(expected, ch.minTTF[e], 1e-9,
@@ -82,20 +83,18 @@ public class SpeedyCHCustomizerTest {
         new SpeedyCHTTFCustomizer().customize(ch, tc, tc);
 
         int numBins = SpeedyCHTTFCustomizer.NUM_BINS;
-        for (int e = 0; e < ch.totalEdgeCount; e++) {
+        int edgeCount = ch.totalEdgeCount;
+        for (int e = 0; e < edgeCount; e++) {
             int orig   = ch.edgeOrigLink[e];
             int lower1 = ch.edgeLower1[e];
             int lower2 = ch.edgeLower2[e];
             if (orig < 0 && lower1 >= 0 && lower2 >= 0) {
-                int eOff  = e * numBins;
-                int l1Off = lower1 * numBins;
-                int l2Off = lower2 * numBins;
                 for (int k = 0; k < numBins; k++) {
-                    double t1       = ch.ttf[l1Off + k];
+                    double t1       = ch.ttf[k * edgeCount + lower1];
                     int    arrBin   = SpeedyCHTTFCustomizer.timeToBin(k * SpeedyCHTTFCustomizer.BIN_SIZE + t1);
-                    double t2       = ch.ttf[l2Off + arrBin];
+                    double t2       = ch.ttf[arrBin * edgeCount + lower2];
                     double expected = t1 + t2;
-                    Assertions.assertEquals(expected, ch.ttf[eOff + k], 1e-9,
+                    Assertions.assertEquals(expected, ch.ttf[k * edgeCount + e], 1e-9,
                             "Shortcut " + e + " TTF bin " + k + " mismatch");
                 }
             }

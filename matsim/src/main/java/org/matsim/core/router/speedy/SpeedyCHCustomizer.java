@@ -22,8 +22,10 @@ public class SpeedyCHCustomizer {
         int[]    origLink  = chGraph.edgeOrigLink;
         int[]    lower1    = chGraph.edgeLower1;
         int[]    lower2    = chGraph.edgeLower2;
+        int[]    order     = chGraph.customizeOrder;
 
-        for (int e = 0; e < edgeCount; e++) {
+        for (int i = 0; i < edgeCount; i++) {
+            int e = order[i];
             if (origLink[e] >= 0) {
                 Link link = baseGraph.getLink(origLink[e]);
                 weights[e] = td.getLinkMinimumTravelDisutility(link);

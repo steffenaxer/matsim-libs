@@ -539,24 +539,26 @@ public class SpeedyCHBuilder {
         }
 
         // 3. Allocate CSR edge arrays and colocated weight arrays
+        // CSR stores only toNode + globalIdx (E_STRIDE = 2) for cache-compact hot path.
         int S = SpeedyCHGraph.E_STRIDE;
         int[] upEdges      = new int[totalUp * S];
         double[] upWeights = new double[totalUp];
         int[] dnEdges      = new int[totalDn * S];
         double[] dnWeights = new double[totalDn];
 
-        // Global edge arrays (build-edge index is the global index)
-        int[] edgeOrigLink = new int[buildEdgeCount];
-        int[] edgeLower1   = new int[buildEdgeCount];
-        int[] edgeLower2   = new int[buildEdgeCount];
+        // Total edges = up + dn (every build edge goes into exactly one list)
+        int totalEdgeCount = totalUp + totalDn;
 
-        // Fill global edge data
-        for (int bi = 0; bi < buildEdgeCount; bi++) {
-            int bBase = bi * BE_SIZE;
-            edgeOrigLink[bi] = buildEdgeData[bBase + BE_ORIG];
-            edgeLower1[bi]   = buildEdgeData[bBase + BE_LOW1];
-            edgeLower2[bi]   = buildEdgeData[bBase + BE_LOW2];
-        }
+        // Global edge arrays indexed by new contiguous gIdx:
+        //   up-edges: gIdx = slot [0, totalUp)
+        //   dn-edges: gIdx = totalUp + dnSlot [totalUp, totalEdgeCount)
+        int[] edgeOrigLink = new int[totalEdgeCount];
+        int[] edgeLower1   = new int[totalEdgeCount];
+        int[] edgeLower2   = new int[totalEdgeCount];
+
+        // Build old-to-new index mapping for gIdx remapping
+        int[] oldToNew = new int[buildEdgeCount];
+        Arrays.fill(oldToNew, -1);
 
         // 4. Fill CSR arrays (use upCount/dnCount as cursors, reset to 0 first)
         int[] upCursor = new int[nodeCount];
@@ -567,38 +569,62 @@ public class SpeedyCHBuilder {
             int fromNode = buildEdgeData[bBase + BE_FROM];
             int toNode   = buildEdgeData[bBase + BE_TO];
             int origLink = buildEdgeData[bBase + BE_ORIG];
-            int lower1   = buildEdgeData[bBase + BE_LOW1];
-            int lower2   = buildEdgeData[bBase + BE_LOW2];
             int lvFrom   = nodeLevel[fromNode];
             int lvTo     = nodeLevel[toNode];
 
             if (lvFrom < lvTo) {
-                // Upward edge: stored in fromNode's up-list
+                // Upward edge: gIdx = slot
                 int slot = upOff[fromNode] + upCursor[fromNode]++;
                 int eBase = slot * S;
                 upEdges[eBase + SpeedyCHGraph.E_NODE] = toNode;
-                upEdges[eBase + SpeedyCHGraph.E_ORIG] = origLink;
-                upEdges[eBase + SpeedyCHGraph.E_LOW1] = lower1;
-                upEdges[eBase + SpeedyCHGraph.E_LOW2] = lower2;
-                upEdges[eBase + SpeedyCHGraph.E_GIDX] = bi;
+                upEdges[eBase + SpeedyCHGraph.E_GIDX] = slot; // contiguous gIdx
                 upWeights[slot] = buildEdgeWeights[bi];
+                edgeOrigLink[slot] = origLink;
+                // lower edges will be remapped after this loop
+                edgeLower1[slot] = buildEdgeData[bBase + BE_LOW1];
+                edgeLower2[slot] = buildEdgeData[bBase + BE_LOW2];
+                oldToNew[bi] = slot;
             } else if (lvFrom > lvTo) {
-                // Downward edge: stored in toNode's dn-list
-                int slot = dnOff[toNode] + dnCursor[toNode]++;
-                int eBase = slot * S;
-                dnEdges[eBase + SpeedyCHGraph.E_NODE] = fromNode; // the higher-level node
-                dnEdges[eBase + SpeedyCHGraph.E_ORIG] = origLink;
-                dnEdges[eBase + SpeedyCHGraph.E_LOW1] = lower1;
-                dnEdges[eBase + SpeedyCHGraph.E_LOW2] = lower2;
-                dnEdges[eBase + SpeedyCHGraph.E_GIDX] = bi;
-                dnWeights[slot] = buildEdgeWeights[bi];
+                // Downward edge: gIdx = totalUp + dnSlot
+                int dnSlot = dnOff[toNode] + dnCursor[toNode]++;
+                int gIdx = totalUp + dnSlot;
+                int eBase = dnSlot * S;
+                dnEdges[eBase + SpeedyCHGraph.E_NODE] = fromNode;
+                dnEdges[eBase + SpeedyCHGraph.E_GIDX] = gIdx; // contiguous gIdx
+                dnWeights[dnSlot] = buildEdgeWeights[bi];
+                edgeOrigLink[gIdx] = origLink;
+                edgeLower1[gIdx] = buildEdgeData[bBase + BE_LOW1];
+                edgeLower2[gIdx] = buildEdgeData[bBase + BE_LOW2];
+                oldToNew[bi] = gIdx;
+            }
+        }
+
+        // 5. Remap edgeLower1/edgeLower2 from old build-edge indices to new gIdx
+        for (int e = 0; e < totalEdgeCount; e++) {
+            if (edgeLower1[e] >= 0) {
+                edgeLower1[e] = oldToNew[edgeLower1[e]];
+            }
+            if (edgeLower2[e] >= 0) {
+                edgeLower2[e] = oldToNew[edgeLower2[e]];
+            }
+        }
+
+        // 6. Build topological customization order:
+        // Process build edges in original order (which preserves dependency: lower edges
+        // are created before their parent shortcuts). Map to new gIdx.
+        int[] customizeOrder = new int[totalEdgeCount];
+        int orderIdx = 0;
+        for (int bi = 0; bi < buildEdgeCount; bi++) {
+            if (oldToNew[bi] >= 0) {
+                customizeOrder[orderIdx++] = oldToNew[bi];
             }
         }
 
         return new SpeedyCHGraph(graph, nodeCount,
                 totalUp, upOff, upCount, upEdges, upWeights,
                 totalDn, dnOff, dnCount, dnEdges, dnWeights,
-                buildEdgeCount, edgeOrigLink, edgeLower1, edgeLower2);
+                totalEdgeCount, edgeOrigLink, edgeLower1, edgeLower2,
+                customizeOrder);
     }
 
     // -------------------------------------------------------------------------

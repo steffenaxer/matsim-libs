@@ -14,14 +14,19 @@ import org.matsim.api.core.v01.network.Node;
  * This gives O(1) random access per node and sequential memory access when
  * iterating a node's edges — far better cache behaviour than a linked list.
  *
- * <p>Per-edge data (5 ints each, packed tightly):
+ * <p>Per-edge data (2 ints each, packed tightly):
  * <pre>
  *   [0] toNode / fromNode index   (toNode for up-edges, fromNode for dn-edges)
- *   [1] originalLinkIndex         (≥0 for real edges, -1 for shortcuts)
- *   [2] lowerEdge1 index          (-1 for real edges)
- *   [3] lowerEdge2 index          (-1 for real edges)
- *   [4] global edge index         (for TTF/weight lookup)
+ *   [1] global edge index         (for TTF/weight lookup and edge unpacking)
  * </pre>
+ * Edge metadata (origLink, lowerEdge1/2) is stored in separate global arrays
+ * indexed by the global edge index, keeping the CSR compact for the query hot path.
+ *
+ * <h3>Global edge index layout</h3>
+ * <p>Global indices are assigned contiguously per CSR slot:
+ * up-edges use indices {@code [0, upEdgeCount)}, down-edges use
+ * {@code [upEdgeCount, upEdgeCount + dnEdgeCount)}.  This ensures that
+ * edges of the same node are contiguous in the TTF array.
  *
  * <h3>Weight layout</h3>
  * <p>Edge weights are colocated in contiguous {@code double[]} arrays
@@ -29,22 +34,22 @@ import org.matsim.api.core.v01.network.Node;
  * iterating a node's edges reads weight from the same cache line as the
  * target node index.
  *
- * <h3>TTF layout (flat contiguous)</h3>
- * <p>{@link #ttf} is a single {@code double[edgeCount * NUM_BINS]} array where
- * {@code ttf[e * NUM_BINS + k]} is the travel time for edge {@code e} departing
- * in time bin {@code k}. This avoids the pointer chase of {@code double[][]}.
+ * <h3>TTF layout (bin-major, flat contiguous)</h3>
+ * <p>{@link #ttf} is a single {@code double[NUM_BINS * edgeCount]} array where
+ * {@code ttf[bin * edgeCount + globalIdx]} is the travel time for edge
+ * {@code globalIdx} departing in time bin {@code bin}.  The bin-major layout
+ * gives sequential memory access when iterating a node's edges (constant bin,
+ * contiguous globalIdx values), which is the dominant access pattern in the
+ * forward CH query.
  *
  * @author Implementation for CCH/CATCHUp router
  */
 public class SpeedyCHGraph {
 
-    /** Ints per edge in the CSR edge arrays. */
-    static final int E_STRIDE = 5;
+    /** Ints per edge in the CSR edge arrays (toNode + globalIdx only). */
+    static final int E_STRIDE = 2;
     static final int E_NODE   = 0; // toNode (up) or fromNode (dn)
-    static final int E_ORIG   = 1; // originalLinkIndex
-    static final int E_LOW1   = 2; // lowerEdge1
-    static final int E_LOW2   = 3; // lowerEdge2
-    static final int E_GIDX   = 4; // global edge index
+    static final int E_GIDX   = 1; // global edge index
 
     final int nodeCount;
 
@@ -69,8 +74,10 @@ public class SpeedyCHGraph {
     final int[]    edgeLower1;      // lowerEdge1 per global edge
     final int[]    edgeLower2;      // lowerEdge2 per global edge
 
-    // Time-dependent TTF – flat contiguous array.
-    // ttf[globalIdx * NUM_BINS + bin] = travel time (seconds).
+    // Time-dependent TTF – bin-major flat contiguous array.
+    // ttf[bin * totalEdgeCount + globalIdx] = travel time (seconds).
+    // Bin-major layout gives sequential access when iterating a node's edges
+    // (constant bin, contiguous globalIdx values).
     double[] ttf;
     double[] minTTF;
 
@@ -78,12 +85,17 @@ public class SpeedyCHGraph {
     // ttfHash[globalIdx] = sum of TTF bins; NaN until first customization.
     double[] ttfHash;
 
+    // Topological processing order for customization.
+    // Ensures lower (component) edges are processed before their parent shortcuts.
+    final int[] customizeOrder;
+
     private final SpeedyGraph baseGraph;
 
     SpeedyCHGraph(SpeedyGraph baseGraph, int nodeCount,
                   int upEdgeCount, int[] upOff, int[] upLen, int[] upEdges, double[] upWeights,
                   int dnEdgeCount, int[] dnOff, int[] dnLen, int[] dnEdges, double[] dnWeights,
-                  int totalEdgeCount, int[] edgeOrigLink, int[] edgeLower1, int[] edgeLower2) {
+                  int totalEdgeCount, int[] edgeOrigLink, int[] edgeLower1, int[] edgeLower2,
+                  int[] customizeOrder) {
         this.baseGraph      = baseGraph;
         this.nodeCount      = nodeCount;
         this.upEdgeCount    = upEdgeCount;
@@ -100,9 +112,10 @@ public class SpeedyCHGraph {
         this.edgeOrigLink   = edgeOrigLink;
         this.edgeLower1     = edgeLower1;
         this.edgeLower2     = edgeLower2;
+        this.customizeOrder = customizeOrder;
         this.edgeWeights    = new double[totalEdgeCount];
-        // Pre-allocate flat TTF arrays.
-        this.ttf    = new double[totalEdgeCount * SpeedyCHTTFCustomizer.NUM_BINS];
+        // Pre-allocate bin-major flat TTF arrays.
+        this.ttf    = new double[SpeedyCHTTFCustomizer.NUM_BINS * totalEdgeCount];
         this.minTTF = new double[totalEdgeCount];
         this.ttfHash = new double[totalEdgeCount];
         java.util.Arrays.fill(this.ttfHash, Double.NaN);

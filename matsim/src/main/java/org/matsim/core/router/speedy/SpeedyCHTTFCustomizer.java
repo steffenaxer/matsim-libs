@@ -12,8 +12,10 @@ import org.matsim.core.router.util.TravelTime;
  * {@link SpeedyCHGraph#minTTF}, and {@link SpeedyCHGraph#edgeWeights}
  * are populated and ready for use by {@link SpeedyCHTimeDep}.
  *
- * <p>TTF storage is a flat contiguous {@code double[]} array:
- * {@code ttf[e * NUM_BINS + k]} for edge {@code e}, bin {@code k}.
+ * <p>TTF storage uses a bin-major flat contiguous {@code double[]} array:
+ * {@code ttf[bin * edgeCount + globalIdx]} for time bin {@code bin}, edge
+ * {@code globalIdx}.  This layout gives sequential memory access when
+ * iterating a node's edges in the query (constant bin, contiguous globalIdx).
  *
  * @author Implementation for CCH/CATCHUp router
  */
@@ -41,10 +43,11 @@ public class SpeedyCHTTFCustomizer {
         double[] minTTF   = chGraph.minTTF;
         double[] weights  = chGraph.edgeWeights;
         double[] ttfHash  = chGraph.ttfHash;
+        int[]  order      = chGraph.customizeOrder;
         boolean[] dirty   = new boolean[edgeCount];
 
-        for (int e = 0; e < edgeCount; e++) {
-            int eOff = e * NUM_BINS;
+        for (int i = 0; i < edgeCount; i++) {
+            int e = order[i];
             double min = Double.POSITIVE_INFINITY;
 
             if (origLink[e] >= 0) {
@@ -53,7 +56,7 @@ public class SpeedyCHTTFCustomizer {
                 double sum = 0;
                 for (int k = 0; k < NUM_BINS; k++) {
                     double t = tt.getLinkTravelTime(link, k * BIN_SIZE, null, null);
-                    ttf[eOff + k] = t;
+                    ttf[k * edgeCount + e] = t;
                     sum += t;
                     if (t < min) min = t;
                 }
@@ -71,16 +74,14 @@ public class SpeedyCHTTFCustomizer {
                     continue;
                 }
                 dirty[e] = true;
-                int l1Off = l1 * NUM_BINS;
-                int l2Off = l2 * NUM_BINS;
                 double sum = 0;
                 for (int k = 0; k < NUM_BINS; k++) {
-                    double t1         = ttf[l1Off + k];
+                    double t1         = ttf[k * edgeCount + l1];
                     double arrivalSec = k * BIN_SIZE + t1;
                     int    arrBin     = timeToBin(arrivalSec);
-                    double t2         = ttf[l2Off + arrBin];
+                    double t2         = ttf[arrBin * edgeCount + l2];
                     double composed   = t1 + t2;
-                    ttf[eOff + k] = composed;
+                    ttf[k * edgeCount + e] = composed;
                     sum += composed;
                     if (composed < min) min = composed;
                 }

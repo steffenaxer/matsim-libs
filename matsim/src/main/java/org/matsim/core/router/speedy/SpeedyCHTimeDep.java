@@ -61,6 +61,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
     private final double[] dnWeights;
     private final double[] ttf;
     private final double[] minTTF;
+    private final int      totalEdgeCount; // stride for bin-major TTF layout
 
     public SpeedyCHTimeDep(SpeedyCHGraph chGraph, TravelTime tt, TravelDisutility td) {
         this.chGraph   = chGraph;
@@ -98,6 +99,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
         this.dnWeights = chGraph.dnWeights;
         this.ttf       = chGraph.ttf;
         this.minTTF    = chGraph.minTTF;
+        this.totalEdgeCount = chGraph.totalEdgeCount;
     }
 
     @Override
@@ -199,6 +201,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                 // Compute time bin once for this node
                 int bin = ((int) (arr * INV_BIN)) % NUM_BINS;
                 if (bin < 0) bin += NUM_BINS;
+                int binOff = bin * totalEdgeCount; // bin-major TTF offset
 
                 // Iterate upward out-edges (CSR: contiguous in memory)
                 int uOff = upOff[v];
@@ -207,7 +210,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                     int eBase      = slot * S;
                     int w          = upEdges[eBase]; // toNode
                     int gIdx       = upEdges[eBase + SpeedyCHGraph.E_GIDX];
-                    double tTime   = ttf[gIdx * NUM_BINS + bin];
+                    double tTime   = ttf[binOff + gIdx];
                     double newArr  = arr + tTime;
                     double newCost = cost + tTime;
 
