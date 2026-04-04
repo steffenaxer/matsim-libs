@@ -1,0 +1,254 @@
+package org.matsim.core.router.speedy;
+
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.matsim.api.core.v01.Coord;
+import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.Scenario;
+import org.matsim.api.core.v01.network.Link;
+import org.matsim.api.core.v01.network.Network;
+import org.matsim.api.core.v01.network.NetworkFactory;
+import org.matsim.api.core.v01.network.Node;
+import org.matsim.core.config.ConfigUtils;
+import org.matsim.core.config.groups.ScoringConfigGroup;
+import org.matsim.core.network.io.MatsimNetworkReader;
+import org.matsim.core.router.costcalculators.FreespeedTravelTimeAndDisutility;
+import org.matsim.core.router.util.LeastCostPathCalculator.Path;
+import org.matsim.core.scenario.ScenarioUtils;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+
+/**
+ * Tests for nested-dissection-ordered CH contraction ({@link InertialFlowCutter}
+ * + {@link SpeedyCHBuilder#buildWithOrder}).
+ *
+ * <p>Verifies that the ND-ordered CH produces correct shortest paths by comparing
+ * against {@link SpeedyDijkstra} on random OD pairs.
+ */
+public class SpeedyCHBuilderNDTest {
+
+    private static final int    NUM_QUERIES    = 500;
+    private static final double COST_TOLERANCE = 1e-6;
+
+    // ---- correctness tests ----
+
+    @Test
+    void testNDOrderLinearNetwork() {
+        Network network = buildLinearNetwork(10);
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
+
+        SpeedyGraph g = SpeedyGraphBuilder.build(network);
+        int[] order = new InertialFlowCutter(g).computeOrder();
+        SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).buildWithOrder(order);
+
+        Assertions.assertNotNull(ch);
+        Assertions.assertEquals(g.nodeCount, ch.nodeCount);
+        Assertions.assertTrue(ch.totalEdgeCount >= g.linkCount,
+                "CH should have at least as many edges as the base graph");
+    }
+
+    @Test
+    void testNDOrderTriangleNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        Network network = scenario.getNetwork();
+        NetworkFactory nf = network.getFactory();
+
+        Node nA = nf.createNode(Id.createNodeId("A"), new Coord(0, 0));
+        Node nB = nf.createNode(Id.createNodeId("B"), new Coord(100, 0));
+        Node nC = nf.createNode(Id.createNodeId("C"), new Coord(200, 0));
+        network.addNode(nA); network.addNode(nB); network.addNode(nC);
+
+        addLink(network, "AB", nA, nB, 100, 10);
+        addLink(network, "BC", nB, nC, 100, 10);
+        addLink(network, "AC", nA, nC, 300, 10);
+
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
+        SpeedyGraph g = SpeedyGraphBuilder.build(network);
+        int[] order = new InertialFlowCutter(g).computeOrder();
+        SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).buildWithOrder(order);
+        new SpeedyCHTTFCustomizer().customize(ch, tc, tc);
+
+        SpeedyCHTimeDep router = new SpeedyCHTimeDep(ch, tc, tc);
+        Path path = router.calcLeastCostPath(nA, nC, 0, null, null);
+
+        Assertions.assertNotNull(path, "Path should not be null");
+        Assertions.assertEquals(2, path.links.size(), "Expected path A→B→C (2 links)");
+    }
+
+    @Test
+    void testNDOrderCorrectnessSmallGrid() {
+        Network network = buildGridNetwork(5);
+        runCorrectnessTest(network);
+    }
+
+    @Test
+    void testNDOrderCorrectnessEquilNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork()).readFile("test/scenarios/equil/network.xml");
+        runCorrectnessTest(scenario.getNetwork());
+    }
+
+    @Test
+    void testNDOrderCorrectnessLargerGrid() {
+        Network network = buildGridNetwork(10);
+        runCorrectnessTest(network);
+    }
+
+    // ---- benchmark test ----
+
+    @Test
+    void benchmarkNDvsWitnessBasedOrdering() {
+        // Use a moderately large grid to see timing differences
+        int gridSize = 20;
+        Network network = buildGridNetwork(gridSize);
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
+        int nodeCount = network.getNodes().size();
+
+        System.out.printf("%n=== CH Build Benchmark (%dx%d grid, %d nodes) ===%n",
+                gridSize, gridSize, nodeCount);
+
+        // Warm up JVM
+        {
+            SpeedyGraph g = SpeedyGraphBuilder.build(network);
+            new SpeedyCHBuilder(g, tc).build();
+        }
+
+        // Benchmark witness-based ordering
+        long witnessStart = System.nanoTime();
+        SpeedyGraph g1 = SpeedyGraphBuilder.build(network);
+        SpeedyCHGraph ch1 = new SpeedyCHBuilder(g1, tc).build();
+        long witnessMs = (System.nanoTime() - witnessStart) / 1_000_000;
+
+        // Benchmark ND ordering
+        long ndStart = System.nanoTime();
+        SpeedyGraph g2 = SpeedyGraphBuilder.build(network);
+        long ndOrderStart = System.nanoTime();
+        int[] order = new InertialFlowCutter(g2).computeOrder();
+        long ndOrderMs = (System.nanoTime() - ndOrderStart) / 1_000_000;
+        SpeedyCHGraph ch2 = new SpeedyCHBuilder(g2, tc).buildWithOrder(order);
+        long ndTotalMs = (System.nanoTime() - ndStart) / 1_000_000;
+
+        System.out.printf("  Witness-based: %d ms, %d total edges%n", witnessMs, ch1.totalEdgeCount);
+        System.out.printf("  ND ordering:   %d ms total (%d ms ordering + %d ms contraction), %d total edges%n",
+                ndTotalMs, ndOrderMs, ndTotalMs - ndOrderMs, ch2.totalEdgeCount);
+        System.out.printf("  Speedup:       %.2fx%n", (double) witnessMs / Math.max(1, ndTotalMs));
+        System.out.printf("  Edge overhead: %.1f%%%n",
+                ((double) ch2.totalEdgeCount / Math.max(1, ch1.totalEdgeCount) - 1) * 100);
+        System.out.println();
+
+        // Both should produce valid CH
+        Assertions.assertTrue(ch1.totalEdgeCount >= g1.linkCount);
+        Assertions.assertTrue(ch2.totalEdgeCount >= g2.linkCount);
+    }
+
+    // ---- helpers ----
+
+    private void runCorrectnessTest(Network network) {
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
+
+        SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
+
+        // Build ND-ordered CATCHUp router
+        int[] order = new InertialFlowCutter(baseGraph).computeOrder();
+        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrder(order);
+        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+        SpeedyCHTimeDep chRouter = new SpeedyCHTimeDep(chGraph, tc, tc);
+
+        // Reference: SpeedyDijkstra
+        SpeedyDijkstra dijkstra = new SpeedyDijkstra(baseGraph, tc, tc);
+
+        List<Node> nodeList = new ArrayList<>(network.getNodes().values());
+        int n = nodeList.size();
+        if (n < 2) return;
+
+        Random rng = new Random(42);
+        int mismatches = 0;
+
+        for (int i = 0; i < NUM_QUERIES; i++) {
+            Node src = nodeList.get(rng.nextInt(n));
+            Node dst = nodeList.get(rng.nextInt(n));
+
+            Path chPath  = chRouter.calcLeastCostPath(src, dst, 8.0 * 3600, null, null);
+            Path dijPath = dijkstra.calcLeastCostPath(src, dst, 8.0 * 3600, null, null);
+
+            if (chPath == null && dijPath == null) continue;
+
+            Assertions.assertNotNull(chPath,
+                    "ND-CH returned null but Dijkstra found a path from "
+                            + src.getId() + " to " + dst.getId());
+            Assertions.assertNotNull(dijPath,
+                    "Dijkstra returned null but ND-CH found a path from "
+                            + src.getId() + " to " + dst.getId());
+
+            double chCost  = chPath.travelCost;
+            double dijCost = dijPath.travelCost;
+
+            if (Math.abs(chCost - dijCost) > COST_TOLERANCE) {
+                mismatches++;
+                System.err.printf("MISMATCH %s→%s: ND-CH=%.6f  Dijkstra=%.6f%n",
+                        src.getId(), dst.getId(), chCost, dijCost);
+            }
+        }
+
+        Assertions.assertEquals(0, mismatches,
+                mismatches + " cost mismatches out of " + NUM_QUERIES
+                        + " queries with ND-ordered CH.");
+    }
+
+    private static Network buildLinearNetwork(int nodeCount) {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        Network network = scenario.getNetwork();
+        NetworkFactory nf = network.getFactory();
+
+        Node[] nodes = new Node[nodeCount];
+        for (int i = 0; i < nodeCount; i++) {
+            nodes[i] = nf.createNode(Id.createNodeId(String.valueOf(i)), new Coord(i * 100, 0));
+            network.addNode(nodes[i]);
+        }
+        for (int i = 0; i < nodeCount - 1; i++) {
+            addLink(network, i + "->" + (i + 1), nodes[i], nodes[i + 1], 100, 10);
+        }
+        return network;
+    }
+
+    private static Network buildGridNetwork(int n) {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        Network network = scenario.getNetwork();
+        NetworkFactory nf = network.getFactory();
+
+        Node[][] nodes = new Node[n][n];
+        for (int r = 0; r < n; r++) {
+            for (int c = 0; c < n; c++) {
+                Node node = nf.createNode(Id.createNodeId(r + "_" + c), new Coord(c * 100, r * 100));
+                network.addNode(node);
+                nodes[r][c] = node;
+            }
+        }
+        for (int r = 0; r < n; r++) {
+            for (int c = 0; c < n; c++) {
+                if (c + 1 < n) {
+                    addLink(network, r + "_" + c + "R", nodes[r][c],     nodes[r][c + 1], 100, 10);
+                    addLink(network, r + "_" + c + "L", nodes[r][c + 1], nodes[r][c],     100, 10);
+                }
+                if (r + 1 < n) {
+                    addLink(network, r + "_" + c + "D", nodes[r][c],     nodes[r + 1][c], 100, 10);
+                    addLink(network, r + "_" + c + "U", nodes[r + 1][c], nodes[r][c],     100, 10);
+                }
+            }
+        }
+        return network;
+    }
+
+    private static void addLink(Network network, String id, Node from, Node to,
+                                double length, double freespeed) {
+        NetworkFactory nf = network.getFactory();
+        Link link = nf.createLink(Id.createLinkId(id), from, to);
+        link.setLength(length);
+        link.setFreespeed(freespeed);
+        link.setCapacity(1800);
+        link.setNumberOfLanes(1);
+        network.addLink(link);
+    }
+}

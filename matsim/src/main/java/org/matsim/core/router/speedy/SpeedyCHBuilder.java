@@ -154,6 +154,32 @@ public class SpeedyCHBuilder {
         return buildCHGraph();
     }
 
+    /**
+     * Builds a CH using a pre-computed contraction order (e.g. from nested dissection).
+     *
+     * <p>Nodes are contracted in the order specified: {@code order[nodeIndex]} gives the
+     * contraction level for that node (0 = first contracted, nodeCount-1 = last contracted).
+     * No priority-queue witness search is used for ordering; only the contraction-time
+     * witness search runs (to determine which shortcuts are needed).
+     *
+     * <p>This is much faster than {@link #build()} because it eliminates the expensive
+     * priority estimation step, at the cost of potentially more shortcuts.
+     *
+     * @param order contraction order; {@code order[node]} is the level/rank for that node.
+     * @return the ready-to-customize CH graph.
+     */
+    public SpeedyCHGraph buildWithOrder(int[] order) {
+        LOG.info("CH contraction (fixed order): importing {} links from base graph ({} nodes)…",
+                graph.linkCount, nodeCount);
+        initEdges();
+
+        LOG.info("CH contraction (fixed order): contracting {} nodes…", nodeCount);
+        contractNodesInOrder(order);
+
+        LOG.info("CH contraction (fixed order): building overlay graph ({} edges)…", buildEdgeCount);
+        return buildCHGraph();
+    }
+
     // ---- flat adjacency helpers ----
 
     private void adjOutAdd(int node, int edgeIdx) {
@@ -252,6 +278,33 @@ public class SpeedyCHBuilder {
             for (int i = 0; i < iLen; i++) {
                 int fromNode = buildEdgeData[inBuf[iOff + i] * BE_SIZE + BE_FROM];
                 if (!contracted[fromNode]) contractedNeighborCount[fromNode]++;
+            }
+        }
+    }
+
+    /**
+     * Contracts nodes in a fixed, pre-computed order. No priority estimation or
+     * lazy updates – just contract in sequence. The witness search still runs
+     * during contraction to determine necessary shortcuts.
+     */
+    private void contractNodesInOrder(int[] order) {
+        // Build inverse order: sortedNodes[level] = nodeIndex
+        int[] sortedNodes = new int[nodeCount];
+        for (int node = 0; node < nodeCount; node++) {
+            sortedNodes[order[node]] = node;
+        }
+
+        int logInterval = Math.max(nodeCount / 20, 1);
+        for (int level = 0; level < nodeCount; level++) {
+            int node = sortedNodes[level];
+
+            contractNodeBatched(node);
+            contracted[node] = true;
+            nodeLevel[node]  = level;
+
+            if ((level + 1) % logInterval == 0) {
+                LOG.info("  … contracted {}/{} nodes ({} edges so far)",
+                        level + 1, nodeCount, buildEdgeCount);
             }
         }
     }
