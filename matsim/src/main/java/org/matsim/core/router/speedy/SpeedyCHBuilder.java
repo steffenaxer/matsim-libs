@@ -9,6 +9,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Builds a {@link SpeedyCHGraph} from a {@link SpeedyGraph} using the
@@ -58,17 +59,17 @@ public class SpeedyCHBuilder {
     private final int nodeCount;
 
     // Build-time edge storage (grows dynamically)
-    private int   buildEdgeCount = 0;
-    private int[] buildEdgeData;
-    private double[] buildEdgeWeights;
+    private final AtomicInteger buildEdgeCounter = new AtomicInteger(0);
+    private volatile int[] buildEdgeData;
+    private volatile double[] buildEdgeWeights;
 
-    // ---- Flat adjacency lists (no boxing) ----
-    // For each node, outOff[n]..outOff[n]+outLen[n]-1 are indices into outBuf
-    // whose values are build-edge indices.  Same for in.
-    private int[] outBuf, inBuf;
-    private int[] outOff, outLen, outCap;
-    private int[] inOff,  inLen,  inCap;
-    private int   outBufUsed, inBufUsed;
+    // ---- Per-node adjacency lists (no global buffer) ----
+    // outEdges[n] is a growable int[] of build-edge indices for out-edges of n.
+    // outLen[n] is the number of valid entries.  Same for in.
+    private int[][] outEdges;
+    private int[]   outLen;
+    private int[][] inEdges;
+    private int[]   inLen;
 
     // CH state
     private final int[]     nodeLevel;
@@ -173,36 +174,22 @@ public class SpeedyCHBuilder {
         this.contracted               = new boolean[nodeCount];
         this.contractedNeighborCount  = new int[nodeCount];
 
-        int edgeCap = Math.max(graph.linkCount * 2, 16);
+        // Pre-size generously to avoid reallocation during contraction.
+        // Typical CH produces 3-5× the original edges.
+        int edgeCap = Math.max(graph.linkCount * 5, 16);
         this.buildEdgeData    = new int[edgeCap * BE_SIZE];
         this.buildEdgeWeights = new double[edgeCap];
 
-        // Flat adjacency – initial buffer big enough for original edges
-        int adjBufCap = Math.max(graph.linkCount + 16, 256);
-        this.outBuf = new int[adjBufCap];
-        this.inBuf  = new int[adjBufCap];
-        this.outOff = new int[nodeCount];
-        this.outLen = new int[nodeCount];
-        this.outCap = new int[nodeCount];
-        this.inOff  = new int[nodeCount];
-        this.inLen  = new int[nodeCount];
-        this.inCap  = new int[nodeCount];
-        // Each node starts with a small inline allocation
+        // Per-node adjacency lists – small initial capacity per node
         int perNode = Math.max(4, (graph.linkCount / Math.max(nodeCount, 1)) * 2 + 2);
-        int pos = 0;
+        this.outEdges = new int[nodeCount][];
+        this.outLen   = new int[nodeCount];
+        this.inEdges  = new int[nodeCount][];
+        this.inLen    = new int[nodeCount];
         for (int i = 0; i < nodeCount; i++) {
-            outOff[i] = pos; outCap[i] = perNode;
-            pos += perNode;
+            outEdges[i] = new int[perNode];
+            inEdges[i]  = new int[perNode];
         }
-        if (pos > outBuf.length) outBuf = new int[pos];
-        this.outBufUsed = pos;
-        pos = 0;
-        for (int i = 0; i < nodeCount; i++) {
-            inOff[i] = pos; inCap[i] = perNode;
-            pos += perNode;
-        }
-        if (pos > inBuf.length) inBuf = new int[pos];
-        this.inBufUsed = pos;
 
         this.witnessIterIds = new int[nodeCount];
         this.witnessCost    = new double[nodeCount];
@@ -224,7 +211,7 @@ public class SpeedyCHBuilder {
         initEdges();
         LOG.info("CH contraction: contracting {} nodes…", nodeCount);
         contractNodes();
-        LOG.info("CH contraction: building overlay graph ({} edges)…", buildEdgeCount);
+        LOG.info("CH contraction: building overlay graph ({} edges)…", buildEdgeCounter.get());
         return buildCHGraph();
     }
 
@@ -250,7 +237,7 @@ public class SpeedyCHBuilder {
         LOG.info("CH contraction (fixed order): contracting {} nodes…", nodeCount);
         contractNodesInOrder(order);
 
-        LOG.info("CH contraction (fixed order): building overlay graph ({} edges)…", buildEdgeCount);
+        LOG.info("CH contraction (fixed order): building overlay graph ({} edges)…", buildEdgeCounter.get());
         return buildCHGraph();
     }
 
@@ -276,41 +263,34 @@ public class SpeedyCHBuilder {
                 Runtime.getRuntime().availableProcessors());
         contractNodesParallel(orderResult.order, orderResult.rounds);
 
-        LOG.info("CH contraction (parallel): building overlay graph ({} edges)…", buildEdgeCount);
+        LOG.info("CH contraction (parallel): building overlay graph ({} edges)…", buildEdgeCounter.get());
         return buildCHGraph();
     }
 
-    // ---- flat adjacency helpers ----
+    // ---- per-node adjacency helpers ----
 
     private void adjOutAdd(int node, int edgeIdx) {
-        if (outLen[node] >= outCap[node]) growOut(node);
-        outBuf[outOff[node] + outLen[node]++] = edgeIdx;
+        // Per-node synchronization: only blocks threads touching the same node
+        synchronized (outEdges) {
+            int len = outLen[node];
+            int[] arr = outEdges[node];
+            if (len >= arr.length) {
+                outEdges[node] = arr = Arrays.copyOf(arr, arr.length * 2);
+            }
+            arr[len] = edgeIdx;
+            outLen[node] = len + 1;
+        }
     }
     private void adjInAdd(int node, int edgeIdx) {
-        if (inLen[node] >= inCap[node]) growIn(node);
-        inBuf[inOff[node] + inLen[node]++] = edgeIdx;
-    }
-    private void growOut(int node) {
-        int newCap = outCap[node] * 2;
-        int newOff = outBufUsed;
-        if (newOff + newCap > outBuf.length) {
-            outBuf = Arrays.copyOf(outBuf, Math.max(outBuf.length * 2, newOff + newCap));
+        synchronized (inEdges) {
+            int len = inLen[node];
+            int[] arr = inEdges[node];
+            if (len >= arr.length) {
+                inEdges[node] = arr = Arrays.copyOf(arr, arr.length * 2);
+            }
+            arr[len] = edgeIdx;
+            inLen[node] = len + 1;
         }
-        System.arraycopy(outBuf, outOff[node], outBuf, newOff, outLen[node]);
-        outOff[node] = newOff;
-        outCap[node] = newCap;
-        outBufUsed = newOff + newCap;
-    }
-    private void growIn(int node) {
-        int newCap = inCap[node] * 2;
-        int newOff = inBufUsed;
-        if (newOff + newCap > inBuf.length) {
-            inBuf = Arrays.copyOf(inBuf, Math.max(inBuf.length * 2, newOff + newCap));
-        }
-        System.arraycopy(inBuf, inOff[node], inBuf, newOff, inLen[node]);
-        inOff[node] = newOff;
-        inCap[node] = newCap;
-        inBufUsed = newOff + newCap;
     }
 
     // -------------------------------------------------------------------------
@@ -365,18 +345,20 @@ public class SpeedyCHBuilder {
 
             if (levelCounter % logInterval == 0) {
                 LOG.info("  … contracted {}/{} nodes ({} edges so far)",
-                        levelCounter, nodeCount, buildEdgeCount);
+                        levelCounter, nodeCount, buildEdgeCounter.get());
             }
 
             // Update contracted-neighbor counts for remaining neighbors.
-            int oOff = outOff[node], oLen = outLen[node];
+            int[] oArr = outEdges[node];
+            int oLen = outLen[node];
             for (int i = 0; i < oLen; i++) {
-                int toNode = buildEdgeData[outBuf[oOff + i] * BE_SIZE + BE_TO];
+                int toNode = buildEdgeData[oArr[i] * BE_SIZE + BE_TO];
                 if (!contracted[toNode]) contractedNeighborCount[toNode]++;
             }
-            int iOff = inOff[node], iLen = inLen[node];
+            int[] iArr = inEdges[node];
+            int iLen = inLen[node];
             for (int i = 0; i < iLen; i++) {
-                int fromNode = buildEdgeData[inBuf[iOff + i] * BE_SIZE + BE_FROM];
+                int fromNode = buildEdgeData[iArr[i] * BE_SIZE + BE_FROM];
                 if (!contracted[fromNode]) contractedNeighborCount[fromNode]++;
             }
         }
@@ -404,7 +386,7 @@ public class SpeedyCHBuilder {
 
             if ((level + 1) % logInterval == 0) {
                 LOG.info("  … contracted {}/{} nodes ({} edges so far)",
-                        level + 1, nodeCount, buildEdgeCount);
+                        level + 1, nodeCount, buildEdgeCounter.get());
             }
         }
     }
@@ -476,7 +458,7 @@ public class SpeedyCHBuilder {
 
             totalContracted += roundNodes;
             LOG.info("  … contracted {}/{} nodes, round {}/{} ({} edges so far)",
-                    totalContracted, nodeCount, r + 1, rounds.size(), buildEdgeCount);
+                    totalContracted, nodeCount, r + 1, rounds.size(), buildEdgeCounter.get());
         }
 
         if (pool != null) {
@@ -575,11 +557,11 @@ public class SpeedyCHBuilder {
                                             ThreadLocal<WitnessContext> tlCtx) {
         for (int node : cellNodes) {
             // Count active in-degree to decide parallelism strategy
-            int iOff = inOff[node], iLen = inLen[node];
+            int[] iArr = inEdges[node];
+            int iLen = this.inLen[node];
             int activeInDeg = 0;
             for (int j = 0; j < iLen; j++) {
-                int inIdx = inBuf[iOff + j];
-                int u = buildEdgeData[inIdx * BE_SIZE + BE_FROM];
+                int u = buildEdgeData[iArr[j] * BE_SIZE + BE_FROM];
                 if (!contracted[u] && u != node) activeInDeg++;
             }
 
@@ -615,8 +597,10 @@ public class SpeedyCHBuilder {
      */
     private void contractNodeIntraParallel(int node, ForkJoinPool pool,
                                             ThreadLocal<WitnessContext> tlCtx) {
-        int oOff = outOff[node], oLen = outLen[node];
-        int iOff = inOff[node],  iLen = inLen[node];
+        int[] oArr = outEdges[node];
+        int oLen = outLen[node];
+        int[] iArr = inEdges[node];
+        int iLen = inLen[node];
 
         // Collect active out-neighbors (targets)
         int numTargets = 0;
@@ -624,7 +608,7 @@ public class SpeedyCHBuilder {
         double[] tgtCosts = new double[oLen];
         int[] tgtEdge  = new int[oLen];
         for (int i = 0; i < oLen; i++) {
-            int outIdx = outBuf[oOff + i];
+            int outIdx = oArr[i];
             int w = buildEdgeData[outIdx * BE_SIZE + BE_TO];
             if (contracted[w] || w == node) continue;
             targets[numTargets]  = w;
@@ -637,13 +621,13 @@ public class SpeedyCHBuilder {
         // Collect active in-neighbors
         int numInNbrs = 0;
         int[] inNbrs  = new int[iLen];
-        int[] inEdges = new int[iLen];
+        int[] inIdxArr = new int[iLen];
         for (int j = 0; j < iLen; j++) {
-            int inIdx = inBuf[iOff + j];
+            int inIdx = iArr[j];
             int u = buildEdgeData[inIdx * BE_SIZE + BE_FROM];
             if (contracted[u] || u == node) continue;
             inNbrs[numInNbrs]  = u;
-            inEdges[numInNbrs] = inIdx;
+            inIdxArr[numInNbrs] = inIdx;
             numInNbrs++;
         }
         if (numInNbrs == 0) return;
@@ -656,7 +640,7 @@ public class SpeedyCHBuilder {
         ForkJoinTask<InNbrShortcuts>[] tasks = new ForkJoinTask[ni];
         for (int idx = 0; idx < ni; idx++) {
             final int u = inNbrs[idx];
-            final int inIdx = inEdges[idx];
+            final int inIdx = inIdxArr[idx];
 
             tasks[idx] = pool.submit(() -> {
                 WitnessContext ctx = tlCtx.get();
@@ -675,9 +659,10 @@ public class SpeedyCHBuilder {
 
                 // Dedup lookup
                 ctx.dedupGeneration++;
-                int uOOff = outOff[u], uOLen = outLen[u];
+                int[] uOutArr = outEdges[u];
+                int uOLen = outLen[u];
                 for (int k = 0; k < uOLen; k++) {
-                    int ex = outBuf[uOOff + k];
+                    int ex = uOutArr[k];
                     int target = buildEdgeData[ex * BE_SIZE + BE_TO];
                     double eCost = buildEdgeWeights[ex];
                     if (ctx.dedupGen[target] != ctx.dedupGeneration || eCost < ctx.dedupBest[target]) {
@@ -714,14 +699,12 @@ public class SpeedyCHBuilder {
             });
         }
 
-        // Wait for all witness searches to complete and batch-add shortcuts
-        synchronized (this) {
-            for (ForkJoinTask<InNbrShortcuts> task : tasks) {
-                InNbrShortcuts sc = task.join();
-                for (int s = 0; s < sc.count; s++) {
-                    addBuildEdge(sc.from[s], sc.to[s], -1,
-                            sc.mid[s], sc.low1[s], sc.low2[s], sc.cost[s]);
-                }
+        // Wait for all witness searches to complete and add shortcuts
+        for (ForkJoinTask<InNbrShortcuts> task : tasks) {
+            InNbrShortcuts sc = task.join();
+            for (int s = 0; s < sc.count; s++) {
+                addBuildEdge(sc.from[s], sc.to[s], -1,
+                        sc.mid[s], sc.low1[s], sc.low2[s], sc.cost[s]);
             }
         }
     }
@@ -733,13 +716,15 @@ public class SpeedyCHBuilder {
      * without the full cost of the contraction-time search.
      */
     private int estimatePriority(int node) {
-        int oOff = outOff[node], oLen = outLen[node];
-        int iOff = inOff[node],  iLen = inLen[node];
+        int[] oArr = outEdges[node];
+        int oLen = outLen[node];
+        int[] iArr = inEdges[node];
+        int iLen = inLen[node];
 
         // Collect active out-neighbours and their edge costs v→w.
         int numTargets = 0;
         for (int i = 0; i < oLen; i++) {
-            int outIdx = outBuf[oOff + i];
+            int outIdx = oArr[i];
             int w = buildEdgeData[outIdx * BE_SIZE + BE_TO];
             if (contracted[w] || w == node) continue;
             if (numTargets >= scratchTargets.length) growScratch();
@@ -753,7 +738,7 @@ public class SpeedyCHBuilder {
         int shortcuts = 0;
 
         for (int j = 0; j < iLen; j++) {
-            int inIdx = inBuf[iOff + j];
+            int inIdx = iArr[j];
             int u = buildEdgeData[inIdx * BE_SIZE + BE_FROM];
             if (contracted[u] || u == node) continue;
             inDeg++;
@@ -800,13 +785,15 @@ public class SpeedyCHBuilder {
      * for ALL out-neighbours w simultaneously.
      */
     private void contractNodeBatched(int node) {
-        int oOff = outOff[node], oLen = outLen[node];
-        int iOff = inOff[node],  iLen = inLen[node];
+        int[] oArr = outEdges[node];
+        int oLen = outLen[node];
+        int[] iArr = inEdges[node];
+        int iLen = inLen[node];
 
         // Collect active out-neighbors and their costs through node.
         int numTargets = 0;
         for (int i = 0; i < oLen; i++) {
-            int outIdx = outBuf[oOff + i];
+            int outIdx = oArr[i];
             int w = buildEdgeData[outIdx * BE_SIZE + BE_TO];
             if (contracted[w] || w == node) continue;
             if (numTargets >= scratchTargets.length) {
@@ -824,7 +811,7 @@ public class SpeedyCHBuilder {
 
         // For each active in-neighbour u, run ONE batched witness search.
         for (int j = 0; j < iLen; j++) {
-            int inIdx = inBuf[iOff + j];
+            int inIdx = iArr[j];
             int u = buildEdgeData[inIdx * BE_SIZE + BE_FROM];
             if (contracted[u] || u == node) continue;
             double wUV = buildEdgeWeights[inIdx]; // cost u→v
@@ -842,9 +829,10 @@ public class SpeedyCHBuilder {
 
             // Build O(1) dedup lookup: best existing out-edge cost from u to each neighbor.
             dedupGeneration++;
-            int uOOff = outOff[u], uOLen = outLen[u];
+            int[] uOutArr = outEdges[u];
+            int uOLen = outLen[u];
             for (int k = 0; k < uOLen; k++) {
-                int ex = outBuf[uOOff + k];
+                int ex = uOutArr[k];
                 int target = buildEdgeData[ex * BE_SIZE + BE_TO];
                 double eCost = buildEdgeWeights[ex];
                 if (dedupGen[target] != dedupGeneration || eCost < dedupBest[target]) {
@@ -901,9 +889,10 @@ public class SpeedyCHBuilder {
             if (hops >= hopLimit) continue;
             if (++settled > settledLimit) break; // prevent unbounded exploration
 
-            int vOOff = outOff[v], vOLen = outLen[v];
+            int[] vOutArr = outEdges[v];
+            int vOLen = outLen[v];
             for (int i = 0; i < vOLen; i++) {
-                int edgeIdx = outBuf[vOOff + i];
+                int edgeIdx = vOutArr[i];
                 int toNode = buildEdgeData[edgeIdx * BE_SIZE + BE_TO];
                 if (toNode == avoidNode) continue;
                 if (contracted[toNode]) continue;
@@ -936,12 +925,14 @@ public class SpeedyCHBuilder {
      * per contracted node, dramatically reducing contention.
      */
     private void contractNodeBatchedCtx(int node, WitnessContext ctx) {
-        int oOff = outOff[node], oLen = outLen[node];
-        int iOff = inOff[node],  iLen = inLen[node];
+        int[] oArr = outEdges[node];
+        int oLen = outLen[node];
+        int[] iArr = inEdges[node];
+        int iLen = inLen[node];
 
         int numTargets = 0;
         for (int i = 0; i < oLen; i++) {
-            int outIdx = outBuf[oOff + i];
+            int outIdx = oArr[i];
             int w = buildEdgeData[outIdx * BE_SIZE + BE_TO];
             if (contracted[w] || w == node) continue;
             if (numTargets >= ctx.scratchTargets.length) ctx.growScratch();
@@ -956,7 +947,7 @@ public class SpeedyCHBuilder {
         ctx.scCount = 0;
 
         for (int j = 0; j < iLen; j++) {
-            int inIdx = inBuf[iOff + j];
+            int inIdx = iArr[j];
             int u = buildEdgeData[inIdx * BE_SIZE + BE_FROM];
             if (contracted[u] || u == node) continue;
             double wUV = buildEdgeWeights[inIdx];
@@ -972,9 +963,10 @@ public class SpeedyCHBuilder {
 
             // Dedup lookup (read shared state — stale reads are conservative)
             ctx.dedupGeneration++;
-            int uOOff = outOff[u], uOLen = outLen[u];
+            int[] uOutArr = outEdges[u];
+            int uOLen = outLen[u];
             for (int k = 0; k < uOLen; k++) {
-                int ex = outBuf[uOOff + k];
+                int ex = uOutArr[k];
                 int target = buildEdgeData[ex * BE_SIZE + BE_TO];
                 double eCost = buildEdgeWeights[ex];
                 if (ctx.dedupGen[target] != ctx.dedupGeneration || eCost < ctx.dedupBest[target]) {
@@ -998,13 +990,11 @@ public class SpeedyCHBuilder {
             }
         }
 
-        // Phase 2: Write — add all shortcuts under one lock
+        // Phase 2: Write — add shortcuts (addBuildEdge is self-synchronizing)
         if (ctx.scCount > 0) {
-            synchronized (this) {
-                for (int s = 0; s < ctx.scCount; s++) {
-                    addBuildEdge(ctx.scFrom[s], ctx.scTo[s], -1,
-                            ctx.scMid[s], ctx.scLow1[s], ctx.scLow2[s], ctx.scCost[s]);
-                }
+            for (int s = 0; s < ctx.scCount; s++) {
+                addBuildEdge(ctx.scFrom[s], ctx.scTo[s], -1,
+                        ctx.scMid[s], ctx.scLow1[s], ctx.scLow2[s], ctx.scCost[s]);
             }
         }
     }
@@ -1035,9 +1025,10 @@ public class SpeedyCHBuilder {
             if (hops >= hopLimit) continue;
             if (++settled > settledLimit) break;
 
-            int vOOff = outOff[v], vOLen = outLen[v];
+            int[] vOutArr = outEdges[v];
+            int vOLen = outLen[v];
             for (int i = 0; i < vOLen; i++) {
-                int edgeIdx = outBuf[vOOff + i];
+                int edgeIdx = vOutArr[i];
                 int toNode = buildEdgeData[edgeIdx * BE_SIZE + BE_TO];
                 if (toNode == avoidNode) continue;
                 if (contracted[toNode]) continue;
@@ -1064,6 +1055,8 @@ public class SpeedyCHBuilder {
     // -------------------------------------------------------------------------
 
     private SpeedyCHGraph buildCHGraph() {
+        final int buildEdgeCount = buildEdgeCounter.get();
+
         // 1. Count up/dn edges per node
         int[] upCount = new int[nodeCount];
         int[] dnCount = new int[nodeCount];
@@ -1184,13 +1177,12 @@ public class SpeedyCHBuilder {
 
     private int addBuildEdge(int from, int to, int origLink,
                              int middle, int lower1, int lower2, double weight) {
-        if (buildEdgeCount * BE_SIZE >= buildEdgeData.length) {
-            int newLen = buildEdgeData.length * 2;
-            buildEdgeData    = Arrays.copyOf(buildEdgeData, newLen);
-            buildEdgeWeights = Arrays.copyOf(buildEdgeWeights, newLen / BE_SIZE);
-        }
-        int idx  = buildEdgeCount++;
+        int idx = buildEdgeCounter.getAndIncrement();
         int base = idx * BE_SIZE;
+        // Grow if needed (rare with pre-sizing)
+        if (base + BE_SIZE > buildEdgeData.length) {
+            growBuildEdgeStorage(base + BE_SIZE);
+        }
         buildEdgeData[base + BE_FROM] = from;
         buildEdgeData[base + BE_TO]   = to;
         buildEdgeData[base + BE_ORIG] = origLink;
@@ -1201,6 +1193,14 @@ public class SpeedyCHBuilder {
         adjOutAdd(from, idx);
         adjInAdd(to, idx);
         return idx;
+    }
+
+    /** Grow buildEdgeData/buildEdgeWeights under a lock (rare path). */
+    private synchronized void growBuildEdgeStorage(int minDataLen) {
+        if (minDataLen <= buildEdgeData.length) return; // another thread grew it
+        int newLen = Math.max(buildEdgeData.length * 2, minDataLen);
+        buildEdgeData    = Arrays.copyOf(buildEdgeData, newLen);
+        buildEdgeWeights = Arrays.copyOf(buildEdgeWeights, newLen / BE_SIZE);
     }
 
 }
