@@ -22,9 +22,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * reduces repeated preprocessing cost because:
  * <ol>
  *   <li>The base {@link SpeedyGraph} is cached per {@link Network}.</li>
- *   <li>The contracted {@link CHGraph} <em>skeleton</em> is cached per
- *       (network, TravelDisutility) pair. The contraction topology (node ordering +
- *       shortcuts) depends only on the cost function's lower bounds.</li>
+ *   <li>The contracted {@link CHGraph} <em>skeleton</em> is cached per network.
+ *       The contraction topology (node ordering + shortcuts) is determined by the
+ *       network structure; the actual edge weights are overwritten by customization.</li>
  *   <li>On each {@link #createPathCalculator} call only the O(m) customization steps
  *       run: {@link CHTTFCustomizer} for time-dependent TTFs, or
  *       {@link CHCustomizer} for a static variant.</li>
@@ -47,11 +47,14 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
     private final Map<Network, SpeedyGraph> baseGraphs = new ConcurrentHashMap<>();
 
     /**
-     * Cache keyed by (SpeedyGraph, TravelDisutility identity) → contracted CH graph.
-     * Using identity-based keys because the same disutility object is typically reused
-     * across iterations in MATSim, and its metric doesn't change between calls.
+     * Cache keyed by SpeedyGraph → contracted CH graph.
+     * The contraction topology depends on the node ordering (from InertialFlowCutter,
+     * which is purely topology-based) and the witness-search edge weights.  After
+     * contraction the edge weights are always overwritten by {@link CHTTFCustomizer},
+     * so the same CH skeleton can be reused regardless of which {@link TravelDisutility}
+     * was used during the initial build.
      */
-    private final Map<CHCacheKey, CHGraph> chGraphCache = new ConcurrentHashMap<>();
+    private final Map<SpeedyGraph, CHGraph> chGraphCache = new ConcurrentHashMap<>();
 
     @Inject
     public CHRouterFactory() {
@@ -63,9 +66,8 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
 
         SpeedyGraph baseGraph = baseGraphs.computeIfAbsent(network, SpeedyGraphBuilder::build);
 
-        // Look up or build the contracted CH graph (expensive; cached).
-        CHCacheKey cacheKey = new CHCacheKey(baseGraph, travelCosts);
-        CHGraph chGraph = chGraphCache.computeIfAbsent(cacheKey, key -> {
+        // Look up or build the contracted CH graph (expensive; cached per network).
+        CHGraph chGraph = chGraphCache.computeIfAbsent(baseGraph, key -> {
             LOG.info("Building CH contraction for network ({} nodes, {} links) – this is a one-time cost.",
                     baseGraph.nodeCount, baseGraph.linkCount);
             InertialFlowCutter.NDOrderResult ndOrder =
@@ -85,7 +87,5 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
         return new CHRouterTimeDep(chGraph, travelTimes, travelCosts);
     }
 
-    /** Composite cache key based on identity of the base graph and the travel disutility. */
-    private record CHCacheKey(SpeedyGraph graph, TravelDisutility td) {}
 }
 
