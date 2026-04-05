@@ -721,4 +721,142 @@ public class SpeedyCHLeastCostPathTreeTest {
         Assertions.assertEquals(0, failureCount.get(),
                 "Concurrent CH queries should produce identical results to Dijkstra");
     }
+
+    // =========================================================================
+    // Performance benchmark: CH tree vs Dijkstra tree with bounded queries
+    // (the DRT use case).  This test prints timing info to System.out — it
+    // does NOT assert speed (too environment-dependent) but verifies correctness.
+    // =========================================================================
+
+    /**
+     * Benchmarks CH tree vs Dijkstra tree for DRT-style bounded queries
+     * (forward + backward with maxTravelTime StopCriterion) on the Berlin
+     * network.  Prints the average query time for each approach.
+     */
+    @Test
+    void benchmarkBoundedQueriesBerlinNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork()).readFile("test/scenarios/berlin/network.xml.gz");
+        Network network = scenario.getNetwork();
+
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(
+                new ScoringConfigGroup());
+
+        SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
+
+        // Build CH graph
+        InertialFlowCutter.NDOrderResult orderResult =
+                new InertialFlowCutter(baseGraph).computeOrderWithBatches();
+        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+
+        System.out.printf("Network: %d nodes, %d links. CH: %d total edges (%.1fx overhead)%n",
+                network.getNodes().size(), network.getLinks().size(),
+                chGraph.totalEdgeCount, (double) chGraph.totalEdgeCount / baseGraph.linkCount);
+
+        SpeedyCHLeastCostPathTree chTree = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        LeastCostPathTree dijkstraTree = new LeastCostPathTree(baseGraph, tc, tc);
+
+        List<Link> linkList = new ArrayList<>(network.getLinks().values());
+
+        int numQueries = 200;
+        int warmup = 50;
+
+        // Test multiple maxTravelTime values
+        for (double maxTravelTime : new double[]{30, 60, 120, 300, 600}) {
+            Random rng;
+
+            // Warm up
+            rng = new Random(42);
+            for (int i = 0; i < warmup; i++) {
+                Link srcLink = linkList.get(rng.nextInt(linkList.size()));
+                LeastCostPathTree.StopCriterion sc1 = new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTime);
+                LeastCostPathTree.StopCriterion sc2 = new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTime);
+                boolean forward = rng.nextBoolean();
+                if (forward) {
+                    chTree.calculate(srcLink, 8.0 * 3600, null, null, sc1);
+                    dijkstraTree.calculate(srcLink, 8.0 * 3600, null, null, sc2);
+                } else {
+                    chTree.calculateBackwards(srcLink, 8.0 * 3600, null, null, sc1);
+                    dijkstraTree.calculateBackwards(srcLink, 8.0 * 3600, null, null, sc2);
+                }
+            }
+
+            // Benchmark CH tree
+            rng = new Random(123);
+            long chStart = System.nanoTime();
+            for (int i = 0; i < numQueries; i++) {
+                Link srcLink = linkList.get(rng.nextInt(linkList.size()));
+                LeastCostPathTree.StopCriterion sc = new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTime);
+                boolean forward = rng.nextBoolean();
+                if (forward) {
+                    chTree.calculate(srcLink, 8.0 * 3600, null, null, sc);
+                } else {
+                    chTree.calculateBackwards(srcLink, 8.0 * 3600, null, null, sc);
+                }
+            }
+            long chTime = System.nanoTime() - chStart;
+
+            // Benchmark Dijkstra tree
+            rng = new Random(123);
+            long dijStart = System.nanoTime();
+            for (int i = 0; i < numQueries; i++) {
+                Link srcLink = linkList.get(rng.nextInt(linkList.size()));
+                LeastCostPathTree.StopCriterion sc = new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTime);
+                boolean forward = rng.nextBoolean();
+                if (forward) {
+                    dijkstraTree.calculate(srcLink, 8.0 * 3600, null, null, sc);
+                } else {
+                    dijkstraTree.calculateBackwards(srcLink, 8.0 * 3600, null, null, sc);
+                }
+            }
+            long dijTime = System.nanoTime() - dijStart;
+
+            double chAvgMs = (chTime / 1_000_000.0) / numQueries;
+            double dijAvgMs = (dijTime / 1_000_000.0) / numQueries;
+            double speedup = dijAvgMs / chAvgMs;
+
+            System.out.printf("  maxTT=%4.0fs  CH=%.3f ms  Dijkstra=%.3f ms  speedup=%.2fx%n",
+                    maxTravelTime, chAvgMs, dijAvgMs, speedup);
+        }
+
+        // Verify correctness at 120s
+        Random rng2 = new Random(999);
+        int mismatches = 0;
+        double verifyMaxTT = 120.0;
+        for (int i = 0; i < 50; i++) {
+            Link srcLink = linkList.get(rng2.nextInt(linkList.size()));
+            LeastCostPathTree.StopCriterion sc1 = new LeastCostPathTree.TravelTimeStopCriterion(verifyMaxTT);
+            LeastCostPathTree.StopCriterion sc2 = new LeastCostPathTree.TravelTimeStopCriterion(verifyMaxTT);
+            double startTime = 8.0 * 3600;
+
+            chTree.calculate(srcLink, startTime, null, null, sc1);
+            dijkstraTree.calculate(srcLink, startTime, null, null, sc2);
+
+            for (int t = 0; t < 20; t++) {
+                Link tgtLink = linkList.get(rng2.nextInt(linkList.size()));
+                int tgtIdx = tgtLink.getFromNode().getId().index();
+
+                OptionalTime chTimeOpt = chTree.getTime(tgtIdx);
+                OptionalTime dijTimeOpt = dijkstraTree.getTime(tgtIdx);
+
+                if (dijTimeOpt.isDefined()) {
+                    double dijTT = dijTimeOpt.seconds() - startTime;
+                    if (dijTT <= verifyMaxTT) {
+                        if (chTimeOpt.isUndefined()) {
+                            mismatches++;
+                        } else {
+                            double chTT = chTimeOpt.seconds() - startTime;
+                            if (Math.abs(chTT - dijTT) > COST_TOLERANCE) {
+                                mismatches++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Assertions.assertEquals(0, mismatches,
+                mismatches + " mismatches in benchmark correctness check");
+    }
 }

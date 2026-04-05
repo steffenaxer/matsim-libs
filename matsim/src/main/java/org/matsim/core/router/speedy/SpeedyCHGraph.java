@@ -99,6 +99,24 @@ public class SpeedyCHGraph {
     // Used for the downward sweep in CH one-to-all search.
     final int[] sweepOrder;
 
+    // --- Reverse CSR for push-based Phase 2 sweep ---
+    //
+    // dnOutOff/dnOutLen/dnOutEdges: for each node u, its OUTGOING downward edges
+    // (u→w where rank(u) > rank(w)).  This is the reverse of dnEdges (which stores
+    // incoming downward edges per node w).  Used by forward Phase 2 to push costs
+    // from settled nodes to lower-ranked successors.
+    final int[] dnOutOff;
+    final int[] dnOutLen;
+    final int[] dnOutEdges;     // E_STRIDE ints per edge: [targetNode, globalEdgeIdx]
+
+    // upInOff/upInLen/upInEdges: for each node u, its INCOMING upward edges
+    // (w→u where rank(w) < rank(u)).  This is the reverse of upEdges (which stores
+    // outgoing upward edges per node v).  Used by backward Phase 2 to push costs
+    // from settled nodes to lower-ranked predecessors.
+    final int[] upInOff;
+    final int[] upInLen;
+    final int[] upInEdges;      // E_STRIDE ints per edge: [sourceNode, globalEdgeIdx]
+
     private final SpeedyGraph baseGraph;
 
     SpeedyCHGraph(SpeedyGraph baseGraph, int nodeCount,
@@ -144,6 +162,80 @@ public class SpeedyCHGraph {
         this.minTTF = new double[totalEdgeCount];
         this.ttfHash = new double[totalEdgeCount];
         java.util.Arrays.fill(this.ttfHash, Double.NaN);
+
+        // Build reverse CSR: dnOutEdges (reverse of dnEdges).
+        // dnEdges[w] stores incoming edges u→w.  dnOutEdges[u] stores outgoing edges u→w.
+        this.dnOutOff = new int[nodeCount];
+        this.dnOutLen = new int[nodeCount];
+        // Pass 1: count outgoing dn-edges per source node u
+        for (int w = 0; w < nodeCount; w++) {
+            int dOff = dnOff[w];
+            int dEnd = dOff + dnLen[w];
+            for (int slot = dOff; slot < dEnd; slot++) {
+                int u = dnEdges[slot * E_STRIDE + E_NODE];
+                dnOutLen[u]++;
+            }
+        }
+        // Compute offsets (prefix sum)
+        int runSum = 0;
+        for (int u = 0; u < nodeCount; u++) {
+            dnOutOff[u] = runSum;
+            runSum += dnOutLen[u];
+        }
+        // Pass 2: fill reverse CSR
+        this.dnOutEdges = new int[runSum * E_STRIDE];
+        int[] cursor = new int[nodeCount];
+        for (int w = 0; w < nodeCount; w++) {
+            int dOff = dnOff[w];
+            int dEnd = dOff + dnLen[w];
+            for (int slot = dOff; slot < dEnd; slot++) {
+                int eBase = slot * E_STRIDE;
+                int u    = dnEdges[eBase + E_NODE];
+                int gIdx = dnEdges[eBase + E_GIDX];
+                int outSlot = dnOutOff[u] + cursor[u];
+                int outBase = outSlot * E_STRIDE;
+                dnOutEdges[outBase + E_NODE] = w;
+                dnOutEdges[outBase + E_GIDX] = gIdx;
+                cursor[u]++;
+            }
+        }
+
+        // Build reverse CSR: upInEdges (reverse of upEdges).
+        // upEdges[v] stores outgoing edges v→w.  upInEdges[w] stores incoming edges v→w.
+        this.upInOff = new int[nodeCount];
+        this.upInLen = new int[nodeCount];
+        // Pass 1: count incoming up-edges per target node w
+        for (int v = 0; v < nodeCount; v++) {
+            int uOff = upOff[v];
+            int uEnd = uOff + upLen[v];
+            for (int slot = uOff; slot < uEnd; slot++) {
+                int w = upEdges[slot * E_STRIDE + E_NODE];
+                upInLen[w]++;
+            }
+        }
+        // Compute offsets
+        runSum = 0;
+        for (int w = 0; w < nodeCount; w++) {
+            upInOff[w] = runSum;
+            runSum += upInLen[w];
+        }
+        // Pass 2: fill reverse CSR
+        this.upInEdges = new int[runSum * E_STRIDE];
+        java.util.Arrays.fill(cursor, 0);
+        for (int v = 0; v < nodeCount; v++) {
+            int uOff = upOff[v];
+            int uEnd = uOff + upLen[v];
+            for (int slot = uOff; slot < uEnd; slot++) {
+                int eBase = slot * E_STRIDE;
+                int w    = upEdges[eBase + E_NODE];
+                int gIdx = upEdges[eBase + E_GIDX];
+                int inSlot = upInOff[w] + cursor[w];
+                int inBase = inSlot * E_STRIDE;
+                upInEdges[inBase + E_NODE] = v;
+                upInEdges[inBase + E_GIDX] = gIdx;
+                cursor[w]++;
+            }
+        }
     }
 
     SpeedyGraph getBaseGraph() {
