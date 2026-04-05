@@ -80,16 +80,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
     private final double[] dnOutWeights;   // colocated minTTF per dnOut slot
     private final int[] upInOff, upInLen, upInEdges;
     private final double[] upInWeights;    // colocated minTTF per upIn slot
-    private final int[] nodeLevel;
     private final int nodeCount;
-
-    // Phase 1 settled-node tracking (for lazy Phase 2)
-    private final int[] settledNodes;
-    private int settledCount;
-
-    // Sweep iteration counter (to detect nodes in sweep PQ without per-query O(N) reset)
-    private final int[] sweepIds;
-    private int sweepIteration = Integer.MIN_VALUE;
 
     public SpeedyCHLeastCostPathTree(SpeedyCHGraph chGraph, TravelTime tt, TravelDisutility td) {
         this.chGraph = chGraph;
@@ -125,12 +116,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
         this.upInLen = chGraph.upInLen;
         this.upInEdges = chGraph.upInEdges;
         this.upInWeights = chGraph.upInWeights;
-        this.nodeLevel = chGraph.nodeLevel;
         this.nodeCount = n;
-
-        // Phase 2 optimization state
-        this.settledNodes = new int[n];
-        this.sweepIds = new int[n];
     }
 
     // -------------------------------------------------------------------------
@@ -162,21 +148,20 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
         setNode(startNode, 0.0, startTime, 0.0, -1, -1);
         pq.clear();
         pq.insert(startNode, 0.0);
-        settledCount = 0;
+
+        // Track the cost at which Phase 1 terminates.  All unsettled nodes
+        // have cost ≥ this value (Dijkstra monotonicity), so the sweep only
+        // needs to propagate from nodes with cost < earlyTermCost.
+        double earlyTermCost = Double.POSITIVE_INFINITY;
 
         while (!pq.isEmpty()) {
             int v = pq.poll();
-            settledNodes[settledCount++] = v;
             double cost = getCost(v);
             double arr = getTimeRaw(v);
 
-            // Early termination: safe because nodes are polled in increasing
-            // cost order (standard Dijkstra).  Remaining PQ nodes have cost ≥
-            // this node's cost, so any path through them cannot improve targets
-            // with cost ≤ this node's cost.  Phase 2 still runs unconditionally
-            // to finalize costs from already-settled nodes.
             if (stopCriterion.stop(baseGraph.getNode(v).getId().index(),
                     arr, cost, getDistance(v), startTime)) {
+                earlyTermCost = cost;
                 break;
             }
 
@@ -209,90 +194,54 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
             }
         }
 
-        // Phase 2: Downward propagation from settled nodes.
-        // If Phase 1 drained the PQ completely (no early termination), the full
-        // linear sweep is faster (O(N+E) without heap overhead).  If Phase 1
-        // terminated early (PQ not empty), only settled nodes and their transitive
-        // downward successors need processing — use a heap-based push approach
-        // that is proportional to the reachable set, not the total graph.
-        boolean earlyTerminated = !pq.isEmpty();
-        if (earlyTerminated) {
-            forwardSweepLazy(S, NUM_BINS, INV_BIN);
-        } else {
-            forwardSweepFull(S, NUM_BINS, INV_BIN);
-        }
+        // Phase 2: Downward propagation.
+        // Always use the linear push-based sweep with cost-bounded pruning.
+        // The linear scan of sweepOrder (decreasing rank) with push semantics
+        // is both simpler and faster than the heap-based lazy approach:
+        //   - No heap overhead (O(1) per node instead of O(log n))
+        //   - Cost-bounded pruning skips nodes/edges beyond earlyTermCost
+        //   - Sequential memory access on sweepOrder (cache-friendly)
+        forwardSweepLinear(S, earlyTermCost);
     }
 
     /**
-     * Full downward sweep: processes ALL nodes in decreasing rank order.
-     * Used when Phase 1 explored the entire reachable graph.
+     * Cost-bounded linear push sweep: processes all nodes in decreasing rank
+     * order (via sweepOrder), pushing costs from visited nodes to lower-ranked
+     * successors via the reverse CSR (dnOutEdges).
      *
-     * <p>Uses minTTF (minimum travel time per edge) instead of the full
-     * time-dependent TTF array for cache efficiency.  The minTTF array
-     * (~1 MB) fits in L2 cache, whereas the full TTF (~90 MB for 96 bins)
-     * causes severe cache thrashing.  This is consistent with the backward
-     * search which also uses minTTF.
-     */
-    private void forwardSweepFull(int S, int NUM_BINS, double INV_BIN) {
-        for (int i = 0; i < sweepOrder.length; i++) {
-            int w = sweepOrder[i];
-
-            int dOff = dnOff[w];
-            int dEnd = dOff + dnLen[w];
-            for (int slot = dOff; slot < dEnd; slot++) {
-                int eBase = slot * S;
-                int u = dnEdges[eBase];
-
-                if (iterIds[u] != currentIteration) continue;
-
-                double uCost = getCost(u);
-                double uArr = getTimeRaw(u);
-
-                // Use colocated dnWeights (= minTTF, populated by customizer).
-                // This reads from the same cache region as dnEdges, avoiding
-                // the random-access TTF array (~90 MB) that causes cache thrashing.
-                double tTime = dnWeights[slot];
-
-                double newCost = uCost + tTime;
-                double newArr = uArr + tTime;
-
-                double wCost = (iterIds[w] == currentIteration)
-                        ? getCost(w) : Double.POSITIVE_INFINITY;
-
-                if (newCost < wCost) {
-                    setNode(w, newCost, newArr, 0.0, u, dnEdges[eBase + SpeedyCHGraph.E_GIDX]);
-                }
-            }
-        }
-    }
-
-    /**
-     * Lazy downward sweep: pushes costs from settled nodes to lower-ranked
-     * successors via the reverse CSR (dnOutEdges).  Only processes nodes
-     * reachable from Phase 1 settled nodes — proportional to the reachable
-     * set rather than the total graph.  Ordering by decreasing rank ensures
-     * that when a node is polled, all its higher-ranked predecessors have
-     * been finalized.
+     * <p>Key optimizations over the previous heap-based lazy sweep:
+     * <ul>
+     *   <li><b>No heap overhead</b>: O(1) per node (array iteration) instead of
+     *       O(log n) heap insert/poll.  The linear scan of sweepOrder is extremely
+     *       cache-friendly.</li>
+     *   <li><b>Cost-bounded pruning</b>: nodes with cost ≥ maxCost are skipped,
+     *       preventing propagation beyond the query's time bound.  For bounded
+     *       DRT queries (maxTT=120-300s), this prunes the vast majority of the
+     *       sweep, making it proportional to the reachable set.</li>
+     *   <li><b>Uses minTTF</b>: colocated dnOutWeights for cache locality.</li>
+     * </ul>
      *
-     * <p>Uses minTTF for cache efficiency (see {@link #forwardSweepFull}).
+     * @param S       edge stride (SpeedyCHGraph.E_STRIDE)
+     * @param maxCost upper bound on useful cost (Phase 1 termination cost);
+     *                Double.POSITIVE_INFINITY for unbounded queries
      */
-    private void forwardSweepLazy(int S, int NUM_BINS, double INV_BIN) {
-        advanceSweepIteration();
-        pq.clear();
+    private void forwardSweepLinear(int S, double maxCost) {
+        final int[] order = sweepOrder;
+        final int n = order.length;
+        final int iter = currentIteration;
 
-        // Seed the sweep heap with all Phase 1 settled nodes.
-        // Key = nodeCount - nodeLevel[node]: min-heap delivers highest rank first.
-        for (int i = 0; i < settledCount; i++) {
-            int node = settledNodes[i];
-            pq.insert(node, nodeCount - nodeLevel[node]);
-            sweepIds[node] = sweepIteration;
-        }
+        for (int i = 0; i < n; i++) {
+            int u = order[i];
 
-        while (!pq.isEmpty()) {
-            int u = pq.poll();
+            // Skip nodes not visited (neither settled in Phase 1 nor reached by sweep)
+            if (iterIds[u] != iter) continue;
 
-            double uCost = getCost(u);
-            double uArr = getTimeRaw(u);
+            double uCost = data[u * 3];         // getCost(u) inlined
+            // Cost pruning: if this node's cost ≥ the bound, every path through
+            // it also exceeds the bound → skip propagation.
+            if (uCost >= maxCost) continue;
+
+            double uArr = data[u * 3 + 1];      // getTimeRaw(u) inlined
 
             // Push costs along u's outgoing downward edges (u→w, rank(w) < rank(u))
             int dOff = dnOutOff[u];
@@ -301,23 +250,25 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
                 int eBase = slot * S;
                 int w = dnOutEdges[eBase];
 
-                // Colocated weight (minTTF) — same cache line as edge data
+                // Colocated weight (minTTF) — same cache region as edge data
                 double tTime = dnOutWeights[slot];
                 double newCost = uCost + tTime;
-                double newArr = uArr + tTime;
 
-                double wCost = (iterIds[w] == currentIteration)
-                        ? getCost(w) : Double.POSITIVE_INFINITY;
+                // Edge-level pruning: skip if result exceeds bound
+                if (newCost >= maxCost) continue;
+
+                int wBase = w * 3;
+                double wCost = (iterIds[w] == iter)
+                        ? data[wBase] : Double.POSITIVE_INFINITY;
 
                 if (newCost < wCost) {
-                    setNode(w, newCost, newArr, 0.0, u,
-                            dnOutEdges[eBase + SpeedyCHGraph.E_GIDX]);
-
-                    // Add w to sweep heap if not already there
-                    if (sweepIds[w] != sweepIteration) {
-                        sweepIds[w] = sweepIteration;
-                        pq.insert(w, nodeCount - nodeLevel[w]);
-                    }
+                    // setNode inlined for hot-path performance
+                    data[wBase] = newCost;
+                    data[wBase + 1] = uArr + tTime;
+                    data[wBase + 2] = 0.0;
+                    comingFrom[w] = u;
+                    fromEdgeGIdx[w] = dnOutEdges[eBase + SpeedyCHGraph.E_GIDX];
+                    iterIds[w] = iter;
                 }
             }
         }
@@ -348,17 +299,17 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
         setNode(targetNode, 0.0, arrivalTime, 0.0, -1, -1);
         pq.clear();
         pq.insert(targetNode, 0.0);
-        settledCount = 0;
+
+        // Track the cost at which Phase 1 terminates (for sweep pruning).
+        double earlyTermCost = Double.POSITIVE_INFINITY;
 
         while (!pq.isEmpty()) {
             int w = pq.poll();
-            settledNodes[settledCount++] = w;
             double cost = getCost(w);
 
-            // Early termination: safe because backward Dijkstra also polls
-            // in increasing cost order.  See calculateForward for rationale.
             if (stopCriterion.stop(baseGraph.getNode(w).getId().index(),
                     arrivalTime, cost, getDistance(w), getTimeRaw(w))) {
+                earlyTermCost = cost;
                 break;
             }
 
@@ -386,86 +337,57 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
             }
         }
 
-        // Phase 2: Downward propagation.
-        // Same strategy as forward: use lazy sweep when Phase 1 terminated early.
-        boolean earlyTerminated = !pq.isEmpty();
-        if (earlyTerminated) {
-            backwardSweepLazy(S);
-        } else {
-            backwardSweepFull(S);
-        }
+        // Phase 2: Cost-bounded linear push sweep.
+        backwardSweepLinear(S, earlyTermCost);
     }
 
     /**
-     * Full backward downward sweep: processes ALL nodes in decreasing rank order.
+     * Cost-bounded linear push sweep for backward search.
+     * Pushes costs from visited nodes to lower-ranked predecessors via the
+     * reverse CSR (upInEdges).  Uses minTTF colocated weights.
+     *
+     * @param S       edge stride
+     * @param maxCost upper bound on useful cost
      */
-    private void backwardSweepFull(int S) {
-        for (int i = 0; i < sweepOrder.length; i++) {
-            int w = sweepOrder[i];
+    private void backwardSweepLinear(int S, double maxCost) {
+        final int[] order = sweepOrder;
+        final int n = order.length;
+        final int iter = currentIteration;
 
-            int uOff = upOff[w];
-            int uEnd = uOff + upLen[w];
+        for (int i = 0; i < n; i++) {
+            int u = order[i];
 
-            double wCost = (iterIds[w] == currentIteration) ? getCost(w) : Double.POSITIVE_INFINITY;
+            if (iterIds[u] != iter) continue;
 
-            for (int slot = uOff; slot < uEnd; slot++) {
-                int eBase = slot * S;
-                int u = upEdges[eBase]; // higher-ranked toNode
-                int gIdx = upEdges[eBase + SpeedyCHGraph.E_GIDX];
+            double uCost = data[u * 3];         // getCost(u) inlined
+            if (uCost >= maxCost) continue;      // cost-bounded pruning
 
-                if (iterIds[u] != currentIteration) continue;
+            double uTime = data[u * 3 + 1];     // getTimeRaw(u) inlined
 
-                double edgeCost = chGraph.minTTF[gIdx];
-                double newCost = getCost(u) + edgeCost;
-
-                if (newCost < wCost) {
-                    wCost = newCost;
-                    double newTime = getTimeRaw(u) - edgeCost;
-                    setNode(w, newCost, newTime, 0.0, u, gIdx);
-                }
-            }
-        }
-    }
-
-    /**
-     * Lazy backward downward sweep: pushes costs from settled nodes to
-     * lower-ranked predecessors via the reverse CSR (upInEdges).
-     */
-    private void backwardSweepLazy(int S) {
-        advanceSweepIteration();
-        pq.clear();
-
-        for (int i = 0; i < settledCount; i++) {
-            int node = settledNodes[i];
-            pq.insert(node, nodeCount - nodeLevel[node]);
-            sweepIds[node] = sweepIteration;
-        }
-
-        while (!pq.isEmpty()) {
-            int u = pq.poll();
-
-            // Push cost from u back to lower-ranked w via incoming up-edges (w->u).
+            // Push cost from u back to lower-ranked w via incoming up-edges (w→u)
             int iOff = upInOff[u];
             int iEnd = iOff + upInLen[u];
             for (int slot = iOff; slot < iEnd; slot++) {
                 int eBase = slot * S;
                 int w = upInEdges[eBase];       // lower-ranked source
 
-                // Colocated weight (minTTF) — same cache line as edge data
                 double edgeCost = upInWeights[slot];
-                double newCost = getCost(u) + edgeCost;
+                double newCost = uCost + edgeCost;
 
-                double wCost = (iterIds[w] == currentIteration) ? getCost(w) : Double.POSITIVE_INFINITY;
+                if (newCost >= maxCost) continue; // edge-level pruning
+
+                int wBase = w * 3;
+                double wCost = (iterIds[w] == iter)
+                        ? data[wBase] : Double.POSITIVE_INFINITY;
 
                 if (newCost < wCost) {
-                    double newTime = getTimeRaw(u) - edgeCost;
-                    setNode(w, newCost, newTime, 0.0, u,
-                            upInEdges[eBase + SpeedyCHGraph.E_GIDX]);
-
-                    if (sweepIds[w] != sweepIteration) {
-                        sweepIds[w] = sweepIteration;
-                        pq.insert(w, nodeCount - nodeLevel[w]);
-                    }
+                    // setNode inlined
+                    data[wBase] = newCost;
+                    data[wBase + 1] = uTime - edgeCost;
+                    data[wBase + 2] = 0.0;
+                    comingFrom[w] = u;
+                    fromEdgeGIdx[w] = upInEdges[eBase + SpeedyCHGraph.E_GIDX];
+                    iterIds[w] = iter;
                 }
             }
         }
@@ -521,14 +443,6 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
         if (currentIteration == Integer.MAX_VALUE) {
             Arrays.fill(iterIds, Integer.MIN_VALUE);
             currentIteration = Integer.MIN_VALUE + 1;
-        }
-    }
-
-    private void advanceSweepIteration() {
-        sweepIteration++;
-        if (sweepIteration == Integer.MAX_VALUE) {
-            Arrays.fill(sweepIds, Integer.MIN_VALUE);
-            sweepIteration = Integer.MIN_VALUE + 1;
         }
     }
 
