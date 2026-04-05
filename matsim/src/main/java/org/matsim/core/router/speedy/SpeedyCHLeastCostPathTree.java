@@ -136,6 +136,16 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
             double cost = getCost(v);
             double arr = getTimeRaw(v);
 
+            // Early termination: safe because nodes are polled in increasing
+            // cost order (standard Dijkstra).  Remaining PQ nodes have cost ≥
+            // this node's cost, so any path through them cannot improve targets
+            // with cost ≤ this node's cost.  Phase 2 still runs unconditionally
+            // to finalize costs from already-settled nodes.
+            if (stopCriterion.stop(baseGraph.getNode(v).getId().index(),
+                    arr, cost, getDistance(v), startTime)) {
+                break;
+            }
+
             // Compute time bin for TTF lookup
             int bin = ((int) (arr * INV_BIN)) % NUM_BINS;
             if (bin < 0) bin += NUM_BINS;
@@ -229,6 +239,13 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
         while (!pq.isEmpty()) {
             int w = pq.poll();
             double cost = getCost(w);
+
+            // Early termination: safe because backward Dijkstra also polls
+            // in increasing cost order.  See calculateForward for rationale.
+            if (stopCriterion.stop(baseGraph.getNode(w).getId().index(),
+                    arrivalTime, cost, getDistance(w), getTimeRaw(w))) {
+                break;
+            }
 
             int dOff = dnOff[w];
             int dEnd = dOff + dnLen[w];

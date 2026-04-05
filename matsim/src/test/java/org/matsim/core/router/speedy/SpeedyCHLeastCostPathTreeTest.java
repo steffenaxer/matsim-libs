@@ -276,4 +276,452 @@ public class SpeedyCHLeastCostPathTreeTest {
         bwd.setNumberOfLanes(1);
         network.addLink(bwd);
     }
+
+    // =========================================================================
+    // StopCriterion tests — verify that early termination produces the same
+    // costs as the full (unrestricted) search for all nodes within the limit.
+    // =========================================================================
+
+    /**
+     * Forward search with TravelTimeStopCriterion: all nodes within the travel
+     * time limit must have the same cost as an unrestricted full search.
+     */
+    @Test
+    void testForwardWithMaxTravelTimeBerlinNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork()).readFile("test/scenarios/berlin/network.xml.gz");
+        runForwardStopCriterionTest(scenario.getNetwork(), 600.0); // 10 min limit
+    }
+
+    @Test
+    void testForwardWithMaxTravelTimeGrid() {
+        runForwardStopCriterionTest(buildGridNetwork(15), 500.0);
+    }
+
+    /**
+     * Backward search with TravelTimeStopCriterion.
+     */
+    @Test
+    void testBackwardWithMaxTravelTimeBerlinNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork()).readFile("test/scenarios/berlin/network.xml.gz");
+        runBackwardStopCriterionTest(scenario.getNetwork(), 600.0);
+    }
+
+    @Test
+    void testBackwardWithMaxTravelTimeGrid() {
+        runBackwardStopCriterionTest(buildGridNetwork(15), 500.0);
+    }
+
+    /**
+     * Forward search with allEndNodesReached StopCriterion: costs at the
+     * specified target nodes must match the unrestricted search.
+     */
+    @Test
+    void testForwardWithEndNodesReachedBerlinNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork()).readFile("test/scenarios/berlin/network.xml.gz");
+        runForwardEndNodesTest(scenario.getNetwork());
+    }
+
+    @Test
+    void testBackwardWithEndNodesReachedBerlinNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork()).readFile("test/scenarios/berlin/network.xml.gz");
+        runBackwardEndNodesTest(scenario.getNetwork());
+    }
+
+    // ---- StopCriterion test helpers ----
+
+    private void runForwardStopCriterionTest(Network network, double maxTravelTime) {
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(
+                new ScoringConfigGroup());
+
+        SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
+        InertialFlowCutter.NDOrderResult orderResult =
+                new InertialFlowCutter(baseGraph).computeOrderWithBatches();
+        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+
+        SpeedyCHLeastCostPathTree chTreeFull = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        SpeedyCHLeastCostPathTree chTreeBounded = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+
+        List<Link> linkList = new ArrayList<>(network.getLinks().values());
+        Random rng = new Random(42);
+
+        LeastCostPathTree.StopCriterion criterion =
+                new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTime);
+
+        int mismatches = 0;
+        int comparisons = 0;
+
+        for (int s = 0; s < 10; s++) {
+            Link srcLink = linkList.get(rng.nextInt(linkList.size()));
+            double startTime = 8.0 * 3600;
+
+            chTreeFull.calculate(srcLink, startTime, null, null);
+            chTreeBounded.calculate(srcLink, startTime, null, null, criterion);
+
+            for (int t = 0; t < 100; t++) {
+                Link tgtLink = linkList.get(rng.nextInt(linkList.size()));
+                int tgtIdx = tgtLink.getFromNode().getId().index();
+
+                OptionalTime fullTime = chTreeFull.getTime(tgtIdx);
+                if (fullTime.isUndefined()) continue;
+
+                double fullTT = fullTime.seconds() - startTime;
+                if (fullTT > maxTravelTime) continue; // beyond limit — don't check
+
+                OptionalTime boundedTime = chTreeBounded.getTime(tgtIdx);
+                comparisons++;
+
+                if (boundedTime.isUndefined()) {
+                    mismatches++;
+                    System.err.printf("FWD STOP-CRITERION MISMATCH src=%s tgt=%s: bounded=unreachable full=%.6f%n",
+                            srcLink.getId(), tgtLink.getId(), fullTT);
+                    continue;
+                }
+
+                double boundedTT = boundedTime.seconds() - startTime;
+                if (Math.abs(fullTT - boundedTT) > COST_TOLERANCE) {
+                    mismatches++;
+                    System.err.printf("FWD STOP-CRITERION MISMATCH src=%s tgt=%s: bounded=%.6f full=%.6f%n",
+                            srcLink.getId(), tgtLink.getId(), boundedTT, fullTT);
+                }
+            }
+        }
+
+        Assertions.assertEquals(0, mismatches,
+                mismatches + " forward stop-criterion mismatches out of " + comparisons);
+    }
+
+    private void runBackwardStopCriterionTest(Network network, double maxTravelTime) {
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(
+                new ScoringConfigGroup());
+
+        SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
+        InertialFlowCutter.NDOrderResult orderResult =
+                new InertialFlowCutter(baseGraph).computeOrderWithBatches();
+        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+
+        SpeedyCHLeastCostPathTree chTreeFull = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        SpeedyCHLeastCostPathTree chTreeBounded = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+
+        List<Link> linkList = new ArrayList<>(network.getLinks().values());
+        Random rng = new Random(42);
+
+        LeastCostPathTree.StopCriterion criterion =
+                new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTime);
+
+        int mismatches = 0;
+        int comparisons = 0;
+
+        for (int s = 0; s < 10; s++) {
+            Link arrLink = linkList.get(rng.nextInt(linkList.size()));
+            double arrivalTime = 8.0 * 3600;
+
+            chTreeFull.calculateBackwards(arrLink, arrivalTime, null, null);
+            chTreeBounded.calculateBackwards(arrLink, arrivalTime, null, null, criterion);
+
+            for (int t = 0; t < 100; t++) {
+                Link srcLink = linkList.get(rng.nextInt(linkList.size()));
+                int srcIdx = srcLink.getToNode().getId().index();
+
+                OptionalTime fullTime = chTreeFull.getTime(srcIdx);
+                if (fullTime.isUndefined()) continue;
+
+                double fullTT = arrivalTime - fullTime.seconds();
+                if (fullTT > maxTravelTime) continue;
+
+                OptionalTime boundedTime = chTreeBounded.getTime(srcIdx);
+                comparisons++;
+
+                if (boundedTime.isUndefined()) {
+                    mismatches++;
+                    System.err.printf("BWD STOP-CRITERION MISMATCH arr=%s src=%s: bounded=unreachable full=%.6f%n",
+                            arrLink.getId(), srcLink.getId(), fullTT);
+                    continue;
+                }
+
+                double boundedTT = arrivalTime - boundedTime.seconds();
+                if (Math.abs(fullTT - boundedTT) > COST_TOLERANCE) {
+                    mismatches++;
+                    System.err.printf("BWD STOP-CRITERION MISMATCH arr=%s src=%s: bounded=%.6f full=%.6f%n",
+                            arrLink.getId(), srcLink.getId(), boundedTT, fullTT);
+                }
+            }
+        }
+
+        Assertions.assertEquals(0, mismatches,
+                mismatches + " backward stop-criterion mismatches out of " + comparisons);
+    }
+
+    private void runForwardEndNodesTest(Network network) {
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(
+                new ScoringConfigGroup());
+
+        SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
+        InertialFlowCutter.NDOrderResult orderResult =
+                new InertialFlowCutter(baseGraph).computeOrderWithBatches();
+        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+
+        SpeedyCHLeastCostPathTree chTreeFull = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        SpeedyCHLeastCostPathTree chTreeBounded = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+
+        // Also compare against Dijkstra
+        LeastCostPathTree dijkstraTree = new LeastCostPathTree(baseGraph, tc, tc);
+
+        List<Link> linkList = new ArrayList<>(network.getLinks().values());
+        Random rng = new Random(42);
+
+        int mismatches = 0;
+        int comparisons = 0;
+
+        for (int s = 0; s < 10; s++) {
+            Link srcLink = linkList.get(rng.nextInt(linkList.size()));
+            double startTime = 8.0 * 3600;
+
+            // Pick 5-10 random target nodes
+            int numTargets = 5 + rng.nextInt(6);
+            List<Node> targetNodes = new ArrayList<>();
+            for (int t = 0; t < numTargets; t++) {
+                Link tgtLink = linkList.get(rng.nextInt(linkList.size()));
+                targetNodes.add(tgtLink.getFromNode());
+            }
+
+            // Build allEndNodesReached criterion (fresh per source — stateful!)
+            LeastCostPathTree.StopCriterion criterion =
+                    allEndNodesReachedCriterion(targetNodes);
+
+            chTreeFull.calculate(srcLink, startTime, null, null);
+            chTreeBounded.calculate(srcLink, startTime, null, null, criterion);
+
+            for (Node tgtNode : targetNodes) {
+                int tgtIdx = tgtNode.getId().index();
+                OptionalTime fullTime = chTreeFull.getTime(tgtIdx);
+                OptionalTime boundedTime = chTreeBounded.getTime(tgtIdx);
+                comparisons++;
+
+                if (fullTime.isUndefined() && boundedTime.isUndefined()) continue;
+
+                if (fullTime.isDefined() && boundedTime.isUndefined()) {
+                    mismatches++;
+                    continue;
+                }
+
+                if (fullTime.isDefined() && boundedTime.isDefined()) {
+                    double fullTT = fullTime.seconds() - startTime;
+                    double boundedTT = boundedTime.seconds() - startTime;
+                    if (Math.abs(fullTT - boundedTT) > COST_TOLERANCE) {
+                        mismatches++;
+                    }
+                }
+            }
+        }
+
+        Assertions.assertEquals(0, mismatches,
+                mismatches + " forward endNodesReached mismatches out of " + comparisons);
+    }
+
+    private void runBackwardEndNodesTest(Network network) {
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(
+                new ScoringConfigGroup());
+
+        SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
+        InertialFlowCutter.NDOrderResult orderResult =
+                new InertialFlowCutter(baseGraph).computeOrderWithBatches();
+        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+
+        SpeedyCHLeastCostPathTree chTreeFull = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        SpeedyCHLeastCostPathTree chTreeBounded = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+
+        List<Link> linkList = new ArrayList<>(network.getLinks().values());
+        Random rng = new Random(42);
+
+        int mismatches = 0;
+        int comparisons = 0;
+
+        for (int s = 0; s < 10; s++) {
+            Link arrLink = linkList.get(rng.nextInt(linkList.size()));
+            double arrivalTime = 8.0 * 3600;
+
+            int numTargets = 5 + rng.nextInt(6);
+            List<Node> targetNodes = new ArrayList<>();
+            for (int t = 0; t < numTargets; t++) {
+                Link srcLink = linkList.get(rng.nextInt(linkList.size()));
+                targetNodes.add(srcLink.getToNode());
+            }
+
+            LeastCostPathTree.StopCriterion criterion =
+                    allEndNodesReachedCriterion(targetNodes);
+
+            chTreeFull.calculateBackwards(arrLink, arrivalTime, null, null);
+            chTreeBounded.calculateBackwards(arrLink, arrivalTime, null, null, criterion);
+
+            for (Node srcNode : targetNodes) {
+                int srcIdx = srcNode.getId().index();
+                OptionalTime fullTime = chTreeFull.getTime(srcIdx);
+                OptionalTime boundedTime = chTreeBounded.getTime(srcIdx);
+                comparisons++;
+
+                if (fullTime.isUndefined() && boundedTime.isUndefined()) continue;
+
+                if (fullTime.isDefined() && boundedTime.isUndefined()) {
+                    mismatches++;
+                    continue;
+                }
+
+                if (fullTime.isDefined() && boundedTime.isDefined()) {
+                    double fullTT = arrivalTime - fullTime.seconds();
+                    double boundedTT = arrivalTime - boundedTime.seconds();
+                    if (Math.abs(fullTT - boundedTT) > COST_TOLERANCE) {
+                        mismatches++;
+                    }
+                }
+            }
+        }
+
+        Assertions.assertEquals(0, mismatches,
+                mismatches + " backward endNodesReached mismatches out of " + comparisons);
+    }
+
+    /**
+     * Creates a fresh allEndNodesReached criterion (the same logic used in
+     * {@link org.matsim.contrib.dvrp.path.LeastCostPathTreeStopCriteria}).
+     * Duplicated here to avoid a test dependency on the dvrp contrib.
+     */
+    private static LeastCostPathTree.StopCriterion allEndNodesReachedCriterion(
+            java.util.Collection<Node> endNodes) {
+        final java.util.BitSet toVisit = new java.util.BitSet(Id.getNumberOfIds(Node.class));
+        endNodes.forEach(n -> toVisit.set(n.getId().index()));
+        return new LeastCostPathTree.StopCriterion() {
+            private int remaining = toVisit.cardinality();
+            public boolean stop(int nodeIndex, double arrivalTime, double travelCost,
+                                double distance, double departureTime) {
+                if (toVisit.get(nodeIndex)) {
+                    remaining--;
+                    toVisit.clear(nodeIndex);
+                }
+                return remaining == 0;
+            }
+        };
+    }
+
+    // =========================================================================
+    // Thread-safety test — multiple threads query the SAME shared SpeedyCHGraph
+    // concurrently, each with its own SpeedyCHLeastCostPathTree instance.
+    // =========================================================================
+
+    /**
+     * Verifies that multiple threads can concurrently run shortest-path-tree
+     * queries on a SHARED {@link SpeedyCHGraph}. Each thread owns its own
+     * {@link SpeedyCHLeastCostPathTree} (mutable query state) but all share
+     * the same read-only CH overlay graph.
+     * <p>
+     * All results are compared against a single-threaded Dijkstra baseline.
+     */
+    @Test
+    void testConcurrentQueriesOnSharedCHGraph() throws Exception {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork()).readFile("test/scenarios/berlin/network.xml.gz");
+        Network network = scenario.getNetwork();
+
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(
+                new ScoringConfigGroup());
+
+        SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
+        InertialFlowCutter.NDOrderResult orderResult =
+                new InertialFlowCutter(baseGraph).computeOrderWithBatches();
+        SpeedyCHGraph sharedCHGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new SpeedyCHTTFCustomizer().customize(sharedCHGraph, tc, tc);
+
+        LeastCostPathTree dijkstraTree = new LeastCostPathTree(baseGraph, tc, tc);
+
+        List<Link> linkList = new ArrayList<>(network.getLinks().values());
+
+        int numThreads = 8;
+        int queriesPerThread = 30;
+        java.util.concurrent.CyclicBarrier barrier =
+                new java.util.concurrent.CyclicBarrier(numThreads);
+        java.util.concurrent.atomic.AtomicInteger failureCount =
+                new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.ExecutorService executor =
+                java.util.concurrent.Executors.newFixedThreadPool(numThreads);
+
+        List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+        for (int t = 0; t < numThreads; t++) {
+            final int threadId = t;
+            futures.add(executor.submit(() -> {
+                try {
+                    // Each thread creates its OWN tree sharing the graph
+                    SpeedyCHLeastCostPathTree chTree =
+                            new SpeedyCHLeastCostPathTree(sharedCHGraph, tc, tc);
+                    Random rng = new Random(42 + threadId);
+
+                    barrier.await(); // synchronize start
+
+                    for (int q = 0; q < queriesPerThread; q++) {
+                        Link srcLink = linkList.get(rng.nextInt(linkList.size()));
+                        double startTime = 6.0 * 3600 + rng.nextDouble() * 12 * 3600;
+                        boolean forward = rng.nextBoolean();
+
+                        if (forward) {
+                            chTree.calculate(srcLink, startTime, null, null);
+                        } else {
+                            chTree.calculateBackwards(srcLink, startTime, null, null);
+                        }
+
+                        // Verify a few random targets
+                        for (int i = 0; i < 5; i++) {
+                            Link tgtLink = linkList.get(rng.nextInt(linkList.size()));
+                            int tgtIdx = forward ?
+                                    tgtLink.getFromNode().getId().index() :
+                                    tgtLink.getToNode().getId().index();
+
+                            OptionalTime chTimeOpt = chTree.getTime(tgtIdx);
+
+                            // Compare against Dijkstra (synchronized — single instance)
+                            synchronized (dijkstraTree) {
+                                if (forward) {
+                                    dijkstraTree.calculate(srcLink, startTime, null, null);
+                                } else {
+                                    dijkstraTree.calculateBackwards(srcLink, startTime, null, null);
+                                }
+                                OptionalTime dijTimeOpt = dijkstraTree.getTime(tgtIdx);
+
+                                if (chTimeOpt.isDefined() && dijTimeOpt.isDefined()) {
+                                    double chTT = forward ?
+                                            (chTimeOpt.seconds() - startTime) :
+                                            (startTime - chTimeOpt.seconds());
+                                    double dijTT = forward ?
+                                            (dijTimeOpt.seconds() - startTime) :
+                                            (startTime - dijTimeOpt.seconds());
+                                    if (Math.abs(chTT - dijTT) > COST_TOLERANCE) {
+                                        failureCount.incrementAndGet();
+                                    }
+                                } else if (chTimeOpt.isDefined() != dijTimeOpt.isDefined()) {
+                                    // one reachable, other not
+                                    if (dijTimeOpt.isDefined() && chTimeOpt.isUndefined()) {
+                                        failureCount.incrementAndGet();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    failureCount.incrementAndGet();
+                    e.printStackTrace();
+                }
+            }));
+        }
+
+        for (var f : futures) f.get();
+        executor.shutdown();
+
+        Assertions.assertEquals(0, failureCount.get(),
+                "Concurrent CH queries should produce identical results to Dijkstra");
+    }
 }
