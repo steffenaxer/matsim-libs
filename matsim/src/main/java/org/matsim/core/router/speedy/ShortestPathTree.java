@@ -1,0 +1,66 @@
+package org.matsim.core.router.speedy;
+
+import org.matsim.api.core.v01.network.Link;
+import org.matsim.api.core.v01.network.Node;
+import org.matsim.api.core.v01.population.Person;
+import org.matsim.core.utils.misc.OptionalTime;
+import org.matsim.vehicles.Vehicle;
+
+import java.util.Iterator;
+
+/**
+ * Interface for shortest-path tree computations.  Both the Dijkstra-based
+ * {@link LeastCostPathTree} and the CH-based {@link SpeedyCHLeastCostPathTree}
+ * implement this interface, enabling DRT and other modules to benefit from
+ * CH-accelerated one-to-many path queries.
+ *
+ * @author Implementation for CCH/CATCHUp router
+ */
+public interface ShortestPathTree {
+
+    /**
+     * Compute shortest paths from the given start link to all reachable nodes.
+     */
+    void calculate(Link startLink, double startTime, Person person, Vehicle vehicle);
+
+    /**
+     * Compute shortest paths from the given start link, stopping when the
+     * criterion is satisfied.
+     */
+    void calculate(Link startLink, double startTime, Person person, Vehicle vehicle,
+                   LeastCostPathTree.StopCriterion stopCriterion);
+
+    /**
+     * Compute shortest paths to the given arrival link from all reachable nodes
+     * (backward tree).
+     */
+    void calculateBackwards(Link arrivalLink, double arrivalTime, Person person, Vehicle vehicle);
+
+    /**
+     * Compute shortest paths to the given arrival link, stopping when the
+     * criterion is satisfied.
+     */
+    void calculateBackwards(Link arrivalLink, double arrivalTime, Person person, Vehicle vehicle,
+                            LeastCostPathTree.StopCriterion stopCriterion);
+
+    /** Cost to reach the given node from the source (forward) or target (backward). */
+    double getCost(int nodeIndex);
+
+    /** Arrival/departure time at the given node, or undefined if not reached. */
+    OptionalTime getTime(int nodeIndex);
+
+    /** Accumulated distance to the given node. */
+    double getDistance(int nodeIndex);
+
+    /**
+     * Returns an iterator that walks the parent chain from the given node
+     * back to the search root, yielding nodes along the way.
+     */
+    Iterator<Node> getNodePathIterator(Node node);
+
+    /**
+     * Returns an iterator that walks the parent chain from the given node
+     * back to the search root, yielding links along the way.
+     */
+    Iterator<Link> getLinkPathIterator(Node node);
+}
