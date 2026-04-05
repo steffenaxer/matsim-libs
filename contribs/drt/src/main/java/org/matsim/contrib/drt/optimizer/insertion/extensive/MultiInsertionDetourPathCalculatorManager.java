@@ -93,9 +93,12 @@ public class MultiInsertionDetourPathCalculatorManager implements MobsimBeforeCl
 	}
 
 	/**
-	 * Composite cache key using identity equality for all three components.
-	 * Two managers sharing the same Network, TravelDisutility, and TravelTime
-	 * objects will produce equal keys and thus share the same CH graph.
+	 * Composite cache key using <em>reference equality</em> (not
+	 * {@code .equals()}) for all three components.  Two managers sharing
+	 * the same {@code Network}, {@code TravelDisutility}, and
+	 * {@code TravelTime} <b>object instances</b> will produce equal keys
+	 * and thus share the same CH graph.  Managers with structurally
+	 * identical but distinct objects will build separate CH graphs.
 	 */
 	private record CHCacheKey(Network network, TravelDisutility td, TravelTime tt) {}
 }

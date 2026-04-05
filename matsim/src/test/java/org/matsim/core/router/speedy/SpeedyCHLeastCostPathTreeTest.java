@@ -470,9 +470,6 @@ public class SpeedyCHLeastCostPathTreeTest {
         SpeedyCHLeastCostPathTree chTreeFull = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
         SpeedyCHLeastCostPathTree chTreeBounded = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
 
-        // Also compare against Dijkstra
-        LeastCostPathTree dijkstraTree = new LeastCostPathTree(baseGraph, tc, tc);
-
         List<Link> linkList = new ArrayList<>(network.getLinks().values());
         Random rng = new Random(42);
 
