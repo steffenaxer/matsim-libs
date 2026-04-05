@@ -77,7 +77,9 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
 
     // Reverse CSR arrays for push-based Phase 2 sweep
     private final int[] dnOutOff, dnOutLen, dnOutEdges;
+    private final double[] dnOutWeights;   // colocated minTTF per dnOut slot
     private final int[] upInOff, upInLen, upInEdges;
+    private final double[] upInWeights;    // colocated minTTF per upIn slot
     private final int[] nodeLevel;
     private final int nodeCount;
 
@@ -118,9 +120,11 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
         this.dnOutOff = chGraph.dnOutOff;
         this.dnOutLen = chGraph.dnOutLen;
         this.dnOutEdges = chGraph.dnOutEdges;
+        this.dnOutWeights = chGraph.dnOutWeights;
         this.upInOff = chGraph.upInOff;
         this.upInLen = chGraph.upInLen;
         this.upInEdges = chGraph.upInEdges;
+        this.upInWeights = chGraph.upInWeights;
         this.nodeLevel = chGraph.nodeLevel;
         this.nodeCount = n;
 
@@ -222,6 +226,12 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
     /**
      * Full downward sweep: processes ALL nodes in decreasing rank order.
      * Used when Phase 1 explored the entire reachable graph.
+     *
+     * <p>Uses minTTF (minimum travel time per edge) instead of the full
+     * time-dependent TTF array for cache efficiency.  The minTTF array
+     * (~1 MB) fits in L2 cache, whereas the full TTF (~90 MB for 96 bins)
+     * causes severe cache thrashing.  This is consistent with the backward
+     * search which also uses minTTF.
      */
     private void forwardSweepFull(int S, int NUM_BINS, double INV_BIN) {
         for (int i = 0; i < sweepOrder.length; i++) {
@@ -232,16 +242,16 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
             for (int slot = dOff; slot < dEnd; slot++) {
                 int eBase = slot * S;
                 int u = dnEdges[eBase];
-                int gIdx = dnEdges[eBase + SpeedyCHGraph.E_GIDX];
 
                 if (iterIds[u] != currentIteration) continue;
 
                 double uCost = getCost(u);
                 double uArr = getTimeRaw(u);
 
-                int bin = ((int) (uArr * INV_BIN)) % NUM_BINS;
-                if (bin < 0) bin += NUM_BINS;
-                double tTime = ttf[bin * totalEdgeCount + gIdx];
+                // Use colocated dnWeights (= minTTF, populated by customizer).
+                // This reads from the same cache region as dnEdges, avoiding
+                // the random-access TTF array (~90 MB) that causes cache thrashing.
+                double tTime = dnWeights[slot];
 
                 double newCost = uCost + tTime;
                 double newArr = uArr + tTime;
@@ -250,7 +260,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
                         ? getCost(w) : Double.POSITIVE_INFINITY;
 
                 if (newCost < wCost) {
-                    setNode(w, newCost, newArr, 0.0, u, gIdx);
+                    setNode(w, newCost, newArr, 0.0, u, dnEdges[eBase + SpeedyCHGraph.E_GIDX]);
                 }
             }
         }
@@ -263,6 +273,8 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
      * set rather than the total graph.  Ordering by decreasing rank ensures
      * that when a node is polled, all its higher-ranked predecessors have
      * been finalized.
+     *
+     * <p>Uses minTTF for cache efficiency (see {@link #forwardSweepFull}).
      */
     private void forwardSweepLazy(int S, int NUM_BINS, double INV_BIN) {
         advanceSweepIteration();
@@ -282,20 +294,15 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
             double uCost = getCost(u);
             double uArr = getTimeRaw(u);
 
-            // Compute time bin for u's departure
-            int bin = ((int) (uArr * INV_BIN)) % NUM_BINS;
-            if (bin < 0) bin += NUM_BINS;
-            int binOff = bin * totalEdgeCount;
-
             // Push costs along u's outgoing downward edges (u→w, rank(w) < rank(u))
             int dOff = dnOutOff[u];
             int dEnd = dOff + dnOutLen[u];
             for (int slot = dOff; slot < dEnd; slot++) {
                 int eBase = slot * S;
                 int w = dnOutEdges[eBase];
-                int gIdx = dnOutEdges[eBase + SpeedyCHGraph.E_GIDX];
 
-                double tTime = ttf[binOff + gIdx];
+                // Colocated weight (minTTF) — same cache line as edge data
+                double tTime = dnOutWeights[slot];
                 double newCost = uCost + tTime;
                 double newArr = uArr + tTime;
 
@@ -303,7 +310,8 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
                         ? getCost(w) : Double.POSITIVE_INFINITY;
 
                 if (newCost < wCost) {
-                    setNode(w, newCost, newArr, 0.0, u, gIdx);
+                    setNode(w, newCost, newArr, 0.0, u,
+                            dnOutEdges[eBase + SpeedyCHGraph.E_GIDX]);
 
                     // Add w to sweep heap if not already there
                     if (sweepIds[w] != sweepIteration) {
@@ -442,16 +450,17 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
             for (int slot = iOff; slot < iEnd; slot++) {
                 int eBase = slot * S;
                 int w = upInEdges[eBase];       // lower-ranked source
-                int gIdx = upInEdges[eBase + SpeedyCHGraph.E_GIDX];
 
-                double edgeCost = chGraph.minTTF[gIdx];
+                // Colocated weight (minTTF) — same cache line as edge data
+                double edgeCost = upInWeights[slot];
                 double newCost = getCost(u) + edgeCost;
 
                 double wCost = (iterIds[w] == currentIteration) ? getCost(w) : Double.POSITIVE_INFINITY;
 
                 if (newCost < wCost) {
                     double newTime = getTimeRaw(u) - edgeCost;
-                    setNode(w, newCost, newTime, 0.0, u, gIdx);
+                    setNode(w, newCost, newTime, 0.0, u,
+                            upInEdges[eBase + SpeedyCHGraph.E_GIDX]);
 
                     if (sweepIds[w] != sweepIteration) {
                         sweepIds[w] = sweepIteration;

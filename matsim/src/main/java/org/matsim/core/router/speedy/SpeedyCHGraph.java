@@ -108,6 +108,7 @@ public class SpeedyCHGraph {
     final int[] dnOutOff;
     final int[] dnOutLen;
     final int[] dnOutEdges;     // E_STRIDE ints per edge: [targetNode, globalEdgeIdx]
+    double[] dnOutWeights;      // colocated minTTF per reverse-dnOut edge slot
 
     // upInOff/upInLen/upInEdges: for each node u, its INCOMING upward edges
     // (w→u where rank(w) < rank(u)).  This is the reverse of upEdges (which stores
@@ -116,6 +117,7 @@ public class SpeedyCHGraph {
     final int[] upInOff;
     final int[] upInLen;
     final int[] upInEdges;      // E_STRIDE ints per edge: [sourceNode, globalEdgeIdx]
+    double[] upInWeights;       // colocated minTTF per reverse-upIn edge slot
 
     private final SpeedyGraph baseGraph;
 
@@ -236,6 +238,11 @@ public class SpeedyCHGraph {
                 cursor[w]++;
             }
         }
+
+        // Allocate colocated weight arrays for reverse CSRs.
+        // Populated by the customizer's propagateWeightsToCSR method.
+        this.dnOutWeights = new double[this.dnOutEdges.length / E_STRIDE];
+        this.upInWeights  = new double[this.upInEdges.length / E_STRIDE];
     }
 
     SpeedyGraph getBaseGraph() {

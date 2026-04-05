@@ -115,6 +115,16 @@ public class SpeedyCHTTFCustomizer {
             int gIdx = chGraph.dnEdges[slot * S + SpeedyCHGraph.E_GIDX];
             chGraph.dnWeights[slot] = chGraph.edgeWeights[gIdx];
         }
+        // Reverse CSR: outgoing downward edges
+        for (int slot = 0; slot < chGraph.dnOutWeights.length; slot++) {
+            int gIdx = chGraph.dnOutEdges[slot * S + SpeedyCHGraph.E_GIDX];
+            chGraph.dnOutWeights[slot] = chGraph.edgeWeights[gIdx];
+        }
+        // Reverse CSR: incoming upward edges
+        for (int slot = 0; slot < chGraph.upInWeights.length; slot++) {
+            int gIdx = chGraph.upInEdges[slot * S + SpeedyCHGraph.E_GIDX];
+            chGraph.upInWeights[slot] = chGraph.edgeWeights[gIdx];
+        }
     }
 
     /**
