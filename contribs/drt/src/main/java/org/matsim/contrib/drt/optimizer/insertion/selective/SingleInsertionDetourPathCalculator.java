@@ -65,6 +65,14 @@ public class SingleInsertionDetourPathCalculator implements MobsimBeforeCleanupL
 	 */
 	private static volatile SpeedyCHFactory SHARED_CH_FACTORY;
 
+	/**
+	 * Shared SpeedyALTFactory instance across all calculators.
+	 * SpeedyALTFactory internally caches SpeedyGraph per Network and landmark
+	 * data per SpeedyGraph using ConcurrentHashMaps, so multiple calculators
+	 * on the same network reuse the expensive landmark computation.
+	 */
+	private static volatile SpeedyALTFactory SHARED_ALT_FACTORY;
+
 	private static SpeedyCHFactory getSharedCHFactory() {
 		if (SHARED_CH_FACTORY == null) {
 			synchronized (SingleInsertionDetourPathCalculator.class) {
@@ -74,6 +82,17 @@ public class SingleInsertionDetourPathCalculator implements MobsimBeforeCleanupL
 			}
 		}
 		return SHARED_CH_FACTORY;
+	}
+
+	private static SpeedyALTFactory getSharedALTFactory() {
+		if (SHARED_ALT_FACTORY == null) {
+			synchronized (SingleInsertionDetourPathCalculator.class) {
+				if (SHARED_ALT_FACTORY == null) {
+					SHARED_ALT_FACTORY = new SpeedyALTFactory();
+				}
+			}
+		}
+		return SHARED_ALT_FACTORY;
 	}
 
 	private final TravelTime travelTime;
@@ -88,7 +107,7 @@ public class SingleInsertionDetourPathCalculator implements MobsimBeforeCleanupL
 	public SingleInsertionDetourPathCalculator(Network network, TravelTime travelTime,
 											   TravelDisutility travelDisutility, DrtConfigGroup drtCfg) {
 		this(network, travelTime, travelDisutility, drtCfg.getNumberOfThreads(),
-				drtCfg.isUseSpeedyCHForInsertionSearch() ? getSharedCHFactory() : new SpeedyALTFactory());
+				drtCfg.isUseSpeedyCHForInsertionSearch() ? getSharedCHFactory() : getSharedALTFactory());
 	}
 
 	@VisibleForTesting
