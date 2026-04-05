@@ -647,8 +647,33 @@ public class InertialFlowCutter {
             }
         }
 
-        // Extract separator from the improved bipartition
-        return extractSeparatorFromBipartition(allNodes, totalN, adj, side);
+        // Extract separator from the improved bipartition.
+        int[][] extracted = extractSeparatorFromBipartition(allNodes, totalN, adj, side);
+
+        // If bipartition extraction produced an invalid separator, try max-flow
+        // on the FM-improved bipartition to get a guaranteed-valid result.
+        if (!isValidSeparator(extracted, adj) && totalN >= MAXFLOW_MIN_SIZE) {
+            int countA = 0, countB = 0;
+            for (int i = 0; i < totalN; i++) {
+                if (side[allNodes[i]] == 1) countA++;
+                else countB++;
+            }
+            if (countA > 0 && countB > 0) {
+                int[] sA = new int[countA];
+                int[] sB = new int[countB];
+                int ai = 0, bi = 0;
+                for (int i = 0; i < totalN; i++) {
+                    if (side[allNodes[i]] == 1) sA[ai++] = allNodes[i];
+                    else sB[bi++] = allNodes[i];
+                }
+                int[][] mfResult = maxFlowRefineBipartition(sA, sB, adj);
+                if (mfResult != null && isValidSeparator(mfResult, adj)) {
+                    return mfResult;
+                }
+            }
+        }
+
+        return extracted;
     }
 
     /** Insert node v at head of bucket b. */
@@ -981,6 +1006,138 @@ public class InertialFlowCutter {
             }
         }
         return 0;
+    }
+
+    /**
+     * Find minimum vertex separator between sideA and sideB (pure bipartition,
+     * no initial separator) using Dinic's max-flow.  All non-source/sink nodes
+     * have capacity 1 in the node-split network.
+     */
+    private int[][] maxFlowRefineBipartition(int[] sideA, int[] sideB, int[][] adj) {
+        int totalN = sideA.length + sideB.length;
+        if (totalN < 10) return null;
+
+        int[] nodeId = new int[totalN];
+        int[] toCompact = new int[graph.nodeCount];
+        int ci = 0;
+        for (int v : sideA) { nodeId[ci] = v; toCompact[v] = ci + 1; ci++; }
+        for (int v : sideB) { nodeId[ci] = v; toCompact[v] = ci + 1; ci++; }
+
+        int aLen = sideA.length;
+
+        int fN = 2 * totalN + 2;
+        int superS = fN - 2;
+        int superT = fN - 1;
+        int infCap = totalN + 1;
+
+        int maxEdges = (totalN + 6 * totalN + totalN) * 2;
+        int[] eTo = new int[maxEdges];
+        int[] eCap = new int[maxEdges];
+        int[] eCount = {0};
+        int[][] fAdj = new int[fN][];
+        int[] fAdjLen = new int[fN];
+
+        // Internal node-split: all nodes have capacity 1
+        // (any can be part of the separator)
+        for (int i = 0; i < totalN; i++) {
+            flowAddEdge(2 * i, 2 * i + 1, 1, eTo, eCap, eCount, fAdj, fAdjLen);
+        }
+
+        // Original edges
+        for (int i = 0; i < totalN; i++) {
+            int v = nodeId[i];
+            for (int w : adj[v]) {
+                int j = toCompact[w] - 1;
+                if (j < 0 || j <= i) continue;
+                flowAddEdge(2 * i + 1, 2 * j, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
+                flowAddEdge(2 * j + 1, 2 * i, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
+            }
+        }
+
+        // Source → A nodes (extra capacity to avoid cutting source nodes)
+        for (int i = 0; i < aLen; i++) {
+            flowAddEdge(superS, 2 * i, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
+            // Also boost A node internal capacity so they can't be cut
+            eCap[i * 2] = infCap; // the v_in→v_out edge for node i
+        }
+
+        // B nodes → sink (extra capacity)
+        for (int i = aLen; i < totalN; i++) {
+            flowAddEdge(2 * i + 1, superT, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
+            eCap[i * 2] = infCap; // boost B node internal capacity
+        }
+
+        // Run Dinic's
+        int[] level = new int[fN];
+        int[] iter = new int[fN];
+        int[] queue = new int[fN];
+
+        while (true) {
+            Arrays.fill(level, -1);
+            level[superS] = 0;
+            int qHead = 0, qTail = 0;
+            queue[qTail++] = superS;
+            while (qHead < qTail) {
+                int u = queue[qHead++];
+                int len = fAdjLen[u];
+                int[] edges = fAdj[u];
+                for (int ei = 0; ei < len; ei++) {
+                    int e = edges[ei];
+                    int w = eTo[e];
+                    if (level[w] < 0 && eCap[e] > 0) {
+                        level[w] = level[u] + 1;
+                        queue[qTail++] = w;
+                    }
+                }
+            }
+            if (level[superT] < 0) break;
+            Arrays.fill(iter, 0);
+            while (dinicDFS(superS, superT, infCap, level, iter, eTo, eCap, fAdj, fAdjLen) > 0) {}
+        }
+
+        // Extract min-cut
+        boolean[] reachable = new boolean[fN];
+        reachable[superS] = true;
+        int qHead = 0, qTail = 0;
+        queue[qTail++] = superS;
+        while (qHead < qTail) {
+            int u = queue[qHead++];
+            int len = fAdjLen[u];
+            int[] edges = fAdj[u];
+            for (int ei = 0; ei < len; ei++) {
+                int e = edges[ei];
+                int w = eTo[e];
+                if (!reachable[w] && eCap[e] > 0) {
+                    reachable[w] = true;
+                    queue[qTail++] = w;
+                }
+            }
+        }
+
+        int newSepCount = 0, newACount = 0, newBCount = 0;
+        for (int i = 0; i < totalN; i++) {
+            if (reachable[2 * i] && !reachable[2 * i + 1]) newSepCount++;
+            else if (reachable[2 * i]) newACount++;
+            else newBCount++;
+        }
+
+        for (int i = 0; i < totalN; i++) toCompact[nodeId[i]] = 0;
+
+        if (newSepCount == 0 || newACount == 0 || newBCount == 0) return null;
+
+        int[] newSep = new int[newSepCount];
+        int[] newA = new int[newACount];
+        int[] newB = new int[newBCount];
+        int ai = 0, si = 0, bi = 0;
+        for (int i = 0; i < totalN; i++) {
+            if (reachable[2 * i] && !reachable[2 * i + 1]) newSep[si++] = nodeId[i];
+            else if (reachable[2 * i]) newA[ai++] = nodeId[i];
+            else newB[bi++] = nodeId[i];
+        }
+
+        int[][] mfResult = new int[][]{newA, newSep, newB};
+        if (newSep.length > 1) mfResult = thinSeparator(mfResult, adj);
+        return mfResult;
     }
 
     /**
