@@ -313,7 +313,7 @@ public class InertialFlowCutter {
      * rivers, etc.) with far fewer boundary edges, dramatically reducing separator
      * size and thus shortcut count.
      *
-     * <p>11 ratios × 8 directions = 88 candidates per recursion level.
+     * <p>11 ratios × 16 directions = 176 candidates per recursion level.
      * The extra cost is negligible compared to contraction time.
      */
     private static final double[] SPLIT_RATIOS = {
