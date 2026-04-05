@@ -25,18 +25,16 @@ public class MultiInsertionDetourPathCalculatorManager implements MobsimBeforeCl
 	private static final Logger LOG = LogManager.getLogger(MultiInsertionDetourPathCalculatorManager.class);
 
 	/**
-	 * Static, cross-instance cache for fully built and TTF-customized CH graphs.
+	 * Static, cross-instance cache for fully built CH graph skeletons.
 	 * <p>
-	 * Keyed by (Network, TravelDisutility, TravelTime) identity.  When multiple
-	 * DRT modes share the same network and cost functions (the typical multi-mode
-	 * DRT setup), the expensive CH build + TTF customization is performed only once.
-	 * <p>
-	 * The {@link CHGraph} is read-only after customization: all per-query
-	 * mutable state lives in the individual {@link org.matsim.core.router.speedy.CHLeastCostPathTree}
-	 * instances created by {@link org.matsim.contrib.dvrp.path.OneToManyPathSearch#createSearchCH},
-	 * so sharing the graph across threads is safe.
+	 * Keyed by {@link SpeedyGraph} (i.e. by network topology).  The expensive
+	 * CH contraction (InertialFlowCutter + CHBuilder) is performed only once per
+	 * network.  The TTF customization (weight assignment) is done on each access
+	 * via {@link CHTTFCustomizer} which uses a fingerprint-based fast no-op
+	 * check to skip when travel times have not changed.
 	 */
-	private static final Map<CHCacheKey, CHGraph> CH_GRAPH_CACHE = new ConcurrentHashMap<>();
+	private static final Map<SpeedyGraph, CHGraph> CH_GRAPH_CACHE = new ConcurrentHashMap<>();
+	private static final Map<Network, SpeedyGraph> BASE_GRAPH_CACHE = new ConcurrentHashMap<>();
 
 	private final Network network;
 	private final TravelTime travelTime;
@@ -72,33 +70,25 @@ public class MultiInsertionDetourPathCalculatorManager implements MobsimBeforeCl
 	}
 
 	/**
-	 * Returns a shared CH graph for this (network, disutility, travelTime) triple,
-	 * building it on first access.  The graph is cached in a static map so that
-	 * multiple manager instances (e.g. from different DRT modes on the same network)
-	 * share a single CH graph.
+	 * Returns a shared CH graph for this network, building the contraction
+	 * hierarchy on first access and (re-)customizing with current travel times.
+	 * The contraction topology is cached per network; the TTF customization
+	 * uses a fingerprint-based fast check to skip when travel times have not
+	 * changed (the common case within a single MATSim iteration).
 	 */
 	private CHGraph getOrBuildCHGraph() {
-		CHCacheKey key = new CHCacheKey(network, travelDisutility, travelTime);
-		return CH_GRAPH_CACHE.computeIfAbsent(key, k -> {
+		SpeedyGraph baseGraph = BASE_GRAPH_CACHE.computeIfAbsent(network, SpeedyGraphBuilder::build);
+		CHGraph chGraph = CH_GRAPH_CACHE.computeIfAbsent(baseGraph, k -> {
 			LOG.info("Building CHRouter graph for DRT insertion search on network with {} nodes, {} links – one-time cost.",
 					network.getNodes().size(), network.getLinks().size());
-			SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
 			InertialFlowCutter.NDOrderResult ndOrder = new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-			CHGraph chGraph = new CHBuilder(baseGraph, travelDisutility).buildWithOrderParallel(ndOrder);
-			new CHTTFCustomizer().customize(chGraph, travelTime, travelDisutility);
-			LOG.info("CHRouter graph built for DRT insertion search (base: {} links).",
-					network.getLinks().size());
-			return chGraph;
+			return new CHBuilder(baseGraph, travelDisutility).buildWithOrderParallel(ndOrder);
 		});
+		// (Re-)customise with current travel times.  The CHTTFCustomizer uses a
+		// fingerprint-based fast check and returns immediately if nothing changed.
+		synchronized (chGraph) {
+			new CHTTFCustomizer().customize(chGraph, travelTime, travelDisutility);
+		}
+		return chGraph;
 	}
-
-	/**
-	 * Composite cache key using <em>reference equality</em> (not
-	 * {@code .equals()}) for all three components.  Two managers sharing
-	 * the same {@code Network}, {@code TravelDisutility}, and
-	 * {@code TravelTime} <b>object instances</b> will produce equal keys
-	 * and thus share the same CH graph.  Managers with structurally
-	 * identical but distinct objects will build separate CH graphs.
-	 */
-	private record CHCacheKey(Network network, TravelDisutility td, TravelTime tt) {}
 }

@@ -33,7 +33,21 @@ public class CHTTFCustomizer {
     /** Precomputed reciprocal for fast bin computation. */
     static final double INV_BIN_SIZE = 1.0 / BIN_SIZE;
 
+    /** Number of original edges to sample for the fast fingerprint check. */
+    private static final int FINGERPRINT_SAMPLES = 20;
+    /** Time bins sampled per edge in the fingerprint (midnight, 8 AM, 4 PM). */
+    private static final int[] FINGERPRINT_BINS = {0, 32, 64};
+
     public void customize(CHGraph chGraph, TravelTime tt, TravelDisutility td) {
+        // Quick-check: sample a few original edges to detect if travel times
+        // changed since the last customization.  This avoids the expensive full
+        // scan (~20M getLinkTravelTime calls for a 200k-link network) when nothing
+        // has changed — the common case when multiple threads or callers request
+        // a path calculator within the same MATSim iteration.
+        if (!needsRecustomization(chGraph, tt)) {
+            return;
+        }
+
         SpeedyGraph baseGraph = chGraph.getBaseGraph();
         int    edgeCount  = chGraph.totalEdgeCount;
         int[]  origLink   = chGraph.edgeOrigLink;
@@ -94,6 +108,52 @@ public class CHTTFCustomizer {
 
         // Propagate weights into colocated CSR weight arrays for cache-local access
         propagateWeightsToCSR(chGraph);
+
+        // Update the fingerprint so subsequent calls can skip if nothing changed.
+        chGraph.customizationFingerprint = computeFingerprint(chGraph, tt);
+    }
+
+    /**
+     * Fast fingerprint check: determines whether travel times have changed
+     * since the last customization by sampling a small number of original
+     * edges at a few representative time bins.
+     *
+     * <p>In MATSim, travel times are updated for ALL links at the end of
+     * each iteration, so sampling ~20 edges reliably detects any change.
+     * The cost is ~60 {@code getLinkTravelTime} calls vs ~20 million for
+     * the full customization of a 200k-link network.
+     */
+    private static boolean needsRecustomization(CHGraph chGraph, TravelTime tt) {
+        // First-ever customization: ttfHash is NaN
+        if (Double.isNaN(chGraph.customizationFingerprint)) return true;
+
+        // Compare current fingerprint with stored one
+        return computeFingerprint(chGraph, tt) != chGraph.customizationFingerprint;
+    }
+
+    /**
+     * Computes a lightweight fingerprint by summing travel times for a
+     * spread of original edges at a few time bins.
+     */
+    private static double computeFingerprint(CHGraph chGraph, TravelTime tt) {
+        SpeedyGraph baseGraph = chGraph.getBaseGraph();
+        int edgeCount = chGraph.totalEdgeCount;
+        int[] origLink = chGraph.edgeOrigLink;
+
+        double fingerprint = 0;
+        int sampled = 0;
+        // Step through edges spread across the index space; oversample to
+        // compensate for shortcut edges (which have origLink < 0).
+        int step = Math.max(1, edgeCount / (FINGERPRINT_SAMPLES * 3));
+        for (int e = 0; e < edgeCount && sampled < FINGERPRINT_SAMPLES; e += step) {
+            if (origLink[e] < 0) continue;
+            Link link = baseGraph.getLink(origLink[e]);
+            for (int k : FINGERPRINT_BINS) {
+                fingerprint += tt.getLinkTravelTime(link, k * BIN_SIZE, null, null);
+            }
+            sampled++;
+        }
+        return fingerprint;
     }
 
     /**

@@ -119,6 +119,15 @@ public class CHGraph {
     final int[] upInEdges;      // E_STRIDE ints per edge: [sourceNode, globalEdgeIdx]
     double[] upInWeights;       // colocated minTTF per reverse-upIn edge slot
 
+    /**
+     * Fingerprint of the last TTF customization.  Used by {@link CHTTFCustomizer}
+     * to skip redundant re-customization when travel times have not changed.
+     * The fingerprint is the sum of travel times sampled at a small number of
+     * representative (edge, time-bin) pairs.  {@code Double.NaN} when no
+     * customization has been performed yet.
+     */
+    volatile double customizationFingerprint = Double.NaN;
+
     private final SpeedyGraph baseGraph;
 
     CHGraph(SpeedyGraph baseGraph, int nodeCount,
