@@ -17,22 +17,32 @@ import org.matsim.core.router.util.TravelTime;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class MultiInsertionDetourPathCalculatorManager implements MobsimBeforeCleanupListener {
 
 	private static final Logger LOG = LogManager.getLogger(MultiInsertionDetourPathCalculatorManager.class);
+
+	/**
+	 * Static, cross-instance cache for fully built and TTF-customized CH graphs.
+	 * <p>
+	 * Keyed by (Network, TravelDisutility, TravelTime) identity.  When multiple
+	 * DRT modes share the same network and cost functions (the typical multi-mode
+	 * DRT setup), the expensive CH build + TTF customization is performed only once.
+	 * <p>
+	 * The {@link SpeedyCHGraph} is read-only after customization: all per-query
+	 * mutable state lives in the individual {@link org.matsim.core.router.speedy.SpeedyCHLeastCostPathTree}
+	 * instances created by {@link org.matsim.contrib.dvrp.path.OneToManyPathSearch#createSearchCH},
+	 * so sharing the graph across threads is safe.
+	 */
+	private static final Map<CHCacheKey, SpeedyCHGraph> CH_GRAPH_CACHE = new ConcurrentHashMap<>();
 
 	private final Network network;
 	private final TravelTime travelTime;
 	private final TravelDisutility travelDisutility;
 	private final DrtConfigGroup drtCfg;
 	private final List<MultiInsertionDetourPathCalculator> multiInsertionDetourPathCalculatorList;
-
-	/**
-	 * Lazily built CH graph, shared across all calculator instances.
-	 * Non-null only when {@code drtCfg.isUseSpeedyCHForInsertionSearch()} is true.
-	 */
-	private SpeedyCHGraph chGraph;
 
 	MultiInsertionDetourPathCalculatorManager(Network network, TravelTime travelTime, TravelDisutility travelDisutility,
 											  DrtConfigGroup drtCfg)
@@ -62,20 +72,30 @@ public class MultiInsertionDetourPathCalculatorManager implements MobsimBeforeCl
 	}
 
 	/**
-	 * Builds (once) or returns the shared CH graph for this network.
-	 * The graph is customized with time-dependent TTFs before first use.
+	 * Returns a shared CH graph for this (network, disutility, travelTime) triple,
+	 * building it on first access.  The graph is cached in a static map so that
+	 * multiple manager instances (e.g. from different DRT modes on the same network)
+	 * share a single CH graph.
 	 */
-	private synchronized SpeedyCHGraph getOrBuildCHGraph() {
-		if (chGraph == null) {
+	private SpeedyCHGraph getOrBuildCHGraph() {
+		CHCacheKey key = new CHCacheKey(network, travelDisutility, travelTime);
+		return CH_GRAPH_CACHE.computeIfAbsent(key, k -> {
 			LOG.info("Building SpeedyCH graph for DRT insertion search on network with {} nodes, {} links – one-time cost.",
 					network.getNodes().size(), network.getLinks().size());
 			SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
 			InertialFlowCutter.NDOrderResult ndOrder = new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-			chGraph = new SpeedyCHBuilder(baseGraph, travelDisutility).buildWithOrderParallel(ndOrder);
+			SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, travelDisutility).buildWithOrderParallel(ndOrder);
 			new SpeedyCHTTFCustomizer().customize(chGraph, travelTime, travelDisutility);
 			LOG.info("SpeedyCH graph built for DRT insertion search (base: {} links).",
 					network.getLinks().size());
-		}
-		return chGraph;
+			return chGraph;
+		});
 	}
+
+	/**
+	 * Composite cache key using identity equality for all three components.
+	 * Two managers sharing the same Network, TravelDisutility, and TravelTime
+	 * objects will produce equal keys and thus share the same CH graph.
+	 */
+	private record CHCacheKey(Network network, TravelDisutility td, TravelTime tt) {}
 }

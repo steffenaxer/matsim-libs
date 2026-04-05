@@ -56,6 +56,26 @@ public class SingleInsertionDetourPathCalculator implements MobsimBeforeCleanupL
 
 	public static final int MAX_THREADS = 4;
 
+	/**
+	 * Shared SpeedyCHFactory instance across all calculators.
+	 * SpeedyCHFactory internally caches SpeedyGraph per Network and
+	 * SpeedyCHGraph per (SpeedyGraph, TravelDisutility) using ConcurrentHashMaps,
+	 * so multiple calculators on the same network reuse the expensive CH build.
+	 * Created lazily on first use to avoid unnecessary initialization.
+	 */
+	private static volatile SpeedyCHFactory SHARED_CH_FACTORY;
+
+	private static SpeedyCHFactory getSharedCHFactory() {
+		if (SHARED_CH_FACTORY == null) {
+			synchronized (SingleInsertionDetourPathCalculator.class) {
+				if (SHARED_CH_FACTORY == null) {
+					SHARED_CH_FACTORY = new SpeedyCHFactory();
+				}
+			}
+		}
+		return SHARED_CH_FACTORY;
+	}
+
 	private final TravelTime travelTime;
 
 	private final LeastCostPathCalculator toPickupPathSearch;
@@ -68,7 +88,7 @@ public class SingleInsertionDetourPathCalculator implements MobsimBeforeCleanupL
 	public SingleInsertionDetourPathCalculator(Network network, TravelTime travelTime,
 											   TravelDisutility travelDisutility, DrtConfigGroup drtCfg) {
 		this(network, travelTime, travelDisutility, drtCfg.getNumberOfThreads(),
-				drtCfg.isUseSpeedyCHForInsertionSearch() ? new SpeedyCHFactory() : new SpeedyALTFactory());
+				drtCfg.isUseSpeedyCHForInsertionSearch() ? getSharedCHFactory() : new SpeedyALTFactory());
 	}
 
 	@VisibleForTesting
