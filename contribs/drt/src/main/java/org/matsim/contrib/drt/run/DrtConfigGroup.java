@@ -186,6 +186,14 @@ public class DrtConfigGroup extends ReflectiveConfigGroupWithConfigurableParamet
 		this.storeUnsharedPath = storeUnsharedPath;
 	}
 
+	public boolean isUseSpeedyCHForInsertionSearch() {
+		return useSpeedyCHForInsertionSearch;
+	}
+
+	public void setUseSpeedyCHForInsertionSearch(boolean useSpeedyCHForInsertionSearch) {
+		this.useSpeedyCHForInsertionSearch = useSpeedyCHForInsertionSearch;
+	}
+
 	public SimulationType getSimulationType() {
 		return simulationType;
 	}
@@ -245,6 +253,14 @@ public class DrtConfigGroup extends ReflectiveConfigGroupWithConfigurableParamet
 	@Parameter
 	@Comment("Store planned unshared drt route as a link sequence")
 	private boolean storeUnsharedPath = false; // If true, the planned unshared path is stored and exported in plans
+
+	@Parameter
+	@Comment("If true, uses the SpeedyCH (Contraction Hierarchies) time-dependent router for the DRT insertion"
+			+ " one-to-many path search instead of the default Dijkstra-based router."
+			+ " On large networks (e.g. Berlin v7.0 with ~88k nodes) this can dramatically"
+			+ " reduce insertion search time. Requires a one-time CH graph build per network."
+			+ " Default: false.")
+	private boolean useSpeedyCHForInsertionSearch = false;
 
 	public enum SimulationType {
 		fullSimulation, estimateAndTeleport
