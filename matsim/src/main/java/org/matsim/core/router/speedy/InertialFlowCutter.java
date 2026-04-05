@@ -72,7 +72,7 @@ public class InertialFlowCutter {
     private static final Logger LOG = LogManager.getLogger(InertialFlowCutter.class);
 
     /** Minimum sub-graph size below which we stop recursing and order arbitrarily. */
-    private static final int MIN_PARTITION_SIZE = 3;
+    private static final int MIN_PARTITION_SIZE = 2;
 
     /** Minimum subgraph size to apply FM refinement. */
     private static final int FM_MIN_SIZE = 20;
@@ -344,31 +344,14 @@ public class InertialFlowCutter {
 
         // --- FM refinement: try BOTH bipartition orientations ---
         if (subNodes.length >= FM_MIN_SIZE) {
-            // Orientation 1: sideA = partA, sideB = sep ∪ partB
-            int[][] fmResult1 = fmRefineSeparator(bestResult, adj, subNodes, false);
-            if (isValidSeparator(fmResult1, adj)) {
-                int fmBal = Math.abs(fmResult1[0].length - fmResult1[2].length);
-                long fmScore = scoreSeparator(fmResult1[1], fmBal, adj);
-                if (fmScore < refScore) {
-                    bestResult = fmResult1;
-                    refScore = fmScore;
-                }
-            }
-            // Orientation 2: sideA = partA ∪ sep, sideB = partB
-            int[][] fmResult2 = fmRefineSeparator(bestResult, adj, subNodes, true);
-            if (isValidSeparator(fmResult2, adj)) {
-                int fmBal = Math.abs(fmResult2[0].length - fmResult2[2].length);
-                long fmScore = scoreSeparator(fmResult2[1], fmBal, adj);
-                if (fmScore < refScore) {
-                    bestResult = fmResult2;
-                    refScore = fmScore;
-                }
-            }
+            bestResult = tryFMBothOrientations(bestResult, adj, subNodes, refScore);
+            refScore = scoreSeparator(bestResult[1],
+                    Math.abs(bestResult[0].length - bestResult[2].length), adj);
         }
 
         // --- Max-flow refinement with wider cuttable region ---
         if (subNodes.length >= MAXFLOW_MIN_SIZE) {
-            int[][] mfResult = maxFlowRefineWide(bestResult, adj);
+            int[][] mfResult = maxFlowRefineWideDepth(bestResult, adj, MAXFLOW_BORDER_DEPTH);
             if (mfResult != null && isValidSeparator(mfResult, adj)) {
                 int mfBal = Math.abs(mfResult[0].length - mfResult[2].length);
                 long mfScore = scoreSeparator(mfResult[1], mfBal, adj);
@@ -388,13 +371,43 @@ public class InertialFlowCutter {
     // ========================= Degree-weighted scoring =========================
 
     /**
+     * Try FM refinement in both bipartition orientations, return best result.
+     */
+    private int[][] tryFMBothOrientations(int[][] current, int[][] adj,
+                                           int[] subNodes, long currentScore) {
+        int[][] best = current;
+        long bestScore = currentScore;
+
+        // Orientation 1: sideA = partA, sideB = sep ∪ partB
+        int[][] fmResult1 = fmRefineSeparator(best, adj, subNodes, false);
+        if (isValidSeparator(fmResult1, adj)) {
+            int fmBal = Math.abs(fmResult1[0].length - fmResult1[2].length);
+            long fmScore = scoreSeparator(fmResult1[1], fmBal, adj);
+            if (fmScore < bestScore) {
+                best = fmResult1;
+                bestScore = fmScore;
+            }
+        }
+        // Orientation 2: sideA = partA ∪ sep, sideB = partB
+        int[][] fmResult2 = fmRefineSeparator(best, adj, subNodes, true);
+        if (isValidSeparator(fmResult2, adj)) {
+            int fmBal = Math.abs(fmResult2[0].length - fmResult2[2].length);
+            long fmScore = scoreSeparator(fmResult2[1], fmBal, adj);
+            if (fmScore < bestScore) {
+                best = fmResult2;
+            }
+        }
+        return best;
+    }
+
+    /**
      * Score a separator using degree-weighted cost: 256 per node (dominant) plus
      * &sum;(subgraphDeg&sup2;) as refinement.  The 256 base ensures separator SIZE
      * remains the primary criterion; the degree term breaks ties in favour of
      * low-degree separators that create fewer shortcuts.
      *
      * @param separator separator nodes
-     * @param balance   partition imbalance (|partA| - |partB|)
+     * @param balance   partition imbalance |partA| - |partB|
      * @param adj       symmetric adjacency lists
      * @return weighted score (lower is better)
      */
@@ -813,14 +826,12 @@ public class InertialFlowCutter {
      * Find the minimum vertex separator using Dinic's algorithm on a node-split
      * flow network with a <b>wide cuttable region</b>.
      *
-     * <p>Unlike the basic max-flow that only allows cutting separator nodes,
-     * this version allows cutting any node within {@link #MAXFLOW_BORDER_DEPTH}
-     * BFS hops from the separator.  This gives the algorithm much more freedom
-     * to find smaller separators.
+     * <p>Allows cutting any node within the given BFS depth from the separator.
      *
+     * @param depth BFS depth for cuttable region
      * @return improved [partA, separator, partB], or null if no improvement
      */
-    private int[][] maxFlowRefineWide(int[][] result, int[][] adj) {
+    private int[][] maxFlowRefineWideDepth(int[][] result, int[][] adj, int depth) {
         int[] partA = result[0];
         int[] sep   = result[1];
         int[] partB = result[2];
@@ -845,7 +856,7 @@ public class InertialFlowCutter {
         while (qHead < qTail) {
             int u = bfsQueue[qHead++];
             int d = bfsDist[u];
-            if (d > MAXFLOW_BORDER_DEPTH) continue;
+            if (d > depth) continue;
             for (int w : adj[u]) {
                 if (!inSubGraph[w] || bfsDist[w] != 0) continue;
                 bfsDist[w] = d + 1;
@@ -1230,7 +1241,8 @@ public class InertialFlowCutter {
      * The extra cost is negligible compared to contraction time.
      */
     private static final double[] SPLIT_RATIOS = {
-        0.30, 0.33, 0.36, 0.40, 0.44, 0.50, 0.56, 0.60, 0.64, 0.67, 0.70
+        0.25, 0.28, 0.30, 0.33, 0.36, 0.38, 0.40, 0.42, 0.44, 0.46, 0.48,
+        0.50, 0.52, 0.54, 0.56, 0.58, 0.60, 0.62, 0.64, 0.67, 0.70, 0.72, 0.75
     };
 
     /**
