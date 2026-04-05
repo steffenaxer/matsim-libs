@@ -84,7 +84,7 @@ public class InertialFlowCutter {
     private static final int MAXFLOW_MIN_SIZE = 30;
 
     /** BFS depth from boundary for max-flow cuttable region. */
-    private static final int MAXFLOW_BORDER_DEPTH = 2;
+    private static final int MAXFLOW_BORDER_DEPTH = 8;
 
     private final SpeedyGraph graph;
 
