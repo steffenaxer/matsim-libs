@@ -62,7 +62,7 @@ public class InertialFlowCutter {
     private static final Logger LOG = LogManager.getLogger(InertialFlowCutter.class);
 
     /** Minimum sub-graph size below which we stop recursing and order arbitrarily. */
-    private static final int MIN_PARTITION_SIZE = 10;
+    private static final int MIN_PARTITION_SIZE = 3;
 
     private final SpeedyGraph graph;
 
@@ -271,12 +271,14 @@ public class InertialFlowCutter {
      * Returns [partitionA, separator, partitionB].
      */
     private int[][] findSeparator(int[] subNodes, int[][] adj) {
-        // Try 8 projection directions and pick the one with smallest cut.
-        // The 4 additional intermediate directions improve separator quality
-        // on networks where the optimal cut is between the cardinal/diagonal axes.
+        // Try 16 projection directions covering 22.5° increments.
+        // More directions = better chance of finding natural graph boundaries
+        // (highways, rivers, rail lines) that produce small separators.
         double[][] directions = {
-            {1, 0}, {0, 1}, {1, 1}, {1, -1},
-            {2, 1}, {1, 2}, {2, -1}, {1, -2}
+            {1, 0}, {0, 1}, {1, 1}, {1, -1},        // 0°, 90°, 45°, 135°
+            {2, 1}, {1, 2}, {2, -1}, {1, -2},        // ~27°, ~63°, ~153°, ~117°
+            {3, 1}, {1, 3}, {3, -1}, {1, -3},        // ~18°, ~72°, ~162°, ~108°
+            {4, 1}, {1, 4}, {4, -1}, {1, -4}         // ~14°, ~76°, ~166°, ~104°
         };
 
         int[][] bestResult = null;
@@ -287,7 +289,9 @@ public class InertialFlowCutter {
             if (result != null) {
                 int sepSize = result[1].length;
                 int balance = Math.abs(result[0].length - result[2].length);
-                int score = sepSize * 4 + balance;
+                // Weight separator size heavily: every extra separator node
+                // causes O(degree²) shortcuts during contraction.
+                int score = sepSize * 256 + balance;
                 if (score < bestScore) {
                     bestScore = score;
                     bestResult = result;
@@ -309,10 +313,12 @@ public class InertialFlowCutter {
      * rivers, etc.) with far fewer boundary edges, dramatically reducing separator
      * size and thus shortcut count.
      *
-     * <p>5 ratios × 8 directions = 40 candidates per recursion level.
+     * <p>11 ratios × 8 directions = 88 candidates per recursion level.
      * The extra cost is negligible compared to contraction time.
      */
-    private static final double[] SPLIT_RATIOS = {0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65};
+    private static final double[] SPLIT_RATIOS = {
+        0.30, 0.33, 0.36, 0.40, 0.44, 0.50, 0.56, 0.60, 0.64, 0.67, 0.70
+    };
 
     /**
      * Try a single projection direction with <b>multiple split ratios</b>,
@@ -347,7 +353,7 @@ public class InertialFlowCutter {
             if (result != null) {
                 int sepSize = result[1].length;
                 int balance = Math.abs(result[0].length - result[2].length);
-                int score = sepSize * 4 + balance;
+                int score = sepSize * 256 + balance;
                 if (score < bestScore) {
                     bestScore = score;
                     bestResult = result;
@@ -357,11 +363,6 @@ public class InertialFlowCutter {
 
         // Clean up membership set
         for (int node : subNodes) inSubGraph[node] = false;
-
-        // Apply greedy separator thinning to the best result
-        if (bestResult != null && bestResult[1].length > 1) {
-            bestResult = thinSeparator(bestResult, adj);
-        }
 
         return bestResult;
     }
@@ -416,54 +417,69 @@ public class InertialFlowCutter {
             }
         }
 
-        // Use the SMALLER boundary side as separator.
-        boolean useSideA = (boundaryACount <= boundaryBCount);
-        int sepCount = useSideA ? boundaryACount : boundaryBCount;
-        int sepSide = useSideA ? 1 : 2;
+        if (boundaryACount == 0 && boundaryBCount == 0) return null;
 
-        if (sepCount == 0 || sepCount >= n - 1) return null;
+        // Try BOTH sides as separator and return the better one after thinning.
+        int[][] bestSideResult = null;
+        int bestSideScore = Integer.MAX_VALUE;
 
-        // Build partition arrays
-        int countA = 0, countB = 0;
-        for (int idx = 0; idx < n; idx++) {
-            int node = subNodes[idx];
-            boolean isSep = (boundaryMark[node] == gen && side[node] == sepSide);
-            if (isSep) continue;
-            if (side[node] == 1) countA++;
-            else countB++;
-        }
+        for (int sepSide : new int[]{1, 2}) {
+            int sepCount = (sepSide == 1) ? boundaryACount : boundaryBCount;
+            if (sepCount == 0 || sepCount >= n - 1) continue;
 
-        if (countA == 0 || countB == 0) return null;
+            int countA = 0, countB = 0;
+            for (int idx = 0; idx < n; idx++) {
+                int node = subNodes[idx];
+                boolean isSep = (boundaryMark[node] == gen && side[node] == sepSide);
+                if (isSep) continue;
+                if (side[node] == 1) countA++;
+                else countB++;
+            }
+            if (countA == 0 || countB == 0) continue;
 
-        int[] partA = new int[countA];
-        int[] separator = new int[sepCount];
-        int[] partB = new int[countB];
-        int ia = 0, is = 0, ib = 0;
-        for (int idx = 0; idx < n; idx++) {
-            int node = subNodes[idx];
-            boolean isSep = (boundaryMark[node] == gen && side[node] == sepSide);
-            if (isSep) {
-                separator[is++] = node;
-            } else if (side[node] == 1) {
-                partA[ia++] = node;
-            } else {
-                partB[ib++] = node;
+            int[] pA = new int[countA];
+            int[] sep = new int[sepCount];
+            int[] pB = new int[countB];
+            int ia2 = 0, is2 = 0, ib2 = 0;
+            for (int idx = 0; idx < n; idx++) {
+                int node = subNodes[idx];
+                boolean isSep = (boundaryMark[node] == gen && side[node] == sepSide);
+                if (isSep) {
+                    sep[is2++] = node;
+                } else if (side[node] == 1) {
+                    pA[ia2++] = node;
+                } else {
+                    pB[ib2++] = node;
+                }
+            }
+
+            // Apply thinning
+            int[][] candidate = new int[][]{pA, sep, pB};
+            if (sep.length > 1) {
+                candidate = thinSeparator(candidate, adj);
+            }
+
+            int thinnedSepSize = candidate[1].length;
+            int thinnedBalance = Math.abs(candidate[0].length - candidate[2].length);
+            int thinnedScore = thinnedSepSize * 8 + thinnedBalance;
+
+            if (thinnedScore < bestSideScore) {
+                bestSideScore = thinnedScore;
+                bestSideResult = candidate;
             }
         }
 
-        return new int[][]{partA, separator, partB};
+        return bestSideResult;
     }
 
     /**
-     * Greedy separator thinning: try to move separator nodes to P2 when safe.
+     * Greedy separator thinning with iterative passes.
      *
-     * <p>A separator node s can be safely removed if NONE of its neighbors
-     * are in P1.  If s has P1 neighbors, those P1 nodes would become directly
-     * connected to P2 (via s), breaking the separation.
+     * <p>A separator node s can be safely removed (moved to P2) if NONE of its
+     * neighbors are in P1 — it does not block any P1→P2 path.
      *
-     * <p>After initial thinning, we also verify safety: for each remaining
-     * separator node's P1 neighbors, at least one OTHER separator neighbor
-     * must exist.  If not, we must keep the node.
+     * <p>Runs multiple passes: after removing some separator nodes, their former
+     * separator neighbors may become removable too.  Iterates until fixpoint.
      */
     private int[][] thinSeparator(int[][] result, int[][] adj) {
         int[] partA = result[0];
@@ -472,53 +488,55 @@ public class InertialFlowCutter {
 
         if (separator.length <= 1) return result;
 
-        // Mark which nodes are in P1 and which are in the separator
-        int genP1 = ++scratchBoundaryGen;
-        int genSep = ++scratchBoundaryGen;
-        int[] mark = scratchBoundary;
+        boolean changed = true;
+        while (changed && separator.length > 1) {
+            changed = false;
 
-        for (int n : partA) mark[n] = genP1;
-        for (int n : separator) mark[n] = genSep;
+            int genP1 = ++scratchBoundaryGen;
+            int[] mark = scratchBoundary;
 
-        // A separator node s can be removed if it has NO neighbors in P1.
-        // Additionally, if s is adjacent to other separator nodes that DO have
-        // P1 neighbors, removing s is safe because those other nodes still
-        // block the P1→P2 path.
-        boolean[] removable = new boolean[separator.length];
-        int removeCount = 0;
+            for (int n : partA) mark[n] = genP1;
 
-        for (int i = 0; i < separator.length; i++) {
-            int s = separator[i];
-            boolean hasP1Neighbor = false;
-            for (int w : adj[s]) {
-                if (mark[w] == genP1) {
-                    hasP1Neighbor = true;
-                    break;
+            boolean[] removable = new boolean[separator.length];
+            int removeCount = 0;
+
+            for (int i = 0; i < separator.length; i++) {
+                int s = separator[i];
+                boolean hasP1Neighbor = false;
+                for (int w : adj[s]) {
+                    if (mark[w] == genP1) {
+                        hasP1Neighbor = true;
+                        break;
+                    }
+                }
+                if (!hasP1Neighbor) {
+                    removable[i] = true;
+                    removeCount++;
                 }
             }
-            if (!hasP1Neighbor) {
-                removable[i] = true;
-                removeCount++;
+
+            if (removeCount == 0) break;
+            if (removeCount == separator.length) break; // keep all — degenerate
+
+            // Rebuild: removed separator nodes go to P2
+            int[] newSep = new int[separator.length - removeCount];
+            int[] newPartB = new int[partB.length + removeCount];
+            System.arraycopy(partB, 0, newPartB, 0, partB.length);
+            int si = 0, bi = partB.length;
+            for (int i = 0; i < separator.length; i++) {
+                if (removable[i]) {
+                    newPartB[bi++] = separator[i];
+                } else {
+                    newSep[si++] = separator[i];
+                }
             }
+
+            separator = newSep;
+            partB = newPartB;
+            changed = true;
         }
 
-        if (removeCount == 0) return result;
-        if (removeCount == separator.length) return result; // keep all
-
-        // Rebuild: removed separator nodes go to P2
-        int[] newSep = new int[separator.length - removeCount];
-        int[] newPartB = new int[partB.length + removeCount];
-        System.arraycopy(partB, 0, newPartB, 0, partB.length);
-        int si = 0, bi = partB.length;
-        for (int i = 0; i < separator.length; i++) {
-            if (removable[i]) {
-                newPartB[bi++] = separator[i];
-            } else {
-                newSep[si++] = separator[i];
-            }
-        }
-
-        return new int[][]{partA, newSep, newPartB};
+        return new int[][]{partA, separator, partB};
     }
 
     /**
