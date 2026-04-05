@@ -72,10 +72,10 @@ public class BenchmarkBerlinV70 {
         long orderMs = (System.nanoTime() - t0) / 1_000_000;
 
         long t1 = System.nanoTime();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(graph, tc).buildWithOrderParallel(orderResult);
+        CHGraph chGraph = new CHBuilder(graph, tc).buildWithOrderParallel(orderResult);
         long contractionMs = (System.nanoTime() - t1) / 1_000_000;
 
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
         long totalBuildMs = (System.nanoTime() - t0) / 1_000_000;
 
         System.out.printf("  Order:       %,6d ms%n", orderMs);
@@ -93,7 +93,7 @@ public class BenchmarkBerlinV70 {
         System.out.printf("  ALT build:   %,6d ms  (%d landmarks)%n", altBuildMs, ALT_LANDMARKS);
 
         // ---- 4. Create routers ----
-        SpeedyCHTimeDep chTimeDep = new SpeedyCHTimeDep(chGraph, tc, tc);
+        CHRouterTimeDep chTimeDep = new CHRouterTimeDep(chGraph, tc, tc);
         SpeedyALT altRouter = new SpeedyALT(altData, tc, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());

@@ -5,12 +5,12 @@ import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
 
 /**
- * Time-dependent customization of a {@link SpeedyCHGraph} using
+ * Time-dependent customization of a {@link CHGraph} using
  * Travel Time Functions (TTFs).
  *
- * <p>After this customizer runs, {@link SpeedyCHGraph#ttf},
- * {@link SpeedyCHGraph#minTTF}, and {@link SpeedyCHGraph#edgeWeights}
- * are populated and ready for use by {@link SpeedyCHTimeDep}.
+ * <p>After this customizer runs, {@link CHGraph#ttf},
+ * {@link CHGraph#minTTF}, and {@link CHGraph#edgeWeights}
+ * are populated and ready for use by {@link CHRouterTimeDep}.
  *
  * <p>TTF storage uses a bin-major flat contiguous {@code double[]} array:
  * {@code ttf[bin * edgeCount + globalIdx]} for time bin {@code bin}, edge
@@ -19,7 +19,7 @@ import org.matsim.core.router.util.TravelTime;
  *
  * @author Implementation for CCH/CATCHUp router
  */
-public class SpeedyCHTTFCustomizer {
+public class CHTTFCustomizer {
 
     /** Number of time bins covering a full 24-hour day.
      *  Aligned with the MATSim default {@code travelTimeBinSize} of 900 s (15 min)
@@ -33,7 +33,7 @@ public class SpeedyCHTTFCustomizer {
     /** Precomputed reciprocal for fast bin computation. */
     static final double INV_BIN_SIZE = 1.0 / BIN_SIZE;
 
-    public void customize(SpeedyCHGraph chGraph, TravelTime tt, TravelDisutility td) {
+    public void customize(CHGraph chGraph, TravelTime tt, TravelDisutility td) {
         SpeedyGraph baseGraph = chGraph.getBaseGraph();
         int    edgeCount  = chGraph.totalEdgeCount;
         int[]  origLink   = chGraph.edgeOrigLink;
@@ -101,28 +101,28 @@ public class SpeedyCHTTFCustomizer {
      * so that the query hot-path reads weight from the same cache region as
      * the target-node index.
      */
-    static void propagateWeightsToCSR(SpeedyCHGraph chGraph) {
-        int S = SpeedyCHGraph.E_STRIDE;
+    static void propagateWeightsToCSR(CHGraph chGraph) {
+        int S = CHGraph.E_STRIDE;
         // Upward edges
         int upTotal = chGraph.upEdgeCount;
         for (int slot = 0; slot < upTotal; slot++) {
-            int gIdx = chGraph.upEdges[slot * S + SpeedyCHGraph.E_GIDX];
+            int gIdx = chGraph.upEdges[slot * S + CHGraph.E_GIDX];
             chGraph.upWeights[slot] = chGraph.edgeWeights[gIdx];
         }
         // Downward edges
         int dnTotal = chGraph.dnEdgeCount;
         for (int slot = 0; slot < dnTotal; slot++) {
-            int gIdx = chGraph.dnEdges[slot * S + SpeedyCHGraph.E_GIDX];
+            int gIdx = chGraph.dnEdges[slot * S + CHGraph.E_GIDX];
             chGraph.dnWeights[slot] = chGraph.edgeWeights[gIdx];
         }
         // Reverse CSR: outgoing downward edges
         for (int slot = 0; slot < chGraph.dnOutWeights.length; slot++) {
-            int gIdx = chGraph.dnOutEdges[slot * S + SpeedyCHGraph.E_GIDX];
+            int gIdx = chGraph.dnOutEdges[slot * S + CHGraph.E_GIDX];
             chGraph.dnOutWeights[slot] = chGraph.edgeWeights[gIdx];
         }
         // Reverse CSR: incoming upward edges
         for (int slot = 0; slot < chGraph.upInWeights.length; slot++) {
-            int gIdx = chGraph.upInEdges[slot * S + SpeedyCHGraph.E_GIDX];
+            int gIdx = chGraph.upInEdges[slot * S + CHGraph.E_GIDX];
             chGraph.upInWeights[slot] = chGraph.edgeWeights[gIdx];
         }
     }

@@ -7,9 +7,9 @@ import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.core.mobsim.framework.events.MobsimBeforeCleanupEvent;
 import org.matsim.core.mobsim.framework.listeners.MobsimBeforeCleanupListener;
 import org.matsim.core.router.speedy.InertialFlowCutter;
-import org.matsim.core.router.speedy.SpeedyCHBuilder;
-import org.matsim.core.router.speedy.SpeedyCHGraph;
-import org.matsim.core.router.speedy.SpeedyCHTTFCustomizer;
+import org.matsim.core.router.speedy.CHBuilder;
+import org.matsim.core.router.speedy.CHGraph;
+import org.matsim.core.router.speedy.CHTTFCustomizer;
 import org.matsim.core.router.speedy.SpeedyGraph;
 import org.matsim.core.router.speedy.SpeedyGraphBuilder;
 import org.matsim.core.router.util.TravelDisutility;
@@ -31,12 +31,12 @@ public class MultiInsertionDetourPathCalculatorManager implements MobsimBeforeCl
 	 * DRT modes share the same network and cost functions (the typical multi-mode
 	 * DRT setup), the expensive CH build + TTF customization is performed only once.
 	 * <p>
-	 * The {@link SpeedyCHGraph} is read-only after customization: all per-query
-	 * mutable state lives in the individual {@link org.matsim.core.router.speedy.SpeedyCHLeastCostPathTree}
+	 * The {@link CHGraph} is read-only after customization: all per-query
+	 * mutable state lives in the individual {@link org.matsim.core.router.speedy.CHLeastCostPathTree}
 	 * instances created by {@link org.matsim.contrib.dvrp.path.OneToManyPathSearch#createSearchCH},
 	 * so sharing the graph across threads is safe.
 	 */
-	private static final Map<CHCacheKey, SpeedyCHGraph> CH_GRAPH_CACHE = new ConcurrentHashMap<>();
+	private static final Map<CHCacheKey, CHGraph> CH_GRAPH_CACHE = new ConcurrentHashMap<>();
 
 	private final Network network;
 	private final TravelTime travelTime;
@@ -62,7 +62,7 @@ public class MultiInsertionDetourPathCalculatorManager implements MobsimBeforeCl
 	MultiInsertionDetourPathCalculator create()
 	{
 		MultiInsertionDetourPathCalculator instance;
-		if (drtCfg.isUseSpeedyCHForInsertionSearch()) {
+		if (drtCfg.isUseCHForInsertionSearch()) {
 			instance = new MultiInsertionDetourPathCalculator(getOrBuildCHGraph(), travelTime, travelDisutility, drtCfg);
 		} else {
 			instance = new MultiInsertionDetourPathCalculator(network, travelTime, travelDisutility, drtCfg);
@@ -77,16 +77,16 @@ public class MultiInsertionDetourPathCalculatorManager implements MobsimBeforeCl
 	 * multiple manager instances (e.g. from different DRT modes on the same network)
 	 * share a single CH graph.
 	 */
-	private SpeedyCHGraph getOrBuildCHGraph() {
+	private CHGraph getOrBuildCHGraph() {
 		CHCacheKey key = new CHCacheKey(network, travelDisutility, travelTime);
 		return CH_GRAPH_CACHE.computeIfAbsent(key, k -> {
-			LOG.info("Building SpeedyCH graph for DRT insertion search on network with {} nodes, {} links – one-time cost.",
+			LOG.info("Building CHRouter graph for DRT insertion search on network with {} nodes, {} links – one-time cost.",
 					network.getNodes().size(), network.getLinks().size());
 			SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
 			InertialFlowCutter.NDOrderResult ndOrder = new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-			SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, travelDisutility).buildWithOrderParallel(ndOrder);
-			new SpeedyCHTTFCustomizer().customize(chGraph, travelTime, travelDisutility);
-			LOG.info("SpeedyCH graph built for DRT insertion search (base: {} links).",
+			CHGraph chGraph = new CHBuilder(baseGraph, travelDisutility).buildWithOrderParallel(ndOrder);
+			new CHTTFCustomizer().customize(chGraph, travelTime, travelDisutility);
+			LOG.info("CHRouter graph built for DRT insertion search (base: {} links).",
 					network.getLinks().size());
 			return chGraph;
 		});

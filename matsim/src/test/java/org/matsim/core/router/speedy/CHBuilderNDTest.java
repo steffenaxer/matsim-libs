@@ -22,12 +22,12 @@ import java.util.Random;
 
 /**
  * Tests for nested-dissection-ordered CH contraction ({@link InertialFlowCutter}
- * + {@link SpeedyCHBuilder#buildWithOrder}).
+ * + {@link CHBuilder#buildWithOrder}).
  *
  * <p>Verifies that the ND-ordered CH produces correct shortest paths by comparing
  * against {@link SpeedyDijkstra} on random OD pairs.
  */
-public class SpeedyCHBuilderNDTest {
+public class CHBuilderNDTest {
 
     private static final int    NUM_QUERIES    = 500;
     private static final double COST_TOLERANCE = 1e-6;
@@ -41,7 +41,7 @@ public class SpeedyCHBuilderNDTest {
 
         SpeedyGraph g = SpeedyGraphBuilder.build(network);
         int[] order = new InertialFlowCutter(g).computeOrder();
-        SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).buildWithOrder(order);
+        CHGraph ch = new CHBuilder(g, tc).buildWithOrder(order);
 
         Assertions.assertNotNull(ch);
         Assertions.assertEquals(g.nodeCount, ch.nodeCount);
@@ -67,10 +67,10 @@ public class SpeedyCHBuilderNDTest {
         FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
         SpeedyGraph g = SpeedyGraphBuilder.build(network);
         int[] order = new InertialFlowCutter(g).computeOrder();
-        SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).buildWithOrder(order);
-        new SpeedyCHTTFCustomizer().customize(ch, tc, tc);
+        CHGraph ch = new CHBuilder(g, tc).buildWithOrder(order);
+        new CHTTFCustomizer().customize(ch, tc, tc);
 
-        SpeedyCHTimeDep router = new SpeedyCHTimeDep(ch, tc, tc);
+        CHRouterTimeDep router = new CHRouterTimeDep(ch, tc, tc);
         Path path = router.calcLeastCostPath(nA, nC, 0, null, null);
 
         Assertions.assertNotNull(path, "Path should not be null");
@@ -144,13 +144,13 @@ public class SpeedyCHBuilderNDTest {
         // Warm up JVM
         {
             SpeedyGraph g = SpeedyGraphBuilder.build(network);
-            new SpeedyCHBuilder(g, tc).build();
+            new CHBuilder(g, tc).build();
         }
 
         // Benchmark witness-based ordering
         long witnessStart = System.nanoTime();
         SpeedyGraph g1 = SpeedyGraphBuilder.build(network);
-        SpeedyCHGraph ch1 = new SpeedyCHBuilder(g1, tc).build();
+        CHGraph ch1 = new CHBuilder(g1, tc).build();
         long witnessMs = (System.nanoTime() - witnessStart) / 1_000_000;
 
         // Benchmark ND ordering
@@ -159,7 +159,7 @@ public class SpeedyCHBuilderNDTest {
         long ndOrderStart = System.nanoTime();
         int[] order = new InertialFlowCutter(g2).computeOrder();
         long ndOrderMs = (System.nanoTime() - ndOrderStart) / 1_000_000;
-        SpeedyCHGraph ch2 = new SpeedyCHBuilder(g2, tc).buildWithOrder(order);
+        CHGraph ch2 = new CHBuilder(g2, tc).buildWithOrder(order);
         long ndTotalMs = (System.nanoTime() - ndStart) / 1_000_000;
 
         System.out.printf("  Witness-based: %d ms, %d total edges%n", witnessMs, ch1.totalEdgeCount);
@@ -212,13 +212,13 @@ public class SpeedyCHBuilderNDTest {
         // Warm up JVM with a smaller build
         {
             SpeedyGraph g = SpeedyGraphBuilder.build(network);
-            new SpeedyCHBuilder(g, tc).build();
+            new CHBuilder(g, tc).build();
         }
 
         // Benchmark witness-based ordering
         long witnessStart = System.nanoTime();
         SpeedyGraph g1 = SpeedyGraphBuilder.build(network);
-        SpeedyCHGraph ch1 = new SpeedyCHBuilder(g1, tc).build();
+        CHGraph ch1 = new CHBuilder(g1, tc).build();
         long witnessMs = (System.nanoTime() - witnessStart) / 1_000_000;
 
         // Benchmark ND ordering
@@ -228,7 +228,7 @@ public class SpeedyCHBuilderNDTest {
         int[] order = new InertialFlowCutter(g2).computeOrder();
         long ndOrderMs = (System.nanoTime() - ndOrderStart) / 1_000_000;
         long ndContractStart = System.nanoTime();
-        SpeedyCHGraph ch2 = new SpeedyCHBuilder(g2, tc).buildWithOrder(order);
+        CHGraph ch2 = new CHBuilder(g2, tc).buildWithOrder(order);
         long ndContractMs = (System.nanoTime() - ndContractStart) / 1_000_000;
         long ndTotalMs = (System.nanoTime() - ndStart) / 1_000_000;
 
@@ -242,8 +242,8 @@ public class SpeedyCHBuilderNDTest {
         System.out.println();
 
         // Verify correctness of ND-built CH on random queries
-        new SpeedyCHTTFCustomizer().customize(ch2, tc, tc);
-        SpeedyCHTimeDep ndRouter = new SpeedyCHTimeDep(ch2, tc, tc);
+        new CHTTFCustomizer().customize(ch2, tc, tc);
+        CHRouterTimeDep ndRouter = new CHRouterTimeDep(ch2, tc, tc);
         SpeedyDijkstra dijkstra = new SpeedyDijkstra(g2, tc, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
@@ -289,9 +289,9 @@ public class SpeedyCHBuilderNDTest {
 
         // Build ND-ordered CATCHUp router
         int[] order = new InertialFlowCutter(baseGraph).computeOrder();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrder(order);
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
-        SpeedyCHTimeDep chRouter = new SpeedyCHTimeDep(chGraph, tc, tc);
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrder(order);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
+        CHRouterTimeDep chRouter = new CHRouterTimeDep(chGraph, tc, tc);
 
         // Reference: SpeedyDijkstra
         SpeedyDijkstra dijkstra = new SpeedyDijkstra(baseGraph, tc, tc);
@@ -336,7 +336,7 @@ public class SpeedyCHBuilderNDTest {
 
     /**
      * Correctness test using the <b>parallel</b> contraction path
-     * ({@link SpeedyCHBuilder#buildWithOrderParallel}).
+     * ({@link CHBuilder#buildWithOrderParallel}).
      * Compares 500 random OD pairs against Dijkstra.
      */
     private void runParallelCorrectnessTest(Network network) {
@@ -347,9 +347,9 @@ public class SpeedyCHBuilderNDTest {
         // Build ND-ordered CH using PARALLEL contraction
         InertialFlowCutter.NDOrderResult orderResult =
                 new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
-        SpeedyCHTimeDep chRouter = new SpeedyCHTimeDep(chGraph, tc, tc);
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
+        CHRouterTimeDep chRouter = new CHRouterTimeDep(chGraph, tc, tc);
 
         // Reference: SpeedyDijkstra
         SpeedyDijkstra dijkstra = new SpeedyDijkstra(baseGraph, tc, tc);

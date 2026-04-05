@@ -122,9 +122,9 @@ public class ReRoutingIT {
 	}
 
 	@Test
-	void testReRoutingSpeedyCH() throws MalformedURLException {
+	void testReRoutingCH() throws MalformedURLException {
 		Scenario scenario = this.loadScenario();
-		scenario.getConfig().controller().setRoutingAlgorithmType(RoutingAlgorithmType.SpeedyCH);
+		scenario.getConfig().controller().setRoutingAlgorithmType(RoutingAlgorithmType.CHRouter);
 		scenario.getConfig().routing().setAccessEgressType(RoutingConfigGroup.AccessEgressType.none);
 		Controler controler = new Controler(scenario);
 		controler.getConfig().controller().setCreateGraphs(false);

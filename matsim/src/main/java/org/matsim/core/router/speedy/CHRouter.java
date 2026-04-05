@@ -20,7 +20,7 @@ import java.util.Map;
 
 /**
  * Bidirectional Contraction Hierarchies (CH) shortest-path query using the
- * optimised CSR-based {@link SpeedyCHGraph}.
+ * optimised CSR-based {@link CHGraph}.
  *
  * <p>Per-node search state is packed into contiguous arrays following the
  * SpeedyALT cache-locality pattern:
@@ -32,11 +32,11 @@ import java.util.Map;
  *
  * @author Implementation for CCH/CATCHUp router
  */
-public class SpeedyCH implements LeastCostPathCalculator {
+public class CHRouter implements LeastCostPathCalculator {
 
-    private static final Logger LOG = LogManager.getLogger(SpeedyCH.class);
+    private static final Logger LOG = LogManager.getLogger(CHRouter.class);
 
-    private final SpeedyCHGraph chGraph;
+    private final CHGraph chGraph;
     private final SpeedyGraph   baseGraph;
     private final TravelTime       tt;
     private final TravelDisutility td;
@@ -65,7 +65,7 @@ public class SpeedyCH implements LeastCostPathCalculator {
     private final int[]    dnOff, dnLen, dnEdges;
     private final double[] dnWeights;
 
-    public SpeedyCH(SpeedyCHGraph chGraph, TravelTime tt, TravelDisutility td) {
+    public CHRouter(CHGraph chGraph, TravelTime tt, TravelDisutility td) {
         this.chGraph   = chGraph;
         this.baseGraph = chGraph.getBaseGraph();
         this.tt        = tt;
@@ -159,7 +159,7 @@ public class SpeedyCH implements LeastCostPathCalculator {
             }
         }
 
-        final int S = SpeedyCHGraph.E_STRIDE;
+        final int S = CHGraph.E_STRIDE;
         double bestCost   = Double.POSITIVE_INFINITY;
         int    meetingNode = -1;
 
@@ -192,17 +192,17 @@ public class SpeedyCH implements LeastCostPathCalculator {
                         if (newCost < fwdCost[w]) {
                             fwdCost[w] = newCost;
                             fwdComingFrom[w] = v;
-                            fwdUsedEdge[w]   = upEdges[slot * S + SpeedyCHGraph.E_GIDX];
+                            fwdUsedEdge[w]   = upEdges[slot * S + CHGraph.E_GIDX];
                             fwdPQ.decreaseKey(w, newCost);
                         } else if (newCost == fwdCost[w]) {
-                            int gIdx = upEdges[slot * S + SpeedyCHGraph.E_GIDX];
+                            int gIdx = upEdges[slot * S + CHGraph.E_GIDX];
                             if (gIdx < fwdUsedEdge[w]) {
                                 fwdComingFrom[w] = v;
                                 fwdUsedEdge[w]   = gIdx;
                             }
                         }
                     } else {
-                        setFwd(w, newCost, v, upEdges[slot * S + SpeedyCHGraph.E_GIDX]);
+                        setFwd(w, newCost, v, upEdges[slot * S + CHGraph.E_GIDX]);
                         fwdPQ.insert(w, newCost);
                     }
                 }
@@ -228,17 +228,17 @@ public class SpeedyCH implements LeastCostPathCalculator {
                         if (newCost < bwdCost[y]) {
                             bwdCost[y] = newCost;
                             bwdComingFrom[y] = v;
-                            bwdUsedEdge[y]   = dnEdges[slot * S + SpeedyCHGraph.E_GIDX];
+                            bwdUsedEdge[y]   = dnEdges[slot * S + CHGraph.E_GIDX];
                             bwdPQ.decreaseKey(y, newCost);
                         } else if (newCost == bwdCost[y]) {
-                            int gIdx = dnEdges[slot * S + SpeedyCHGraph.E_GIDX];
+                            int gIdx = dnEdges[slot * S + CHGraph.E_GIDX];
                             if (gIdx < bwdUsedEdge[y]) {
                                 bwdComingFrom[y] = v;
                                 bwdUsedEdge[y]   = gIdx;
                             }
                         }
                     } else {
-                        setBwd(y, newCost, v, dnEdges[slot * S + SpeedyCHGraph.E_GIDX]);
+                        setBwd(y, newCost, v, dnEdges[slot * S + CHGraph.E_GIDX]);
                         bwdPQ.insert(y, newCost);
                     }
                 }

@@ -21,12 +21,12 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Correctness tests for the time-dependent CATCHUp router ({@link SpeedyCHTimeDep}).
+ * Correctness tests for the time-dependent CATCHUp router ({@link CHRouterTimeDep}).
  *
  * <p>Uses {@link FreespeedTravelTimeAndDisutility} which makes TTFs constant over time,
  * so the CATCHUp result must agree with {@link SpeedyDijkstra} to within 1e-6 cost.
  */
-public class SpeedyCHCorrectnessTest {
+public class CHCorrectnessTest {
 
     private static final int    NUM_QUERIES     = 500;
     private static final double COST_TOLERANCE  = 1e-6;
@@ -49,9 +49,9 @@ public class SpeedyCHCorrectnessTest {
         SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
 
         // Build time-dependent CATCHUp router.
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).build();
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
-        SpeedyCHTimeDep chRouter = new SpeedyCHTimeDep(chGraph, tc, tc);
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).build();
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
+        CHRouterTimeDep chRouter = new CHRouterTimeDep(chGraph, tc, tc);
 
         // Reference: SpeedyDijkstra.
         SpeedyDijkstra dijkstra = new SpeedyDijkstra(baseGraph, tc, tc);
@@ -73,10 +73,10 @@ public class SpeedyCHCorrectnessTest {
             if (chPath == null && dijPath == null) continue;
 
             Assertions.assertNotNull(chPath,
-                    "SpeedyCHTimeDep returned null but Dijkstra found a path from "
+                    "CHRouterTimeDep returned null but Dijkstra found a path from "
                             + src.getId() + " to " + dst.getId());
             Assertions.assertNotNull(dijPath,
-                    "SpeedyDijkstra returned null but SpeedyCHTimeDep found a path from "
+                    "SpeedyDijkstra returned null but CHRouterTimeDep found a path from "
                             + src.getId() + " to " + dst.getId());
 
             double chCost  = chPath.travelCost;

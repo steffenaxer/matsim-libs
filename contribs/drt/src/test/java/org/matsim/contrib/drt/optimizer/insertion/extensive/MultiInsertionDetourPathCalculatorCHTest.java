@@ -46,9 +46,9 @@ import org.matsim.core.config.groups.ScoringConfigGroup;
 import org.matsim.core.network.NetworkUtils;
 import org.matsim.core.router.costcalculators.FreespeedTravelTimeAndDisutility;
 import org.matsim.core.router.speedy.InertialFlowCutter;
-import org.matsim.core.router.speedy.SpeedyCHBuilder;
-import org.matsim.core.router.speedy.SpeedyCHGraph;
-import org.matsim.core.router.speedy.SpeedyCHTTFCustomizer;
+import org.matsim.core.router.speedy.CHBuilder;
+import org.matsim.core.router.speedy.CHGraph;
+import org.matsim.core.router.speedy.CHTTFCustomizer;
 import org.matsim.core.router.speedy.SpeedyGraph;
 import org.matsim.core.router.speedy.SpeedyGraphBuilder;
 import org.matsim.core.router.util.TravelDisutility;
@@ -56,10 +56,10 @@ import org.matsim.core.router.util.TravelTime;
 import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
 
 /**
- * Tests for the SpeedyCH-based DRT insertion one-to-many path search.
+ * Tests for the CHRouter-based DRT insertion one-to-many path search.
  * <p>
  * Verifies that {@link MultiInsertionDetourPathCalculatorManager} correctly creates
- * CH-accelerated calculators when {@code useSpeedyCHForInsertionSearch=true}
+ * CH-accelerated calculators when {@code useCHForInsertionSearch=true}
  * in {@link DrtConfigGroup}, that the travel times match the Dijkstra baseline,
  * and that the shared CH graph cache is thread-safe under concurrent access.
  *
@@ -174,8 +174,8 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		// Build CH-based search
 		SpeedyGraph chBaseGraph = SpeedyGraphBuilder.build(network);
 		InertialFlowCutter.NDOrderResult ndOrder = new InertialFlowCutter(chBaseGraph).computeOrderWithBatches();
-		SpeedyCHGraph chGraph = new SpeedyCHBuilder(chBaseGraph, travelDisutility).buildWithOrderParallel(ndOrder);
-		new SpeedyCHTTFCustomizer().customize(chGraph, travelTime, travelDisutility);
+		CHGraph chGraph = new CHBuilder(chBaseGraph, travelDisutility).buildWithOrderParallel(ndOrder);
+		new CHTTFCustomizer().customize(chGraph, travelTime, travelDisutility);
 		OneToManyPathSearch chSearch = OneToManyPathSearch.createSearchCH(chGraph, travelTime, travelDisutility, false);
 
 		Link linkAB = network.getLinks().get(Id.createLinkId("AB"));
@@ -211,20 +211,20 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 	}
 
 	/**
-	 * Verifies that {@link DrtConfigGroup#isUseSpeedyCHForInsertionSearch()} defaults
+	 * Verifies that {@link DrtConfigGroup#isUseCHForInsertionSearch()} defaults
 	 * to false and can be set to true.
 	 */
 	@Test
 	void drtConfigGroupFlagDefaultsFalse() {
 		DrtConfigGroup cfg = new DrtConfigGroup();
-		assertThat(cfg.isUseSpeedyCHForInsertionSearch()).isFalse();
+		assertThat(cfg.isUseCHForInsertionSearch()).isFalse();
 	}
 
 	@Test
 	void drtConfigGroupFlagCanBeEnabled() {
 		DrtConfigGroup cfg = new DrtConfigGroup();
-		cfg.setUseSpeedyCHForInsertionSearch(true);
-		assertThat(cfg.isUseSpeedyCHForInsertionSearch()).isTrue();
+		cfg.setUseCHForInsertionSearch(true);
+		assertThat(cfg.isUseCHForInsertionSearch()).isTrue();
 	}
 
 	/**
@@ -238,7 +238,7 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 
 		DrtConfigGroup drtCfg = new DrtConfigGroup();
-		drtCfg.setUseSpeedyCHForInsertionSearch(true);
+		drtCfg.setUseCHForInsertionSearch(true);
 
 		var manager = new MultiInsertionDetourPathCalculatorManager(network, travelTime, tc, drtCfg);
 		// Should not throw
@@ -252,10 +252,10 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 
 	/**
 	 * Verifies that multiple threads can concurrently perform CH-based one-to-many
-	 * path searches on a SHARED {@link SpeedyCHGraph} without data corruption.
+	 * path searches on a SHARED {@link CHGraph} without data corruption.
 	 * <p>
 	 * Each thread creates its own {@link OneToManyPathSearch} (which owns a private
-	 * {@link org.matsim.core.router.speedy.SpeedyCHLeastCostPathTree}), but they
+	 * {@link org.matsim.core.router.speedy.CHLeastCostPathTree}), but they
 	 * all share the same read-only CH overlay graph. This mirrors the real-world
 	 * DRT setup where 4 concurrent search threads query the same cached CH graph.
 	 * <p>
@@ -272,8 +272,8 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		// Build ONE shared CH graph
 		SpeedyGraph chBaseGraph = SpeedyGraphBuilder.build(network);
 		InertialFlowCutter.NDOrderResult ndOrder = new InertialFlowCutter(chBaseGraph).computeOrderWithBatches();
-		SpeedyCHGraph sharedCHGraph = new SpeedyCHBuilder(chBaseGraph, travelDisutility).buildWithOrderParallel(ndOrder);
-		new SpeedyCHTTFCustomizer().customize(sharedCHGraph, travelTime, travelDisutility);
+		CHGraph sharedCHGraph = new CHBuilder(chBaseGraph, travelDisutility).buildWithOrderParallel(ndOrder);
+		new CHTTFCustomizer().customize(sharedCHGraph, travelTime, travelDisutility);
 
 		// Build Dijkstra baseline (single-threaded)
 		SpeedyGraph dijkstraGraph = SpeedyGraphBuilder.build(network);
@@ -354,7 +354,7 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 
 		DrtConfigGroup drtCfg = new DrtConfigGroup();
-		drtCfg.setUseSpeedyCHForInsertionSearch(true);
+		drtCfg.setUseCHForInsertionSearch(true);
 
 		int numThreads = 8;
 		ExecutorService executor = Executors.newFixedThreadPool(numThreads);
@@ -400,7 +400,7 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		TravelTime travelTime = new FreeSpeedTravelTime();
 		FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 		DrtConfigGroup drtCfg = new DrtConfigGroup();
-		drtCfg.setUseSpeedyCHForInsertionSearch(true);
+		drtCfg.setUseCHForInsertionSearch(true);
 
 		var manager1 = new MultiInsertionDetourPathCalculatorManager(network1, travelTime, tc, drtCfg);
 		var manager2 = new MultiInsertionDetourPathCalculatorManager(network2, travelTime, tc, drtCfg);
@@ -429,7 +429,7 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		List<Link> linkList = new ArrayList<>(network.getLinks().values());
 
 		DrtConfigGroup drtCfg = new DrtConfigGroup();
-		drtCfg.setUseSpeedyCHForInsertionSearch(true);
+		drtCfg.setUseCHForInsertionSearch(true);
 
 		// One manager, multiple calculators (simulates DRT creating 4 per insertion worker)
 		var manager = new MultiInsertionDetourPathCalculatorManager(network, travelTime, tc, drtCfg);
@@ -441,8 +441,8 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		// Build a shared CH search for thread-safe querying
 		SpeedyGraph chBase = SpeedyGraphBuilder.build(network);
 		InertialFlowCutter.NDOrderResult ndOrder = new InertialFlowCutter(chBase).computeOrderWithBatches();
-		SpeedyCHGraph chGraph = new SpeedyCHBuilder(chBase, tc).buildWithOrderParallel(ndOrder);
-		new SpeedyCHTTFCustomizer().customize(chGraph, travelTime, tc);
+		CHGraph chGraph = new CHBuilder(chBase, tc).buildWithOrderParallel(ndOrder);
+		new CHTTFCustomizer().customize(chGraph, travelTime, tc);
 
 		int numThreads = 6;
 		int queriesPerThread = 100;

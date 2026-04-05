@@ -49,9 +49,9 @@ import java.util.NoSuchElementException;
  *
  * @author Implementation for CCH/CATCHUp router
  */
-public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
+public class CHLeastCostPathTree implements ShortestPathTree {
 
-    private final SpeedyCHGraph chGraph;
+    private final CHGraph chGraph;
     private final SpeedyGraph baseGraph;
     private final TravelTime tt;
     private final TravelDisutility td;
@@ -82,7 +82,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
     private final double[] upInWeights;    // colocated minTTF per upIn slot
     private final int nodeCount;
 
-    public SpeedyCHLeastCostPathTree(SpeedyCHGraph chGraph, TravelTime tt, TravelDisutility td) {
+    public CHLeastCostPathTree(CHGraph chGraph, TravelTime tt, TravelDisutility td) {
         this.chGraph = chGraph;
         this.baseGraph = chGraph.getBaseGraph();
         this.tt = tt;
@@ -138,13 +138,13 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
                                   LeastCostPathTree.StopCriterion stopCriterion) {
         advanceIteration();
 
-        final int S = SpeedyCHGraph.E_STRIDE;
-        final int NUM_BINS = SpeedyCHTTFCustomizer.NUM_BINS;
-        final double INV_BIN = SpeedyCHTTFCustomizer.INV_BIN_SIZE;
+        final int S = CHGraph.E_STRIDE;
+        final int NUM_BINS = CHTTFCustomizer.NUM_BINS;
+        final double INV_BIN = CHTTFCustomizer.INV_BIN_SIZE;
 
         // Phase 1: Upward Dijkstra from source
         // Uses time-dependent TTF for travel time; cost = travel time (consistent
-        // with SpeedyCHTimeDep which also uses TTF as the cost metric).
+        // with CHRouterTimeDep which also uses TTF as the cost metric).
         setNode(startNode, 0.0, startTime, 0.0, -1, -1);
         pq.clear();
         pq.insert(startNode, 0.0);
@@ -176,7 +176,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
             for (int slot = uOff; slot < uEnd; slot++) {
                 int eBase = slot * S;
                 int w = upEdges[eBase];
-                int gIdx = upEdges[eBase + SpeedyCHGraph.E_GIDX];
+                int gIdx = upEdges[eBase + CHGraph.E_GIDX];
 
                 double tTime = ttf[binOff + gIdx];
                 double newCost = cost + tTime;
@@ -221,7 +221,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
      *   <li><b>Uses minTTF</b>: colocated dnOutWeights for cache locality.</li>
      * </ul>
      *
-     * @param S       edge stride (SpeedyCHGraph.E_STRIDE)
+     * @param S       edge stride (CHGraph.E_STRIDE)
      * @param maxCost upper bound on useful cost (Phase 1 termination cost);
      *                Double.POSITIVE_INFINITY for unbounded queries
      */
@@ -267,7 +267,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
                     data[wBase + 1] = uArr + tTime;
                     data[wBase + 2] = 0.0;
                     comingFrom[w] = u;
-                    fromEdgeGIdx[w] = dnOutEdges[eBase + SpeedyCHGraph.E_GIDX];
+                    fromEdgeGIdx[w] = dnOutEdges[eBase + CHGraph.E_GIDX];
                     iterIds[w] = iter;
                 }
             }
@@ -293,7 +293,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
                                         LeastCostPathTree.StopCriterion stopCriterion) {
         advanceIteration();
 
-        final int S = SpeedyCHGraph.E_STRIDE;
+        final int S = CHGraph.E_STRIDE;
 
         // Phase 1: Backward "upward" Dijkstra from target.
         setNode(targetNode, 0.0, arrivalTime, 0.0, -1, -1);
@@ -318,7 +318,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
             for (int slot = dOff; slot < dEnd; slot++) {
                 int eBase = slot * S;
                 int u = dnEdges[eBase];
-                int gIdx = dnEdges[eBase + SpeedyCHGraph.E_GIDX];
+                int gIdx = dnEdges[eBase + CHGraph.E_GIDX];
 
                 double edgeCost = chGraph.minTTF[gIdx];
                 double newCost = cost + edgeCost;
@@ -386,7 +386,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
                     data[wBase + 1] = uTime - edgeCost;
                     data[wBase + 2] = 0.0;
                     comingFrom[w] = u;
-                    fromEdgeGIdx[w] = upInEdges[eBase + SpeedyCHGraph.E_GIDX];
+                    fromEdgeGIdx[w] = upInEdges[eBase + CHGraph.E_GIDX];
                     iterIds[w] = iter;
                 }
             }

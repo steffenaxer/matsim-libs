@@ -44,7 +44,7 @@ import org.matsim.api.core.v01.network.Node;
  *
  * @author Implementation for CCH/CATCHUp router
  */
-public class SpeedyCHGraph {
+public class CHGraph {
 
     /** Ints per edge in the CSR edge arrays (toNode + globalIdx only). */
     static final int E_STRIDE = 2;
@@ -121,7 +121,7 @@ public class SpeedyCHGraph {
 
     private final SpeedyGraph baseGraph;
 
-    SpeedyCHGraph(SpeedyGraph baseGraph, int nodeCount,
+    CHGraph(SpeedyGraph baseGraph, int nodeCount,
                   int upEdgeCount, int[] upOff, int[] upLen, int[] upEdges, double[] upWeights,
                   int dnEdgeCount, int[] dnOff, int[] dnLen, int[] dnEdges, double[] dnWeights,
                   int totalEdgeCount, int[] edgeOrigLink, int[] edgeLower1, int[] edgeLower2,
@@ -160,7 +160,7 @@ public class SpeedyCHGraph {
         }
 
         // Pre-allocate bin-major flat TTF arrays.
-        this.ttf    = new double[SpeedyCHTTFCustomizer.NUM_BINS * totalEdgeCount];
+        this.ttf    = new double[CHTTFCustomizer.NUM_BINS * totalEdgeCount];
         this.minTTF = new double[totalEdgeCount];
         this.ttfHash = new double[totalEdgeCount];
         java.util.Arrays.fill(this.ttfHash, Double.NaN);

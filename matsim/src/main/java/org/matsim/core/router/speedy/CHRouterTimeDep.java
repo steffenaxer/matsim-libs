@@ -20,15 +20,15 @@ import java.util.Map;
 
 /**
  * Time-dependent CATCHUp bidirectional CH query using the optimised
- * CSR-based {@link SpeedyCHGraph} with flat TTF array.
+ * CSR-based {@link CHGraph} with flat TTF array.
  *
  * @author Implementation for CCH/CATCHUp router
  */
-public class SpeedyCHTimeDep implements LeastCostPathCalculator {
+public class CHRouterTimeDep implements LeastCostPathCalculator {
 
-    private static final Logger LOG = LogManager.getLogger(SpeedyCHTimeDep.class);
+    private static final Logger LOG = LogManager.getLogger(CHRouterTimeDep.class);
 
-    private final SpeedyCHGraph chGraph;
+    private final CHGraph chGraph;
     private final SpeedyGraph   baseGraph;
     private final TravelTime       tt;
     private final TravelDisutility td;
@@ -63,7 +63,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
     private final double[] minTTF;
     private final int      totalEdgeCount; // stride for bin-major TTF layout
 
-    public SpeedyCHTimeDep(SpeedyCHGraph chGraph, TravelTime tt, TravelDisutility td) {
+    public CHRouterTimeDep(CHGraph chGraph, TravelTime tt, TravelDisutility td) {
         this.chGraph   = chGraph;
         this.baseGraph = chGraph.getBaseGraph();
         this.tt        = tt;
@@ -170,9 +170,9 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
             }
         }
 
-        final int S = SpeedyCHGraph.E_STRIDE;
-        final int NUM_BINS = SpeedyCHTTFCustomizer.NUM_BINS;
-        final double INV_BIN = SpeedyCHTTFCustomizer.INV_BIN_SIZE;
+        final int S = CHGraph.E_STRIDE;
+        final int NUM_BINS = CHTTFCustomizer.NUM_BINS;
+        final double INV_BIN = CHTTFCustomizer.INV_BIN_SIZE;
 
         double bestBound   = Double.POSITIVE_INFINITY;
         int    meetingNode = -1;
@@ -209,7 +209,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                 for (int slot = uOff; slot < uEnd; slot++) {
                     int eBase      = slot * S;
                     int w          = upEdges[eBase]; // toNode
-                    int gIdx       = upEdges[eBase + SpeedyCHGraph.E_GIDX];
+                    int gIdx       = upEdges[eBase + CHGraph.E_GIDX];
                     double tTime   = ttf[binOff + gIdx];
                     double newArr  = arr + tTime;
                     double newCost = cost + tTime;
@@ -250,7 +250,7 @@ public class SpeedyCHTimeDep implements LeastCostPathCalculator {
                 for (int slot = dOff; slot < dEnd; slot++) {
                     int eBase = slot * S;
                     int y     = dnEdges[eBase]; // fromNode (higher-level)
-                    int gIdx  = dnEdges[eBase + SpeedyCHGraph.E_GIDX];
+                    int gIdx  = dnEdges[eBase + CHGraph.E_GIDX];
                     double newLB = lb + minTTF[gIdx];
 
                     if (bwdIterIds[y] == currentIteration) {

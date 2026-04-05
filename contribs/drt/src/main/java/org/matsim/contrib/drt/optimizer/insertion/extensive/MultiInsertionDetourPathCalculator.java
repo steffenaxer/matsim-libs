@@ -44,7 +44,7 @@ import org.matsim.contrib.dvrp.path.OneToManyPathSearch.PathData;
 import org.matsim.core.mobsim.dsim.NodeSingleton;
 import org.matsim.core.mobsim.framework.events.MobsimBeforeCleanupEvent;
 import org.matsim.core.mobsim.framework.listeners.MobsimBeforeCleanupListener;
-import org.matsim.core.router.speedy.SpeedyCHGraph;
+import org.matsim.core.router.speedy.CHGraph;
 import org.matsim.core.router.speedy.SpeedyGraph;
 import org.matsim.core.router.speedy.SpeedyGraphBuilder;
 import org.matsim.core.router.util.TravelDisutility;
@@ -78,7 +78,7 @@ class MultiInsertionDetourPathCalculator implements MobsimBeforeCleanupListener 
 
 	/**
 	 * Constructs a CH-accelerated path calculator using a pre-built and customized
-	 * {@link SpeedyCHGraph}.  The CH graph is expected to be shared across multiple
+	 * {@link CHGraph}.  The CH graph is expected to be shared across multiple
 	 * calculator instances (it is read-only after customisation).
 	 *
 	 * @param chGraph         pre-built and TTF-customized CH overlay graph
@@ -86,7 +86,7 @@ class MultiInsertionDetourPathCalculator implements MobsimBeforeCleanupListener 
 	 * @param travelDisutility travel disutility for cost computation
 	 * @param drtCfg          DRT config group
 	 */
-	MultiInsertionDetourPathCalculator(SpeedyCHGraph chGraph, TravelTime travelTime,
+	MultiInsertionDetourPathCalculator(CHGraph chGraph, TravelTime travelTime,
 			TravelDisutility travelDisutility, DrtConfigGroup drtCfg) {
 		boolean lazy = allowsLazyPathCreation(drtCfg);
 		toPickupPathSearch    = OneToManyPathSearch.createSearchCH(chGraph, travelTime, travelDisutility, lazy);

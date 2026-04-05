@@ -12,7 +12,7 @@ import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Builds a {@link SpeedyCHGraph} from a {@link SpeedyGraph} using the
+ * Builds a {@link CHGraph} from a {@link SpeedyGraph} using the
  * Contraction Hierarchies (CH) algorithm.
  *
  * <h3>Performance-critical optimisations</h3>
@@ -30,9 +30,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * @author Implementation for CCH/CATCHUp router
  */
-public class SpeedyCHBuilder {
+public class CHBuilder {
 
-    private static final Logger LOG = LogManager.getLogger(SpeedyCHBuilder.class);
+    private static final Logger LOG = LogManager.getLogger(CHBuilder.class);
 
     // Build-edge field indices (parallel arrays)
     private static final int BE_FROM  = 0;
@@ -170,7 +170,7 @@ public class SpeedyCHBuilder {
         }
     }
 
-    public SpeedyCHBuilder(SpeedyGraph graph, TravelDisutility td) {
+    public CHBuilder(SpeedyGraph graph, TravelDisutility td) {
         this.graph     = graph;
         this.td        = td;
         this.nodeCount = graph.nodeCount;
@@ -212,7 +212,7 @@ public class SpeedyCHBuilder {
     }
 
     /** Runs the full CH build pipeline and returns the ready-to-customize graph. */
-    public SpeedyCHGraph build() {
+    public CHGraph build() {
         LOG.info("CH contraction: importing {} links from base graph ({} nodes)…",
                 graph.linkCount, nodeCount);
         initEdges();
@@ -236,7 +236,7 @@ public class SpeedyCHBuilder {
      * @param order contraction order; {@code order[node]} is the level/rank for that node.
      * @return the ready-to-customize CH graph.
      */
-    public SpeedyCHGraph buildWithOrder(int[] order) {
+    public CHGraph buildWithOrder(int[] order) {
         LOG.info("CH contraction (fixed order): importing {} links from base graph ({} nodes)…",
                 graph.linkCount, nodeCount);
         initEdges();
@@ -260,7 +260,7 @@ public class SpeedyCHBuilder {
      * @param orderResult result from {@link InertialFlowCutter#computeOrderWithBatches()}
      * @return the ready-to-customize CH graph.
      */
-    public SpeedyCHGraph buildWithOrderParallel(InertialFlowCutter.NDOrderResult orderResult) {
+    public CHGraph buildWithOrderParallel(InertialFlowCutter.NDOrderResult orderResult) {
         LOG.info("CH contraction (parallel): importing {} links from base graph ({} nodes)…",
                 graph.linkCount, nodeCount);
         initEdges();
@@ -1084,10 +1084,10 @@ public class SpeedyCHBuilder {
     }
 
     // -------------------------------------------------------------------------
-    // Phase 3 – build SpeedyCHGraph (CSR layout)
+    // Phase 3 – build CHGraph (CSR layout)
     // -------------------------------------------------------------------------
 
-    private SpeedyCHGraph buildCHGraph() {
+    private CHGraph buildCHGraph() {
         final int buildEdgeCount = buildEdgeCounter.get();
 
         // 1. Count up/dn edges per node
@@ -1117,7 +1117,7 @@ public class SpeedyCHBuilder {
 
         // 3. Allocate CSR edge arrays and colocated weight arrays
         // CSR stores only toNode + globalIdx (E_STRIDE = 2) for cache-compact hot path.
-        int S = SpeedyCHGraph.E_STRIDE;
+        int S = CHGraph.E_STRIDE;
         int[] upEdges      = new int[totalUp * S];
         double[] upWeights = new double[totalUp];
         int[] dnEdges      = new int[totalDn * S];
@@ -1153,8 +1153,8 @@ public class SpeedyCHBuilder {
                 // Upward edge: gIdx = slot
                 int slot = upOff[fromNode] + upCursor[fromNode]++;
                 int eBase = slot * S;
-                upEdges[eBase + SpeedyCHGraph.E_NODE] = toNode;
-                upEdges[eBase + SpeedyCHGraph.E_GIDX] = slot; // contiguous gIdx
+                upEdges[eBase + CHGraph.E_NODE] = toNode;
+                upEdges[eBase + CHGraph.E_GIDX] = slot; // contiguous gIdx
                 upWeights[slot] = buildEdgeWeights[bi];
                 edgeOrigLink[slot] = origLink;
                 // lower edges will be remapped after this loop
@@ -1166,8 +1166,8 @@ public class SpeedyCHBuilder {
                 int dnSlot = dnOff[toNode] + dnCursor[toNode]++;
                 int gIdx = totalUp + dnSlot;
                 int eBase = dnSlot * S;
-                dnEdges[eBase + SpeedyCHGraph.E_NODE] = fromNode;
-                dnEdges[eBase + SpeedyCHGraph.E_GIDX] = gIdx; // contiguous gIdx
+                dnEdges[eBase + CHGraph.E_NODE] = fromNode;
+                dnEdges[eBase + CHGraph.E_GIDX] = gIdx; // contiguous gIdx
                 dnWeights[dnSlot] = buildEdgeWeights[bi];
                 edgeOrigLink[gIdx] = origLink;
                 edgeLower1[gIdx] = buildEdgeData[bBase + BE_LOW1];
@@ -1197,7 +1197,7 @@ public class SpeedyCHBuilder {
             }
         }
 
-        return new SpeedyCHGraph(graph, nodeCount,
+        return new CHGraph(graph, nodeCount,
                 totalUp, upOff, upCount, upEdges, upWeights,
                 totalDn, dnOff, dnCount, dnEdges, dnWeights,
                 totalEdgeCount, edgeOrigLink, edgeLower1, edgeLower2,

@@ -31,8 +31,8 @@ import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Node;
 import org.matsim.core.router.speedy.LeastCostPathTree;
 import org.matsim.core.router.speedy.ShortestPathTree;
-import org.matsim.core.router.speedy.SpeedyCHGraph;
-import org.matsim.core.router.speedy.SpeedyCHLeastCostPathTree;
+import org.matsim.core.router.speedy.CHGraph;
+import org.matsim.core.router.speedy.CHLeastCostPathTree;
 import org.matsim.core.router.speedy.SpeedyGraph;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
@@ -58,9 +58,9 @@ public class OneToManyPathSearch {
 	 * @param lazyPathCreation  if true, paths are constructed lazily on demand
 	 * @return a CH-based one-to-many path search
 	 */
-	public static OneToManyPathSearch createSearchCH(SpeedyCHGraph chGraph, TravelTime travelTime,
+	public static OneToManyPathSearch createSearchCH(CHGraph chGraph, TravelTime travelTime,
 			TravelDisutility travelDisutility, boolean lazyPathCreation) {
-		return new OneToManyPathSearch(new SpeedyCHLeastCostPathTree(chGraph, travelTime, travelDisutility),
+		return new OneToManyPathSearch(new CHLeastCostPathTree(chGraph, travelTime, travelDisutility),
 				travelTime, lazyPathCreation);
 	}
 

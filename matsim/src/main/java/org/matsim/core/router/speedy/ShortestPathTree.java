@@ -10,7 +10,7 @@ import java.util.Iterator;
 
 /**
  * Interface for shortest-path tree computations.  Both the Dijkstra-based
- * {@link LeastCostPathTree} and the CH-based {@link SpeedyCHLeastCostPathTree}
+ * {@link LeastCostPathTree} and the CH-based {@link CHLeastCostPathTree}
  * implement this interface, enabling DRT and other modules to benefit from
  * CH-accelerated one-to-many path queries.
  *

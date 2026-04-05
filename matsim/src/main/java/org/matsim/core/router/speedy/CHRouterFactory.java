@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Factory for the time-dependent CATCHUp router ({@link SpeedyCHTimeDep}).
+ * Factory for the time-dependent CATCHUp router ({@link CHRouterTimeDep}).
  *
  * <p>Follows the CCH (Customizable Contraction Hierarchies) paradigm where the
  * expensive contraction is performed once and then the CH overlay graph is merely
@@ -22,17 +22,17 @@ import java.util.concurrent.ConcurrentHashMap;
  * reduces repeated preprocessing cost because:
  * <ol>
  *   <li>The base {@link SpeedyGraph} is cached per {@link Network}.</li>
- *   <li>The contracted {@link SpeedyCHGraph} <em>skeleton</em> is cached per
+ *   <li>The contracted {@link CHGraph} <em>skeleton</em> is cached per
  *       (network, TravelDisutility) pair. The contraction topology (node ordering +
  *       shortcuts) depends only on the cost function's lower bounds.</li>
  *   <li>On each {@link #createPathCalculator} call only the O(m) customization steps
- *       run: {@link SpeedyCHTTFCustomizer} for time-dependent TTFs, or
- *       {@link SpeedyCHCustomizer} for a static variant.</li>
+ *       run: {@link CHTTFCustomizer} for time-dependent TTFs, or
+ *       {@link CHCustomizer} for a static variant.</li>
  * </ol>
  *
  * <h3>Thread safety</h3>
  * <p>This class is {@link Singleton} and thread-safe: every call returns a new,
- * independent {@link SpeedyCHTimeDep} instance. The underlying CH structure may be
+ * independent {@link CHRouterTimeDep} instance. The underlying CH structure may be
  * shared, but the query objects are per-thread. The TTF customization step is
  * synchronized per CH graph instance to prevent concurrent writes to the shared
  * TTF arrays when multiple threads call {@code createPathCalculator} simultaneously.
@@ -40,9 +40,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * @author Implementation for CCH/CATCHUp router
  */
 @Singleton
-public class SpeedyCHFactory implements LeastCostPathCalculatorFactory {
+public class CHRouterFactory implements LeastCostPathCalculatorFactory {
 
-    private static final Logger LOG = LogManager.getLogger(SpeedyCHFactory.class);
+    private static final Logger LOG = LogManager.getLogger(CHRouterFactory.class);
 
     private final Map<Network, SpeedyGraph> baseGraphs = new ConcurrentHashMap<>();
 
@@ -51,10 +51,10 @@ public class SpeedyCHFactory implements LeastCostPathCalculatorFactory {
      * Using identity-based keys because the same disutility object is typically reused
      * across iterations in MATSim, and its metric doesn't change between calls.
      */
-    private final Map<CHCacheKey, SpeedyCHGraph> chGraphCache = new ConcurrentHashMap<>();
+    private final Map<CHCacheKey, CHGraph> chGraphCache = new ConcurrentHashMap<>();
 
     @Inject
-    public SpeedyCHFactory() {
+    public CHRouterFactory() {
     }
 
     @Override
@@ -65,12 +65,12 @@ public class SpeedyCHFactory implements LeastCostPathCalculatorFactory {
 
         // Look up or build the contracted CH graph (expensive; cached).
         CHCacheKey cacheKey = new CHCacheKey(baseGraph, travelCosts);
-        SpeedyCHGraph chGraph = chGraphCache.computeIfAbsent(cacheKey, key -> {
+        CHGraph chGraph = chGraphCache.computeIfAbsent(cacheKey, key -> {
             LOG.info("Building CH contraction for network ({} nodes, {} links) – this is a one-time cost.",
                     baseGraph.nodeCount, baseGraph.linkCount);
             InertialFlowCutter.NDOrderResult ndOrder =
                     new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-            return new SpeedyCHBuilder(baseGraph, travelCosts).buildWithOrderParallel(ndOrder);
+            return new CHBuilder(baseGraph, travelCosts).buildWithOrderParallel(ndOrder);
         });
 
         // Customise with time-dependent TTFs (fast O(edges × bins) pass).
@@ -79,10 +79,10 @@ public class SpeedyCHFactory implements LeastCostPathCalculatorFactory {
         // Within a single MATSim iteration, all threads share the same TravelTime
         // state, so the second and subsequent calls are fast no-ops (dirty check).
         synchronized (chGraph) {
-            new SpeedyCHTTFCustomizer().customize(chGraph, travelTimes, travelCosts);
+            new CHTTFCustomizer().customize(chGraph, travelTimes, travelCosts);
         }
 
-        return new SpeedyCHTimeDep(chGraph, travelTimes, travelCosts);
+        return new CHRouterTimeDep(chGraph, travelTimes, travelCosts);
     }
 
     /** Composite cache key based on identity of the base graph and the travel disutility. */

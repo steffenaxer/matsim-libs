@@ -4,7 +4,7 @@ import org.matsim.api.core.v01.network.Link;
 import org.matsim.core.router.util.TravelDisutility;
 
 /**
- * Assigns edge weights to a {@link SpeedyCHGraph} (the "customization" step of CCH/CH).
+ * Assigns edge weights to a {@link CHGraph} (the "customization" step of CCH/CH).
  *
  * <ul>
  *   <li><b>Real edges</b>: weight = {@link TravelDisutility#getLinkMinimumTravelDisutility(Link)}</li>
@@ -13,9 +13,9 @@ import org.matsim.core.router.util.TravelDisutility;
  *
  * @author Implementation for CCH/CATCHUp router
  */
-public class SpeedyCHCustomizer {
+public class CHCustomizer {
 
-    public void customize(SpeedyCHGraph chGraph, TravelDisutility td) {
+    public void customize(CHGraph chGraph, TravelDisutility td) {
         SpeedyGraph baseGraph = chGraph.getBaseGraph();
         int      edgeCount = chGraph.totalEdgeCount;
         double[] weights   = chGraph.edgeWeights;
@@ -35,6 +35,6 @@ public class SpeedyCHCustomizer {
         }
 
         // Propagate weights into colocated CSR weight arrays
-        SpeedyCHTTFCustomizer.propagateWeightsToCSR(chGraph);
+        CHTTFCustomizer.propagateWeightsToCSR(chGraph);
     }
 }

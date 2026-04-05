@@ -33,7 +33,7 @@ import java.util.Random;
 
 /**
  * Large-scale tests and benchmarks for nested-dissection-ordered CH contraction
- * ({@link InertialFlowCutter} + {@link SpeedyCHBuilder#buildWithOrder}).
+ * ({@link InertialFlowCutter} + {@link CHBuilder#buildWithOrder}).
  *
  * <p>Benchmarks use <b>SpeedyALT</b> (A* with Landmarks) as the query baseline,
  * since it is the standard production router in MATSim.
@@ -48,7 +48,7 @@ import java.util.Random;
  *
  * <p>Results are written to {@code target/ch-benchmark-results.tsv} for post-processing.
  */
-public class SpeedyCHBuilderLargeNetworkTest {
+public class CHBuilderLargeNetworkTest {
 
     private static final int    NUM_QUERIES    = 500;
     private static final int    BENCHMARK_QUERIES = 200;
@@ -62,7 +62,7 @@ public class SpeedyCHBuilderLargeNetworkTest {
 
     /**
      * Berlin road network: 11,566 nodes, 27,664 links.
-     * Same network used in {@link SpeedyCHBuilderNDTest} but tested here
+     * Same network used in {@link CHBuilderNDTest} but tested here
      * as part of the large-network suite.
      */
     @Test
@@ -246,9 +246,9 @@ public class SpeedyCHBuilderLargeNetworkTest {
 
         // Build ND-ordered CH
         int[] order = new InertialFlowCutter(baseGraph).computeOrder();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrder(order);
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
-        SpeedyCHTimeDep chRouter = new SpeedyCHTimeDep(chGraph, tc, tc);
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrder(order);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
+        CHRouterTimeDep chRouter = new CHRouterTimeDep(chGraph, tc, tc);
 
         // Reference: Dijkstra (exact baseline for correctness)
         SpeedyDijkstra dijkstra = new SpeedyDijkstra(baseGraph, tc, tc);
@@ -297,33 +297,33 @@ public class SpeedyCHBuilderLargeNetworkTest {
 
         // ---- Witness-based CH build ----
         SpeedyGraph gW = SpeedyGraphBuilder.build(network);
-        new SpeedyCHBuilder(gW, tc).build(); // warm-up
+        new CHBuilder(gW, tc).build(); // warm-up
         gW = SpeedyGraphBuilder.build(network);
         long witnessStart = System.nanoTime();
-        SpeedyCHGraph chW = new SpeedyCHBuilder(gW, tc).build();
+        CHGraph chW = new CHBuilder(gW, tc).build();
         long witnessMs = (System.nanoTime() - witnessStart) / 1_000_000;
 
         // ---- ND-ordered CH build ----
         SpeedyGraph gN = SpeedyGraphBuilder.build(network);
         { // warm-up
             int[] warmOrder = new InertialFlowCutter(gN).computeOrder();
-            new SpeedyCHBuilder(gN, tc).buildWithOrder(warmOrder);
+            new CHBuilder(gN, tc).buildWithOrder(warmOrder);
         }
         gN = SpeedyGraphBuilder.build(network);
         long ndStart = System.nanoTime();
         int[] order = new InertialFlowCutter(gN).computeOrder();
         long ndOrdMs = (System.nanoTime() - ndStart) / 1_000_000;
         long ndConStart = System.nanoTime();
-        SpeedyCHGraph chN = new SpeedyCHBuilder(gN, tc).buildWithOrder(order);
+        CHGraph chN = new CHBuilder(gN, tc).buildWithOrder(order);
         long ndConMs = (System.nanoTime() - ndConStart) / 1_000_000;
         long ndTotalMs = (System.nanoTime() - ndStart) / 1_000_000;
 
         double edgeOverhead = ((double) chN.totalEdgeCount / Math.max(1, chW.totalEdgeCount) - 1) * 100;
 
         // ---- Setup query routers: ND-CH (time-dep + static) and SpeedyALT ----
-        new SpeedyCHTTFCustomizer().customize(chN, tc, tc);
-        SpeedyCHTimeDep ndTimeDep = new SpeedyCHTimeDep(chN, tc, tc);
-        SpeedyCH ndStatic = new SpeedyCH(chN, tc, tc);
+        new CHTTFCustomizer().customize(chN, tc, tc);
+        CHRouterTimeDep ndTimeDep = new CHRouterTimeDep(chN, tc, tc);
+        CHRouter ndStatic = new CHRouter(chN, tc, tc);
         SpeedyALTData altData = new SpeedyALTData(gN, Math.min(ALT_LANDMARKS, gN.nodeCount), tc, 1);
         SpeedyALT altRouter = new SpeedyALT(altData, tc, tc);
 

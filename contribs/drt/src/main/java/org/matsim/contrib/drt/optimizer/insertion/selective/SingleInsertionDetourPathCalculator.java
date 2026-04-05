@@ -39,7 +39,7 @@ import org.matsim.contrib.dvrp.path.VrpPaths;
 import org.matsim.core.mobsim.framework.events.MobsimBeforeCleanupEvent;
 import org.matsim.core.mobsim.framework.listeners.MobsimBeforeCleanupListener;
 import org.matsim.core.router.speedy.SpeedyALTFactory;
-import org.matsim.core.router.speedy.SpeedyCHFactory;
+import org.matsim.core.router.speedy.CHRouterFactory;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.router.util.LeastCostPathCalculatorFactory;
@@ -62,7 +62,7 @@ public class SingleInsertionDetourPathCalculator implements MobsimBeforeCleanupL
 	 * or synchronization needed.
 	 */
 	private static final class CHFactoryHolder {
-		static final SpeedyCHFactory INSTANCE = new SpeedyCHFactory();
+		static final CHRouterFactory INSTANCE = new CHRouterFactory();
 	}
 
 	private static final class ALTFactoryHolder {
@@ -81,7 +81,7 @@ public class SingleInsertionDetourPathCalculator implements MobsimBeforeCleanupL
 	public SingleInsertionDetourPathCalculator(Network network, TravelTime travelTime,
 											   TravelDisutility travelDisutility, DrtConfigGroup drtCfg) {
 		this(network, travelTime, travelDisutility, drtCfg.getNumberOfThreads(),
-				drtCfg.isUseSpeedyCHForInsertionSearch() ? CHFactoryHolder.INSTANCE : ALTFactoryHolder.INSTANCE);
+				drtCfg.isUseCHForInsertionSearch() ? CHFactoryHolder.INSTANCE : ALTFactoryHolder.INSTANCE);
 	}
 
 	@VisibleForTesting

@@ -21,11 +21,11 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Tests for {@link SpeedyCHLeastCostPathTree}: verifies that the CH-based
+ * Tests for {@link CHLeastCostPathTree}: verifies that the CH-based
  * one-to-all search produces the same costs as the Dijkstra-based
  * {@link LeastCostPathTree}.
  */
-public class SpeedyCHLeastCostPathTreeTest {
+public class CHLeastCostPathTreeTest {
 
     private static final int    NUM_SOURCE_NODES = 20;
     private static final int    NUM_TARGET_NODES = 50;
@@ -87,11 +87,11 @@ public class SpeedyCHLeastCostPathTreeTest {
         // Build CH
         InertialFlowCutter.NDOrderResult orderResult =
                 new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
 
         // CH tree
-        SpeedyCHLeastCostPathTree chTree = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        CHLeastCostPathTree chTree = new CHLeastCostPathTree(chGraph, tc, tc);
 
         // Reference Dijkstra tree
         LeastCostPathTree dijkstraTree = new LeastCostPathTree(baseGraph, tc, tc);
@@ -113,7 +113,7 @@ public class SpeedyCHLeastCostPathTreeTest {
             dijkstraTree.calculate(srcLink, startTime, null, null);
 
             // Compare travel times at random target nodes
-            // (CH tree uses TTF-based travel time as cost, matching SpeedyCHTimeDep behavior)
+            // (CH tree uses TTF-based travel time as cost, matching CHRouterTimeDep behavior)
             for (int t = 0; t < NUM_TARGET_NODES; t++) {
                 Link tgtLink = linkList.get(rng.nextInt(n));
                 int tgtNodeIdx = tgtLink.getFromNode().getId().index();
@@ -164,10 +164,10 @@ public class SpeedyCHLeastCostPathTreeTest {
 
         InertialFlowCutter.NDOrderResult orderResult =
                 new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
 
-        SpeedyCHLeastCostPathTree chTree = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        CHLeastCostPathTree chTree = new CHLeastCostPathTree(chGraph, tc, tc);
         LeastCostPathTree dijkstraTree = new LeastCostPathTree(baseGraph, tc, tc);
 
         List<Link> linkList = new ArrayList<>(network.getLinks().values());
@@ -340,11 +340,11 @@ public class SpeedyCHLeastCostPathTreeTest {
         SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
         InertialFlowCutter.NDOrderResult orderResult =
                 new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
 
-        SpeedyCHLeastCostPathTree chTreeFull = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
-        SpeedyCHLeastCostPathTree chTreeBounded = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        CHLeastCostPathTree chTreeFull = new CHLeastCostPathTree(chGraph, tc, tc);
+        CHLeastCostPathTree chTreeBounded = new CHLeastCostPathTree(chGraph, tc, tc);
 
         List<Link> linkList = new ArrayList<>(network.getLinks().values());
         Random rng = new Random(42);
@@ -402,11 +402,11 @@ public class SpeedyCHLeastCostPathTreeTest {
         SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
         InertialFlowCutter.NDOrderResult orderResult =
                 new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
 
-        SpeedyCHLeastCostPathTree chTreeFull = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
-        SpeedyCHLeastCostPathTree chTreeBounded = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        CHLeastCostPathTree chTreeFull = new CHLeastCostPathTree(chGraph, tc, tc);
+        CHLeastCostPathTree chTreeBounded = new CHLeastCostPathTree(chGraph, tc, tc);
 
         List<Link> linkList = new ArrayList<>(network.getLinks().values());
         Random rng = new Random(42);
@@ -464,11 +464,11 @@ public class SpeedyCHLeastCostPathTreeTest {
         SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
         InertialFlowCutter.NDOrderResult orderResult =
                 new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
 
-        SpeedyCHLeastCostPathTree chTreeFull = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
-        SpeedyCHLeastCostPathTree chTreeBounded = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        CHLeastCostPathTree chTreeFull = new CHLeastCostPathTree(chGraph, tc, tc);
+        CHLeastCostPathTree chTreeBounded = new CHLeastCostPathTree(chGraph, tc, tc);
 
         List<Link> linkList = new ArrayList<>(network.getLinks().values());
         Random rng = new Random(42);
@@ -529,11 +529,11 @@ public class SpeedyCHLeastCostPathTreeTest {
         SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
         InertialFlowCutter.NDOrderResult orderResult =
                 new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
 
-        SpeedyCHLeastCostPathTree chTreeFull = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
-        SpeedyCHLeastCostPathTree chTreeBounded = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        CHLeastCostPathTree chTreeFull = new CHLeastCostPathTree(chGraph, tc, tc);
+        CHLeastCostPathTree chTreeBounded = new CHLeastCostPathTree(chGraph, tc, tc);
 
         List<Link> linkList = new ArrayList<>(network.getLinks().values());
         Random rng = new Random(42);
@@ -608,14 +608,14 @@ public class SpeedyCHLeastCostPathTreeTest {
     }
 
     // =========================================================================
-    // Thread-safety test — multiple threads query the SAME shared SpeedyCHGraph
-    // concurrently, each with its own SpeedyCHLeastCostPathTree instance.
+    // Thread-safety test — multiple threads query the SAME shared CHGraph
+    // concurrently, each with its own CHLeastCostPathTree instance.
     // =========================================================================
 
     /**
      * Verifies that multiple threads can concurrently run shortest-path-tree
-     * queries on a SHARED {@link SpeedyCHGraph}. Each thread owns its own
-     * {@link SpeedyCHLeastCostPathTree} (mutable query state) but all share
+     * queries on a SHARED {@link CHGraph}. Each thread owns its own
+     * {@link CHLeastCostPathTree} (mutable query state) but all share
      * the same read-only CH overlay graph.
      * <p>
      * All results are compared against a single-threaded Dijkstra baseline.
@@ -632,8 +632,8 @@ public class SpeedyCHLeastCostPathTreeTest {
         SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
         InertialFlowCutter.NDOrderResult orderResult =
                 new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-        SpeedyCHGraph sharedCHGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
-        new SpeedyCHTTFCustomizer().customize(sharedCHGraph, tc, tc);
+        CHGraph sharedCHGraph = new CHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new CHTTFCustomizer().customize(sharedCHGraph, tc, tc);
 
         LeastCostPathTree dijkstraTree = new LeastCostPathTree(baseGraph, tc, tc);
 
@@ -654,8 +654,8 @@ public class SpeedyCHLeastCostPathTreeTest {
             futures.add(executor.submit(() -> {
                 try {
                     // Each thread creates its OWN tree sharing the graph
-                    SpeedyCHLeastCostPathTree chTree =
-                            new SpeedyCHLeastCostPathTree(sharedCHGraph, tc, tc);
+                    CHLeastCostPathTree chTree =
+                            new CHLeastCostPathTree(sharedCHGraph, tc, tc);
                     Random rng = new Random(42 + threadId);
 
                     barrier.await(); // synchronize start
@@ -747,14 +747,14 @@ public class SpeedyCHLeastCostPathTreeTest {
         // Build CH graph
         InertialFlowCutter.NDOrderResult orderResult =
                 new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-        SpeedyCHGraph chGraph = new SpeedyCHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
-        new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
 
         System.out.printf("Network: %d nodes, %d links. CH: %d total edges (%.1fx overhead)%n",
                 network.getNodes().size(), network.getLinks().size(),
                 chGraph.totalEdgeCount, (double) chGraph.totalEdgeCount / baseGraph.linkCount);
 
-        SpeedyCHLeastCostPathTree chTree = new SpeedyCHLeastCostPathTree(chGraph, tc, tc);
+        CHLeastCostPathTree chTree = new CHLeastCostPathTree(chGraph, tc, tc);
         LeastCostPathTree dijkstraTree = new LeastCostPathTree(baseGraph, tc, tc);
 
         List<Link> linkList = new ArrayList<>(network.getLinks().values());
