@@ -27,7 +27,7 @@ import java.util.NoSuchElementException;
  * @author mrieser / Simunto, sponsored by SBB Swiss Federal Railways
  * @author hrewald, nkuehnel / MOIA turn restriction adjustments
  */
-public class LeastCostPathTree {
+public class LeastCostPathTree implements ShortestPathTree {
 
     private final SpeedyGraph graph;
     private final TravelTime tt;
