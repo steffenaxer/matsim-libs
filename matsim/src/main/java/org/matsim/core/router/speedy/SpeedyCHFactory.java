@@ -30,9 +30,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *       {@link SpeedyCHCustomizer} for a static variant.</li>
  * </ol>
  *
+ * <h3>Thread safety</h3>
  * <p>This class is {@link Singleton} and thread-safe: every call returns a new,
  * independent {@link SpeedyCHTimeDep} instance. The underlying CH structure may be
- * shared, but the query objects are per-thread.
+ * shared, but the query objects are per-thread. The TTF customization step is
+ * synchronized per CH graph instance to prevent concurrent writes to the shared
+ * TTF arrays when multiple threads call {@code createPathCalculator} simultaneously.
  *
  * @author Implementation for CCH/CATCHUp router
  */
@@ -71,7 +74,13 @@ public class SpeedyCHFactory implements LeastCostPathCalculatorFactory {
         });
 
         // Customise with time-dependent TTFs (fast O(edges × bins) pass).
-        new SpeedyCHTTFCustomizer().customize(chGraph, travelTimes, travelCosts);
+        // Synchronized per chGraph to prevent concurrent writes to the shared
+        // TTF arrays when multiple threads call createPathCalculator simultaneously.
+        // Within a single MATSim iteration, all threads share the same TravelTime
+        // state, so the second and subsequent calls are fast no-ops (dirty check).
+        synchronized (chGraph) {
+            new SpeedyCHTTFCustomizer().customize(chGraph, travelTimes, travelCosts);
+        }
 
         return new SpeedyCHTimeDep(chGraph, travelTimes, travelCosts);
     }
