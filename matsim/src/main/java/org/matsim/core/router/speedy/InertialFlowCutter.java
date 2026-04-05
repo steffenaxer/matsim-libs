@@ -81,7 +81,10 @@ public class InertialFlowCutter {
     private static final int FM_MAX_PASSES = 5;
 
     /** Minimum subgraph size to apply max-flow refinement. */
-    private static final int MAXFLOW_MIN_SIZE = 50;
+    private static final int MAXFLOW_MIN_SIZE = 30;
+
+    /** BFS depth from boundary for max-flow cuttable region. */
+    private static final int MAXFLOW_BORDER_DEPTH = 2;
 
     private final SpeedyGraph graph;
 
@@ -339,27 +342,39 @@ public class InertialFlowCutter {
         long refScore = scoreSeparator(bestResult[1],
                 Math.abs(bestResult[0].length - bestResult[2].length), adj);
 
-        // --- FM refinement: minimise edge cut via local search ---
+        // --- FM refinement: try BOTH bipartition orientations ---
         if (subNodes.length >= FM_MIN_SIZE) {
-            int[][] fmResult = fmRefineSeparator(bestResult, adj, subNodes);
-            if (isValidSeparator(fmResult, adj)) {
-                int fmBalance = Math.abs(fmResult[0].length - fmResult[2].length);
-                long fmScore = scoreSeparator(fmResult[1], fmBalance, adj);
+            // Orientation 1: sideA = partA, sideB = sep ∪ partB
+            int[][] fmResult1 = fmRefineSeparator(bestResult, adj, subNodes, false);
+            if (isValidSeparator(fmResult1, adj)) {
+                int fmBal = Math.abs(fmResult1[0].length - fmResult1[2].length);
+                long fmScore = scoreSeparator(fmResult1[1], fmBal, adj);
                 if (fmScore < refScore) {
-                    bestResult = fmResult;
+                    bestResult = fmResult1;
+                    refScore = fmScore;
+                }
+            }
+            // Orientation 2: sideA = partA ∪ sep, sideB = partB
+            int[][] fmResult2 = fmRefineSeparator(bestResult, adj, subNodes, true);
+            if (isValidSeparator(fmResult2, adj)) {
+                int fmBal = Math.abs(fmResult2[0].length - fmResult2[2].length);
+                long fmScore = scoreSeparator(fmResult2[1], fmBal, adj);
+                if (fmScore < refScore) {
+                    bestResult = fmResult2;
                     refScore = fmScore;
                 }
             }
         }
 
-        // --- Max-flow refinement: find minimum vertex separator ---
+        // --- Max-flow refinement with wider cuttable region ---
         if (subNodes.length >= MAXFLOW_MIN_SIZE) {
-            int[][] mfResult = maxFlowRefine(bestResult, adj);
+            int[][] mfResult = maxFlowRefineWide(bestResult, adj);
             if (mfResult != null && isValidSeparator(mfResult, adj)) {
-                int mfBalance = Math.abs(mfResult[0].length - mfResult[2].length);
-                long mfScore = scoreSeparator(mfResult[1], mfBalance, adj);
+                int mfBal = Math.abs(mfResult[0].length - mfResult[2].length);
+                long mfScore = scoreSeparator(mfResult[1], mfBal, adj);
                 if (mfScore < refScore) {
                     bestResult = mfResult;
+                    refScore = mfScore;
                 }
             }
         }
@@ -440,9 +455,11 @@ public class InertialFlowCutter {
      * @param result   current [partA, separator, partB]
      * @param adj      symmetric adjacency lists
      * @param subNodes all nodes in the sub-graph
+     * @param sepToA   if true, separator joins sideA; if false, separator joins sideB
      * @return improved [partA, separator, partB], or the original if no improvement
      */
-    private int[][] fmRefineSeparator(int[][] result, int[][] adj, int[] subNodes) {
+    private int[][] fmRefineSeparator(int[][] result, int[][] adj, int[] subNodes,
+                                       boolean sepToA) {
         int[] partA = result[0];
         int[] sep   = result[1];
         int[] partB = result[2];
@@ -457,14 +474,22 @@ public class InertialFlowCutter {
         System.arraycopy(sep, 0, allNodes, partA.length, sep.length);
         System.arraycopy(partB, 0, allNodes, partA.length + sep.length, partB.length);
 
-        // Setup bipartition: sideA = partA, sideB = sep ∪ partB
+        // Setup bipartition based on orientation
         int[] side = scratchSide;
-        for (int v : partA) side[v] = 1;
-        for (int v : sep) side[v] = 2;
-        for (int v : partB) side[v] = 2;
+        if (sepToA) {
+            // sideA = partA ∪ sep, sideB = partB
+            for (int v : partA) side[v] = 1;
+            for (int v : sep) side[v] = 1;
+            for (int v : partB) side[v] = 2;
+        } else {
+            // sideA = partA, sideB = sep ∪ partB
+            for (int v : partA) side[v] = 1;
+            for (int v : sep) side[v] = 2;
+            for (int v : partB) side[v] = 2;
+        }
 
-        int sizeA = partA.length;
-        int sizeB = sep.length + partB.length;
+        int sizeA = sepToA ? (partA.length + sep.length) : partA.length;
+        int sizeB = sepToA ? partB.length : (sep.length + partB.length);
         int minSize = Math.max(2, totalN / 4);
 
         // Compute initial gains and find max subgraph degree
@@ -785,26 +810,56 @@ public class InertialFlowCutter {
     // ========================= Max-Flow / Min-Cut ==============================
 
     /**
-     * Find the minimum vertex separator between partA and partB using
-     * Dinic's algorithm on a node-split flow network.
+     * Find the minimum vertex separator using Dinic's algorithm on a node-split
+     * flow network with a <b>wide cuttable region</b>.
      *
-     * <p>Each internal node v is split into v_in (capacity 1) and v_out.
-     * Source/sink (partA/partB) nodes have infinite capacity.  The max-flow
-     * from a super-source to super-sink equals the minimum vertex cut.
+     * <p>Unlike the basic max-flow that only allows cutting separator nodes,
+     * this version allows cutting any node within {@link #MAXFLOW_BORDER_DEPTH}
+     * BFS hops from the separator.  This gives the algorithm much more freedom
+     * to find smaller separators.
      *
      * @return improved [partA, separator, partB], or null if no improvement
      */
-    private int[][] maxFlowRefine(int[][] result, int[][] adj) {
+    private int[][] maxFlowRefineWide(int[][] result, int[][] adj) {
         int[] partA = result[0];
         int[] sep   = result[1];
         int[] partB = result[2];
 
         int totalN = partA.length + sep.length + partB.length;
-        if (totalN < MAXFLOW_MIN_SIZE || sep.length <= 2) return null;
+        if (totalN < MAXFLOW_MIN_SIZE || sep.length <= 1) return null;
+
+        // --- Mark which nodes are "cuttable" (capacity 1) ---
+        // Start from separator nodes, BFS outward MAXFLOW_BORDER_DEPTH hops
+        int genCuttable = ++scratchBoundaryGen;
+        int[] cuttableMark = scratchBoundary;
+        for (int s : sep) cuttableMark[s] = genCuttable;
+
+        // BFS to expand cuttable region
+        int[] bfsQueue = new int[totalN];
+        int[] bfsDist = new int[graph.nodeCount]; // distance from sep
+        int qHead = 0, qTail = 0;
+        for (int s : sep) {
+            bfsQueue[qTail++] = s;
+            bfsDist[s] = 1; // mark as visited (1-indexed distance)
+        }
+        while (qHead < qTail) {
+            int u = bfsQueue[qHead++];
+            int d = bfsDist[u];
+            if (d > MAXFLOW_BORDER_DEPTH) continue;
+            for (int w : adj[u]) {
+                if (!inSubGraph[w] || bfsDist[w] != 0) continue;
+                bfsDist[w] = d + 1;
+                cuttableMark[w] = genCuttable;
+                if (qTail < bfsQueue.length) bfsQueue[qTail++] = w;
+            }
+        }
+        // Cleanup bfsDist
+        for (int i = 0; i < qTail; i++) bfsDist[bfsQueue[i]] = 0;
+        for (int s : sep) bfsDist[s] = 0;
 
         // --- Compact mapping: global node ID → compact 0..totalN-1 ---
-        int[] nodeId = new int[totalN];  // compact → global
-        int[] toCompact = new int[graph.nodeCount]; // global → compact+1 (0 = unmapped)
+        int[] nodeId = new int[totalN];
+        int[] toCompact = new int[graph.nodeCount];
         int ci = 0;
         for (int v : partA) { nodeId[ci] = v; toCompact[v] = ci + 1; ci++; }
         for (int v : sep)   { nodeId[ci] = v; toCompact[v] = ci + 1; ci++; }
@@ -812,7 +867,6 @@ public class InertialFlowCutter {
 
         int aLen = partA.length;
         int sLen = sep.length;
-        // bLen = totalN - aLen - sLen
 
         // --- Build node-split flow network ---
         // Flow nodes: v_in=2*i, v_out=2*i+1, superS=2*totalN, superT=2*totalN+1
@@ -834,8 +888,11 @@ public class InertialFlowCutter {
         int infCap = totalN + 1; // effectively infinite
 
         // Internal node-split edges: v_in → v_out
+        // Cuttable nodes (in the border region) get capacity 1
+        // Non-cuttable nodes (deep in partA or partB) get infinite capacity
         for (int i = 0; i < totalN; i++) {
-            int cap = (i >= aLen && i < aLen + sLen) ? 1 : infCap;
+            int globalId = nodeId[i];
+            int cap = (cuttableMark[globalId] == genCuttable) ? 1 : infCap;
             flowAddEdge(2 * i, 2 * i + 1, cap, eTo, eCap, eCount, fAdj, fAdjLen);
         }
 
@@ -850,14 +907,35 @@ public class InertialFlowCutter {
             }
         }
 
-        // Source edges: superS → v_in for all A nodes
+        // Source edges: superS → v_in for all non-cuttable A nodes (deep A)
         for (int i = 0; i < aLen; i++) {
-            flowAddEdge(superS, 2 * i, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
+            if (cuttableMark[nodeId[i]] != genCuttable) {
+                flowAddEdge(superS, 2 * i, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
+            }
         }
 
-        // Sink edges: v_out → superT for all B nodes
+        // Sink edges: v_out → superT for all non-cuttable B nodes (deep B)
         for (int i = aLen + sLen; i < totalN; i++) {
-            flowAddEdge(2 * i + 1, superT, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
+            if (cuttableMark[nodeId[i]] != genCuttable) {
+                flowAddEdge(2 * i + 1, superT, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
+            }
+        }
+
+        // If no source or no sink connected, fall back: connect all A/B
+        boolean hasSource = false, hasSink = false;
+        for (int i = 0; i < aLen; i++) {
+            if (cuttableMark[nodeId[i]] != genCuttable) { hasSource = true; break; }
+        }
+        for (int i = aLen + sLen; i < totalN; i++) {
+            if (cuttableMark[nodeId[i]] != genCuttable) { hasSink = true; break; }
+        }
+        if (!hasSource) {
+            for (int i = 0; i < aLen; i++)
+                flowAddEdge(superS, 2 * i, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
+        }
+        if (!hasSink) {
+            for (int i = aLen + sLen; i < totalN; i++)
+                flowAddEdge(2 * i + 1, superT, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
         }
 
         // --- Dinic's algorithm ---
@@ -869,11 +947,11 @@ public class InertialFlowCutter {
             // BFS to build level graph
             Arrays.fill(level, -1);
             level[superS] = 0;
-            int qHead = 0, qTail = 0;
-            queue[qTail++] = superS;
+            int bfsH = 0, bfsT = 0;
+            queue[bfsT++] = superS;
 
-            while (qHead < qTail) {
-                int u = queue[qHead++];
+            while (bfsH < bfsT) {
+                int u = queue[bfsH++];
                 int len = fAdjLen[u];
                 int[] edges = fAdj[u];
                 for (int ei = 0; ei < len; ei++) {
@@ -881,7 +959,7 @@ public class InertialFlowCutter {
                     int w = eTo[e];
                     if (level[w] < 0 && eCap[e] > 0) {
                         level[w] = level[u] + 1;
-                        queue[qTail++] = w;
+                        queue[bfsT++] = w;
                     }
                 }
             }
@@ -898,18 +976,20 @@ public class InertialFlowCutter {
         // --- Extract min-cut: reachable from source in residual graph ---
         boolean[] reachable = new boolean[fN];
         reachable[superS] = true;
-        int qHead = 0, qTail = 0;
-        queue[qTail++] = superS;
-        while (qHead < qTail) {
-            int u = queue[qHead++];
-            int len = fAdjLen[u];
-            int[] edges = fAdj[u];
-            for (int ei = 0; ei < len; ei++) {
-                int e = edges[ei];
-                int w = eTo[e];
-                if (!reachable[w] && eCap[e] > 0) {
-                    reachable[w] = true;
-                    queue[qTail++] = w;
+        {
+            int rH = 0, rT = 0;
+            queue[rT++] = superS;
+            while (rH < rT) {
+                int u = queue[rH++];
+                int len = fAdjLen[u];
+                int[] edges = fAdj[u];
+                for (int ei = 0; ei < len; ei++) {
+                    int e = edges[ei];
+                    int w = eTo[e];
+                    if (!reachable[w] && eCap[e] > 0) {
+                        reachable[w] = true;
+                        queue[rT++] = w;
+                    }
                 }
             }
         }
@@ -930,9 +1010,8 @@ public class InertialFlowCutter {
         // Cleanup compact mapping
         for (int i = 0; i < totalN; i++) toCompact[nodeId[i]] = 0;
 
-        // Validate: must have non-empty partitions and actual improvement
-        if (newSepCount == 0 || newACount == 0 || newBCount == 0
-                || newSepCount >= sep.length) {
+        // Validate: must have non-empty partitions
+        if (newSepCount == 0 || newACount == 0 || newBCount == 0) {
             return null;
         }
 
@@ -1291,7 +1370,7 @@ public class InertialFlowCutter {
 
             int thinnedSepSize = candidate[1].length;
             int thinnedBalance = Math.abs(candidate[0].length - candidate[2].length);
-            long thinnedScore = thinnedSepSize * 8L + thinnedBalance;
+            long thinnedScore = thinnedSepSize * 256L + thinnedBalance;
 
             if (thinnedScore < bestSideScore) {
                 bestSideScore = thinnedScore;
