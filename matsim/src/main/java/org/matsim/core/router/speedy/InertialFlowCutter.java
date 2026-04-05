@@ -306,7 +306,7 @@ public class InertialFlowCutter {
      * Returns [partitionA, separator, partitionB].
      */
     private int[][] findSeparator(int[] subNodes, int[][] adj) {
-        // Try 16 projection directions covering 22.5° increments.
+        // Try 16 projection directions covering a range of angles.
         double[][] directions = {
             {1, 0}, {0, 1}, {1, 1}, {1, -1},        // 0°, 90°, 45°, 135°
             {2, 1}, {1, 2}, {2, -1}, {1, -2},        // ~27°, ~63°, ~153°, ~117°
@@ -1237,7 +1237,7 @@ public class InertialFlowCutter {
      * rivers, etc.) with far fewer boundary edges, dramatically reducing separator
      * size and thus shortcut count.
      *
-     * <p>11 ratios × 16 directions = 176 candidates per recursion level.
+     * <p>23 ratios × 16 directions = 368 candidates per recursion level.
      * The extra cost is negligible compared to contraction time.
      */
     private static final double[] SPLIT_RATIOS = {
