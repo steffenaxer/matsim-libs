@@ -257,7 +257,9 @@ public class SpeedyGraphBuilder {
 		if (rangeY < 1e-9) rangeY = 1.0;
 
 		// Step 2: Compute Morton index for each node
-		// Pack (mortonIndex, originalArrayPosition) into a long for sorting
+		// Pack (mortonIndex, originalArrayPosition) into a long for sorting.
+		// XOR with 0x80000000 converts unsigned→signed order so that
+		// Arrays.sort (signed long) produces correct unsigned morton ordering.
 		long[] mortonKeys = new long[n];
 		for (int i = 0; i < n; i++) {
 			Coord c = coords[i];
@@ -266,7 +268,7 @@ public class SpeedyGraphBuilder {
 			nx = Math.max(0, Math.min(MORTON_COORD_MAX, nx));
 			ny = Math.max(0, Math.min(MORTON_COORD_MAX, ny));
 			int morton = mortonEncode(nx, ny);
-			mortonKeys[i] = ((long) morton << 32) | (i & 0xFFFFFFFFL);
+			mortonKeys[i] = ((long) (morton ^ 0x80000000) << 32) | (i & 0xFFFFFFFFL);
 		}
 
 		// Step 3: Sort by Morton index
