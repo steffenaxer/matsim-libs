@@ -130,7 +130,7 @@ public class CHLeastCostPathTree implements ShortestPathTree {
 
     public void calculate(Link startLink, double startTime, Person person, Vehicle vehicle,
                           LeastCostPathTree.StopCriterion stopCriterion) {
-        int startNode = startLink.getToNode().getId().index();
+        int startNode = baseGraph.getNodeIndex(startLink.getToNode());
         calculateForward(startNode, startTime, stopCriterion);
     }
 
@@ -285,7 +285,7 @@ public class CHLeastCostPathTree implements ShortestPathTree {
 
     public void calculateBackwards(Link arrivalLink, double arrivalTime, Person person, Vehicle vehicle,
                                    LeastCostPathTree.StopCriterion stopCriterion) {
-        int arrivalNode = arrivalLink.getFromNode().getId().index();
+        int arrivalNode = baseGraph.getNodeIndex(arrivalLink.getFromNode());
         calculateBackwardImpl(arrivalNode, arrivalTime, stopCriterion);
     }
 
@@ -470,7 +470,7 @@ public class CHLeastCostPathTree implements ShortestPathTree {
         private int current;
 
         CHPathIterator(Node startNode) {
-            current = startNode.getId().index();
+            current = baseGraph.getNodeIndex(startNode);
         }
 
         @Override
@@ -497,7 +497,7 @@ public class CHLeastCostPathTree implements ShortestPathTree {
         private int pos;
 
         CHLinkPathIterator(Node targetNode) {
-            int target = targetNode.getId().index();
+            int target = baseGraph.getNodeIndex(targetNode);
             // Collect all CH edges on the path (from target to source)
             java.util.List<Integer> edgeGIdxList = new java.util.ArrayList<>();
             int curr = target;

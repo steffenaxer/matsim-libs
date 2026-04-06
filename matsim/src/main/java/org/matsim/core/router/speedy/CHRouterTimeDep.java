@@ -105,8 +105,8 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
     @Override
     public Path calcLeastCostPath(Node startNode, Node endNode,
                                   double startTime, Person person, Vehicle vehicle) {
-        int startIdx = startNode.getId().index();
-        int endIdx   = endNode.getId().index();
+        int startIdx = baseGraph.getNodeIndex(startNode);
+        int endIdx   = baseGraph.getNodeIndex(endNode);
         Path path    = calcLeastCostPathImpl(startIdx, endIdx, startTime, person, vehicle);
         if (path == null) logNoRoute("node " + startNode.getId(), "node " + endNode.getId());
         return path;
@@ -115,8 +115,8 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
     @Override
     public Path calcLeastCostPath(Link fromLink, Link toLink,
                                   double startTime, Person person, Vehicle vehicle) {
-        int startIdx = fromLink.getToNode().getId().index();
-        int endIdx   = toLink.getFromNode().getId().index();
+        int startIdx = baseGraph.getNodeIndex(fromLink.getToNode());
+        int endIdx   = baseGraph.getNodeIndex(toLink.getFromNode());
 
         if (turnRestrictions != null) {
             Map<Id<Link>, TurnRestrictionsContext.ColoredLink> replaced = turnRestrictions.replacedLinks;
@@ -157,7 +157,7 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
         // Seed colored copies for turn restrictions
         if (turnRestrictions != null) {
             for (TurnRestrictionsContext.ColoredNode cn : turnRestrictions.coloredNodes) {
-                int origIdx = cn.node().getId().index();
+                int origIdx = baseGraph.getNodeIndex(cn.node());
                 int coloredIdx = cn.index();
                 if (origIdx == endIdx && coloredIdx != endIdx) {
                     setBwd(coloredIdx, 0.0, -1, -1);

@@ -58,7 +58,7 @@ public class LeastCostPathTree implements ShortestPathTree {
      */
     @Deprecated
     public void calculate(Node startNode, double startTime, Person person, Vehicle vehicle) {
-        this.calculateImpl(startNode.getId().index(), startTime, person, vehicle, (node, arrTime, cost, distance, depTime) -> false);
+        this.calculateImpl(graph.getNodeIndex(startNode), startTime, person, vehicle, (node, arrTime, cost, distance, depTime) -> false);
     }
 
     /**
@@ -66,7 +66,7 @@ public class LeastCostPathTree implements ShortestPathTree {
      */
     @Deprecated
     public void calculate(Node startNode, double startTime, Person person, Vehicle vehicle, StopCriterion stopCriterion) {
-        this.calculateImpl(startNode.getId().index(), startTime, person, vehicle, stopCriterion);
+        this.calculateImpl(graph.getNodeIndex(startNode), startTime, person, vehicle, stopCriterion);
     }
 
     public void calculate(Link startLink, double startTime, Person person, Vehicle vehicle) {
@@ -74,7 +74,7 @@ public class LeastCostPathTree implements ShortestPathTree {
     }
 
     public void calculate(Link startLink, double startTime, Person person, Vehicle vehicle, StopCriterion stopCriterion) {
-        int startNode = startLink.getToNode().getId().index();
+        int startNode = graph.getNodeIndex(startLink.getToNode());
         if(graph.getTurnRestrictions().isPresent()) {
             TurnRestrictionsContext context = graph.getTurnRestrictions().get();
             if(context.replacedLinks.containsKey(startLink.getId())) {
@@ -162,7 +162,7 @@ public class LeastCostPathTree implements ShortestPathTree {
 
         this.pq.clear();
 
-        int arrivalNode = arrivalLink.getFromNode().getId().index();
+        int arrivalNode = graph.getNodeIndex(arrivalLink.getFromNode());
         setData(arrivalNode, 0, arrivalTime, 0);
         this.pq.insert(arrivalNode);
 
@@ -253,8 +253,8 @@ public class LeastCostPathTree implements ShortestPathTree {
             if (uncoloredNode != null) {
 
                 // the index points to a node with a different index -> colored copy
-                if (uncoloredNode.getId().index() != i) {
-                    int uncoloredIndex = uncoloredNode.getId().index();
+                if (graph.getNodeIndex(uncoloredNode) != i) {
+                    int uncoloredIndex = graph.getNodeIndex(uncoloredNode);
                     double uncoloredCost = getCost(uncoloredIndex);
                     double coloredCost = getCost(i);
 
@@ -346,7 +346,7 @@ public class LeastCostPathTree implements ShortestPathTree {
         private int current;
 
         public PathIterator(Node startNode) {
-            current = startNode.getId().index();
+            current = graph.getNodeIndex(startNode);
         }
 
         @Override
@@ -372,7 +372,7 @@ public class LeastCostPathTree implements ShortestPathTree {
         private int current;
 
         public LinkPathIterator(Node startNode) {
-            current = fromLink[startNode.getId().index()];
+            current = fromLink[graph.getNodeIndex(startNode)];
         }
 
         @Override

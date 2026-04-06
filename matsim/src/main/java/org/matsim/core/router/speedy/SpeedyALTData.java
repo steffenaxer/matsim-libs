@@ -145,7 +145,7 @@ class SpeedyALTData {
 		Future<double[]>[] trees = new Future[this.landmarksCount * 2];
 		ExecutorService executor = Executors.newFixedThreadPool(threads);
 
-		int firstLandmarkIndex = firstNode.getId().index();
+		int firstLandmarkIndex = graph.getNodeIndex(firstNode);
 		this.landmarksNodeIndices[0] = firstLandmarkIndex;
 		trees[0] = executor.submit(() -> calculateTreeForward(firstLandmarkIndex));
 		trees[1] = executor.submit(() -> calculateTreeBackward(firstLandmarkIndex));
@@ -316,8 +316,8 @@ class SpeedyALTData {
 			if (uncoloredNode != null) {
 
 				// the index points to a node with a different index -> colored copy
-				if (uncoloredNode.getId().index() != i) {
-					int uncoloredIndex = uncoloredNode.getId().index();
+				if (graph.getNodeIndex(uncoloredNode) != i) {
+					int uncoloredIndex = graph.getNodeIndex(uncoloredNode);
 					double uncoloredCost = data[uncoloredIndex];
 					double coloredCost = data[i];
 
