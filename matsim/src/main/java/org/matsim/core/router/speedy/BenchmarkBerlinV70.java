@@ -44,8 +44,8 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Standalone benchmark comparing <b>router variants</b> on the Berlin v7.0
- * network (~88k nodes, ~200k links):
+ * Standalone benchmark comparing <b>router variants</b> on a MATSim network
+ * (default: Berlin v7.0 ~88k nodes, ~200k links):
  * <ol>
  *   <li>SpeedyALT</li>
  *   <li>CH Time-Dependent</li>
@@ -53,11 +53,13 @@ import java.util.Random;
  *
  * <p>Run with sufficient heap, e.g.:
  * <pre>
- *   java -Xmx8G -cp ... org.matsim.core.router.speedy.BenchmarkBerlinV70
+ *   java -Xmx8G -cp ... org.matsim.core.router.speedy.BenchmarkBerlinV70 \
+ *        [--network path/to/network.xml.gz] \
+ *        [--queries 2000] [--warmup 200] [--landmarks 16]
  * </pre>
  *
- * <p>The network is downloaded from the TU Berlin SVN and cached in the
- * system temp directory.
+ * <p>If {@code --network} is omitted, the Berlin v7.0 network is downloaded
+ * from the TU Berlin SVN and cached in the system temp directory.
  *
  * @author Steffen Axer
  */
@@ -67,11 +69,30 @@ public class BenchmarkBerlinV70 {
             "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/berlin/"
                     + "berlin-v7.0/input/berlin-v7.0-network.xml.gz";
 
-    private static final int WARMUP_QUERIES    = 200;
-    private static final int BENCHMARK_QUERIES = 2_000;
-    private static final int ALT_LANDMARKS     = 16;
+    private static int warmupQueries    = 200;
+    private static int benchmarkQueries = 2_000;
+    private static int altLandmarks     = 16;
+
+    record RouterEntry(String name, LeastCostPathCalculator router) {}
 
     public static void main(String[] args) {
+        // ---- 0. Parse CLI arguments ----
+        String networkPath = null;
+        for (int i = 0; i < args.length; i++) {
+            switch (args[i]) {
+                case "--network"   -> networkPath       = args[++i];
+                case "--queries"   -> benchmarkQueries   = Integer.parseInt(args[++i]);
+                case "--warmup"    -> warmupQueries       = Integer.parseInt(args[++i]);
+                case "--landmarks" -> altLandmarks        = Integer.parseInt(args[++i]);
+                default -> {
+                    System.err.println("Unknown argument: " + args[i]);
+                    System.err.println("Usage: java ... BenchmarkBerlinV70 "
+                            + "[--network <path>] [--queries <n>] [--warmup <n>] [--landmarks <n>]");
+                    System.exit(1);
+                }
+            }
+        }
+
         long maxHeapMB = Runtime.getRuntime().maxMemory() / (1024 * 1024);
         System.out.printf("JVM max heap: %,d MB%n", maxHeapMB);
         if (maxHeapMB < 3000) {
@@ -80,9 +101,9 @@ public class BenchmarkBerlinV70 {
             System.exit(1);
         }
 
-        // ---- 1. Download / load network ----
-        Network network = downloadAndLoadNetwork();
-        System.out.printf("Berlin v7.0 network: %,d nodes, %,d links%n",
+        // ---- 1. Load network ----
+        Network network = loadNetwork(networkPath);
+        System.out.printf("Network: %,d nodes, %,d links%n",
                 network.getNodes().size(), network.getLinks().size());
 
         FreespeedTravelTimeAndDisutility tc =
@@ -133,125 +154,107 @@ public class BenchmarkBerlinV70 {
         System.out.println();
         System.out.println("Building SpeedyALT landmarks ...");
         long altZStart = System.nanoTime();
-        SpeedyALTData altDataZ = new SpeedyALTData(graphZ, Math.min(ALT_LANDMARKS, graphZ.nodeCount), tc, 1);
+        SpeedyALTData altDataZ = new SpeedyALTData(graphZ, Math.min(altLandmarks, graphZ.nodeCount), tc, 1);
         long altZMs = (System.nanoTime() - altZStart) / 1_000_000;
-        System.out.printf("  ALT build (Z):  %,6d ms  (%d landmarks)%n", altZMs, ALT_LANDMARKS);
+        System.out.printf("  ALT build (Z):  %,6d ms  (%d landmarks)%n", altZMs, altLandmarks);
 
         long altIdStart = System.nanoTime();
-        SpeedyALTData altDataId = new SpeedyALTData(graphId, Math.min(ALT_LANDMARKS, graphId.nodeCount), tc, 1);
+        SpeedyALTData altDataId = new SpeedyALTData(graphId, Math.min(altLandmarks, graphId.nodeCount), tc, 1);
         long altIdMs = (System.nanoTime() - altIdStart) / 1_000_000;
-        System.out.printf("  ALT build (id): %,6d ms  (%d landmarks)%n", altIdMs, ALT_LANDMARKS);
+        System.out.printf("  ALT build (id): %,6d ms  (%d landmarks)%n", altIdMs, altLandmarks);
 
         // ---- 6. Create routers ----
-        SpeedyALT altZ       = new SpeedyALT(altDataZ, tc, tc);
-        SpeedyALT altId      = new SpeedyALT(altDataId, tc, tc);
-        CHRouterTimeDep chZ   = new CHRouterTimeDep(chGraphZ, tc, tc);
-        CHRouterTimeDep chId  = new CHRouterTimeDep(chGraphId, tc, tc);
+        List<RouterEntry> routers = buildRouters(graphZ, graphId, altDataZ, altDataId, chGraphZ, chGraphId, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
         int n = nodeList.size();
 
         // ---- 7. Warm-up ----
         System.out.println();
-        System.out.printf("Warming up (%d queries per router) ...%n", WARMUP_QUERIES);
+        System.out.printf("Warming up (%d queries per router) ...%n", warmupQueries);
         Random rng = new Random(42);
-        for (int i = 0; i < WARMUP_QUERIES; i++) {
+        for (int i = 0; i < warmupQueries; i++) {
             Node s = nodeList.get(rng.nextInt(n));
             Node d = nodeList.get(rng.nextInt(n));
             double depTime = 8.0 * 3600;
-            altZ.calcLeastCostPath(s, d, depTime, null, null);
-            altId.calcLeastCostPath(s, d, depTime, null, null);
-            chZ.calcLeastCostPath(s, d, depTime, null, null);
-            chId.calcLeastCostPath(s, d, depTime, null, null);
+            for (RouterEntry entry : routers) {
+                entry.router().calcLeastCostPath(s, d, depTime, null, null);
+            }
         }
 
         // ---- 8. Benchmark ----
-        System.out.printf("Running benchmark (%,d queries per router) ...%n", BENCHMARK_QUERIES);
+        System.out.printf("Running benchmark (%,d queries per router) ...%n", benchmarkQueries);
         rng = new Random(123);
 
         // Pre-generate random pairs so all routers use the exact same queries
-        int[][] pairs = new int[BENCHMARK_QUERIES][2];
-        for (int i = 0; i < BENCHMARK_QUERIES; i++) {
+        int[][] pairs = new int[benchmarkQueries][2];
+        for (int i = 0; i < benchmarkQueries; i++) {
             pairs[i][0] = rng.nextInt(n);
             pairs[i][1] = rng.nextInt(n);
         }
 
         // Benchmark each router separately to avoid interleaved GC interference
-        long altIdNs = benchmarkRouter(altId, nodeList, pairs, "ALT (identity)");
-        long altZNs  = benchmarkRouter(altZ,  nodeList, pairs, "ALT (Z-order)");
-        long chIdNs  = benchmarkRouter(chId,  nodeList, pairs, "CH  (identity)");
-        long chZNs   = benchmarkRouter(chZ,   nodeList, pairs, "CH  (Z-order)");
+        long[] elapsedNs = new long[routers.size()];
+        for (int r = 0; r < routers.size(); r++) {
+            elapsedNs[r] = benchmarkRouter(routers.get(r).router(), nodeList, pairs, routers.get(r).name());
+        }
 
-        // Quick correctness check: compare ALT(Z) vs CH(Z) and ALT(id) vs ALT(Z)
+        // Quick correctness check: compare all routers pairwise against the first
+        LeastCostPathCalculator refRouter = routers.get(0).router();
         int mismatches = 0;
         double maxCostDiff = 0;
-        for (int i = 0; i < Math.min(200, BENCHMARK_QUERIES); i++) {
+        for (int i = 0; i < Math.min(200, benchmarkQueries); i++) {
             Node s = nodeList.get(pairs[i][0]);
             Node d = nodeList.get(pairs[i][1]);
-            Path pathALTz  = altZ.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            Path pathCHz   = chZ.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            Path pathALTid = altId.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            if (pathALTz != null && pathCHz != null) {
-                double diff = Math.abs(pathALTz.travelCost - pathCHz.travelCost);
-                maxCostDiff = Math.max(maxCostDiff, diff);
-                if (diff > 1e-3) {
-                    mismatches++;
-                    if (mismatches <= 5) {
-                        System.err.printf("  MISMATCH #%d: %s->%s  ALT(Z)=%.4f  CH(Z)=%.4f  diff=%.6f%n",
-                                mismatches, s.getId(), d.getId(),
-                                pathALTz.travelCost, pathCHz.travelCost, diff);
-                    }
-                }
-            }
-            // Also check that ALT(identity) and ALT(Z-order) give the same result
-            if (pathALTz != null && pathALTid != null) {
-                double diff = Math.abs(pathALTz.travelCost - pathALTid.travelCost);
-                maxCostDiff = Math.max(maxCostDiff, diff);
-                if (diff > 1e-3) {
-                    mismatches++;
-                    if (mismatches <= 5) {
-                        System.err.printf("  MISMATCH #%d: %s->%s  ALT(Z)=%.4f  ALT(id)=%.4f  diff=%.6f%n",
-                                mismatches, s.getId(), d.getId(),
-                                pathALTz.travelCost, pathALTid.travelCost, diff);
+            Path refPath = refRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            for (int r = 1; r < routers.size(); r++) {
+                Path otherPath = routers.get(r).router().calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+                if (refPath != null && otherPath != null) {
+                    double diff = Math.abs(refPath.travelCost - otherPath.travelCost);
+                    maxCostDiff = Math.max(maxCostDiff, diff);
+                    if (diff > 1e-3) {
+                        mismatches++;
+                        if (mismatches <= 5) {
+                            System.err.printf("  MISMATCH #%d: %s->%s  %s=%.4f  %s=%.4f  diff=%.6f%n",
+                                    mismatches, s.getId(), d.getId(),
+                                    routers.get(0).name(), refPath.travelCost,
+                                    routers.get(r).name(), otherPath.travelCost, diff);
+                        }
                     }
                 }
             }
         }
 
         // ---- 9. Results ----
-        double altIdUs   = altIdNs / (BENCHMARK_QUERIES * 1000.0);
-        double altZUs    = altZNs  / (BENCHMARK_QUERIES * 1000.0);
-        double chIdUs    = chIdNs  / (BENCHMARK_QUERIES * 1000.0);
-        double chZUs     = chZNs   / (BENCHMARK_QUERIES * 1000.0);
-        double altSpeedup = altIdUs / Math.max(0.001, altZUs);
-        double chSpeedup  = chIdUs  / Math.max(0.001, chZUs);
         double edgeOverhead = ((double) chGraphZ.totalEdgeCount / network.getLinks().size() - 1) * 100;
 
+        // Build query performance rows dynamically
+        List<String[]> resultRows = new ArrayList<>();
+        resultRows.add(new String[]{ "Network" });
+        resultRows.add(new String[]{ "  Nodes",           String.format("%,d", network.getNodes().size()) });
+        resultRows.add(new String[]{ "  Links",           String.format("%,d", network.getLinks().size()) });
+        resultRows.add(new String[]{ "  CH edges",        String.format("%,d  (%+.1f%% overhead)", chGraphZ.totalEdgeCount, edgeOverhead) });
+        resultRows.add(null); // separator
+        resultRows.add(new String[]{ "Preprocessing" });
+        resultRows.add(new String[]{ "  ND Order (Z)",    String.format("%,d ms", orderZMs) });
+        resultRows.add(new String[]{ "  ND Order (id)",   String.format("%,d ms", orderIdMs) });
+        resultRows.add(new String[]{ "  CH build (Z)",    String.format("%,d ms  (incl. order)", totalBuildZMs) });
+        resultRows.add(new String[]{ "  CH build (id)",   String.format("%,d ms  (incl. order)", totalBuildIdMs) });
+        resultRows.add(new String[]{ "  ALT build (Z)",   String.format("%,d ms  (%d landmarks)", altZMs, altLandmarks) });
+        resultRows.add(new String[]{ "  ALT build (id)",  String.format("%,d ms  (%d landmarks)", altIdMs, altLandmarks) });
+        resultRows.add(null);
+        resultRows.add(new String[]{ "Query Performance", String.format("(%,d queries, %d warmup)", benchmarkQueries, warmupQueries) });
+        for (int r = 0; r < routers.size(); r++) {
+            double avgUs = elapsedNs[r] / (benchmarkQueries * 1000.0);
+            resultRows.add(new String[]{ "  " + routers.get(r).name(), String.format("%,.0f µs/query", avgUs) });
+        }
+        resultRows.add(null);
+        resultRows.add(new String[]{ "Correctness" });
+        resultRows.add(new String[]{ "  Max cost diff",   String.format("%.6f", maxCostDiff) });
+        resultRows.add(new String[]{ "  Mismatches",      String.format("%d  (threshold: 1e-3)", mismatches) });
+
         System.out.println();
-        printBox("Berlin v7.0  —  Z-Order vs Identity Comparison", new String[][] {
-                { "Network" },
-                { "  Nodes",           String.format("%,d", network.getNodes().size()) },
-                { "  Links",           String.format("%,d", network.getLinks().size()) },
-                { "  CH edges",        String.format("%,d  (%+.1f%% overhead)", chGraphZ.totalEdgeCount, edgeOverhead) },
-                null, // separator
-                { "Preprocessing" },
-                { "  ND Order (Z)",    String.format("%,d ms", orderZMs) },
-                { "  ND Order (id)",   String.format("%,d ms", orderIdMs) },
-                { "  CH build (Z)",    String.format("%,d ms  (incl. order)", totalBuildZMs) },
-                { "  CH build (id)",   String.format("%,d ms  (incl. order)", totalBuildIdMs) },
-                { "  ALT build (Z)",   String.format("%,d ms  (%d landmarks)", altZMs, ALT_LANDMARKS) },
-                { "  ALT build (id)",  String.format("%,d ms  (%d landmarks)", altIdMs, ALT_LANDMARKS) },
-                null,
-                { "Query Performance", String.format("(%,d queries, %d warmup)", BENCHMARK_QUERIES, WARMUP_QUERIES) },
-                { "  ALT (identity)",  String.format("%,.0f µs/query", altIdUs) },
-                { "  ALT (Z-order)",   String.format("%,.0f µs/query  (%.2fx speedup)", altZUs, altSpeedup) },
-                { "  CH  (identity)",  String.format("%,.0f µs/query", chIdUs) },
-                { "  CH  (Z-order)",   String.format("%,.0f µs/query  (%.2fx speedup)", chZUs, chSpeedup) },
-                null,
-                { "Correctness" },
-                { "  Max cost diff",   String.format("%.6f", maxCostDiff) },
-                { "  Mismatches",      String.format("%d  (threshold: 1e-3)", mismatches) },
-        });
+        printBox("Routing Benchmark  —  Z-Order vs Identity Comparison", resultRows.toArray(String[][]::new));
     }
 
     /**
@@ -278,6 +281,46 @@ public class BenchmarkBerlinV70 {
         double avgUs = elapsedNs / (total * 1000.0);
         System.out.printf("  %,.0f µs/query%n", avgUs);
         return elapsedNs;
+    }
+
+    // -----------------------------------------------------------------------
+    // Network loading
+    // -----------------------------------------------------------------------
+
+    /**
+     * Loads a MATSim network from a local file, or downloads Berlin v7.0 if
+     * {@code networkPath} is {@code null}.
+     */
+    private static Network loadNetwork(String networkPath) {
+        if (networkPath != null) {
+            System.out.println("Loading network from " + networkPath + " ...");
+            Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+            new MatsimNetworkReader(scenario.getNetwork()).readFile(networkPath);
+            return scenario.getNetwork();
+        }
+        return downloadAndLoadNetwork();
+    }
+
+    // -----------------------------------------------------------------------
+    // Router setup — add new router variants here
+    // -----------------------------------------------------------------------
+
+    /**
+     * Creates the list of routers to benchmark.  To add a new variant simply
+     * append another {@code RouterEntry} to the returned list.
+     */
+    private static List<RouterEntry> buildRouters(
+            SpeedyGraph graphZ, SpeedyGraph graphId,
+            SpeedyALTData altDataZ, SpeedyALTData altDataId,
+            CHGraph chGraphZ, CHGraph chGraphId,
+            FreespeedTravelTimeAndDisutility tc) {
+
+        List<RouterEntry> routers = new ArrayList<>();
+        routers.add(new RouterEntry("ALT (identity)", new SpeedyALT(altDataId, tc, tc)));
+        routers.add(new RouterEntry("ALT (Z-order)",  new SpeedyALT(altDataZ, tc, tc)));
+        routers.add(new RouterEntry("CH  (identity)", new CHRouterTimeDep(chGraphId, tc, tc)));
+        routers.add(new RouterEntry("CH  (Z-order)",  new CHRouterTimeDep(chGraphZ, tc, tc)));
+        return routers;
     }
 
     // -----------------------------------------------------------------------
