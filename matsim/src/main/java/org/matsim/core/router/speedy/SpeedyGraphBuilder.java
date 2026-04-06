@@ -160,6 +160,9 @@ public class SpeedyGraphBuilder {
 		return new SpeedyGraph(this.nodeData, this.linkData, this.nodes, this.links, null, this.nodeReorder);
 	}
 
+	/** Maximum coordinate value for 16-bit Morton encoding (each axis uses 16 bits). */
+	private static final int MORTON_COORD_MAX = 0xFFFF;
+
 	/**
 	 * Computes a spatial ordering using the Z-order (Morton) curve.
 	 *
@@ -197,10 +200,10 @@ public class SpeedyGraphBuilder {
 		long[] mortonKeys = new long[n];
 		for (int i = 0; i < n; i++) {
 			Coord c = coords[i];
-			int nx = (int) (((c.getX() - minX) / rangeX) * 65535);
-			int ny = (int) (((c.getY() - minY) / rangeY) * 65535);
-			nx = Math.max(0, Math.min(65535, nx));
-			ny = Math.max(0, Math.min(65535, ny));
+			int nx = (int) (((c.getX() - minX) / rangeX) * MORTON_COORD_MAX);
+			int ny = (int) (((c.getY() - minY) / rangeY) * MORTON_COORD_MAX);
+			nx = Math.max(0, Math.min(MORTON_COORD_MAX, nx));
+			ny = Math.max(0, Math.min(MORTON_COORD_MAX, ny));
 			int morton = mortonEncode(nx, ny);
 			mortonKeys[i] = ((long) morton << 32) | (i & 0xFFFFFFFFL);
 		}
@@ -229,13 +232,15 @@ public class SpeedyGraphBuilder {
 
 	/**
 	 * Spreads the lower 16 bits of v into even bit positions of a 32-bit int.
+	 * Uses a standard bit-interleave sequence: each step doubles the spacing
+	 * between active bits by shifting and masking with progressively finer masks.
 	 */
 	private static int expandBits(int v) {
-		v = (v | (v << 16)) & 0x0000FFFF;
-		v = (v | (v << 8))  & 0x00FF00FF;
-		v = (v | (v << 4))  & 0x0F0F0F0F;
-		v = (v | (v << 2))  & 0x33333333;
-		v = (v | (v << 1))  & 0x55555555;
+		v = (v | (v << 16)) & 0x0000FFFF; // keep lower 16 bits
+		v = (v | (v << 8))  & 0x00FF00FF; // spread into 8-bit groups
+		v = (v | (v << 4))  & 0x0F0F0F0F; // spread into 4-bit groups
+		v = (v | (v << 2))  & 0x33333333;  // spread into 2-bit groups
+		v = (v | (v << 1))  & 0x55555555;  // spread into single bits (even positions)
 		return v;
 	}
 
