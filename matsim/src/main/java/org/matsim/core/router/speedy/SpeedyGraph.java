@@ -81,6 +81,10 @@ public class SpeedyGraph {
     private final TurnRestrictionsContext turnRestrictions;
 
     // --- Optional CSR arrays (null until buildCSR() is called) ---
+    // csrReady is the volatile publication gate: set to true LAST after all
+    // CSR arrays are fully populated.  Volatile write happens-before any
+    // subsequent volatile read, guaranteeing visibility of all array contents.
+    private volatile boolean csrReady;
     private int[] outOff;       // outOff[node] = start index in outEdges
     private int[] outLen;       // outLen[node] = number of out-edges
     private int[] outEdges;     // CSR_STRIDE ints per edge, contiguous per node
@@ -110,7 +114,7 @@ public class SpeedyGraph {
      * eliminating the linked-list pointer chasing of the default representation.
      */
     public synchronized void buildCSR() {
-        if (this.outOff != null) {
+        if (this.csrReady) {
             return; // already built
         }
 
@@ -180,31 +184,32 @@ public class SpeedyGraph {
             }
         }
 
-        // Publish all arrays atomically via the synchronized method
+        // Publish all arrays, then set volatile gate LAST
         this.outOff = oOff;
         this.outLen = oLen;
         this.outEdges = oEdges;
         this.inOff = iOff;
         this.inLen = iLen;
         this.inEdges = iEdges;
+        this.csrReady = true; // volatile write — publishes all preceding stores
     }
 
     /**
      * Returns whether CSR arrays have been built for this graph.
      */
     public boolean hasCSR() {
-        return this.outOff != null;
+        return this.csrReady;
     }
 
     public LinkIterator getOutLinkIterator() {
-        if (outOff != null) {
+        if (csrReady) {
             return new CSROutLinkIterator(this);
         }
         return new OutLinkIterator(this);
     }
 
     public LinkIterator getInLinkIterator() {
-        if (inOff != null) {
+        if (csrReady) {
             return new CSRInLinkIterator(this);
         }
         return new InLinkIterator(this);
