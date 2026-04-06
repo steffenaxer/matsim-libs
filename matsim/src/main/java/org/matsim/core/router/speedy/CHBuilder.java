@@ -62,19 +62,25 @@ public class CHBuilder {
     private static final int BE_LOW2  = 5; // lowerEdge2 build index; -1 = real edge
     private static final int BE_SIZE  = 6;
 
-    /** Maximum hops allowed in the witness search. */
-    private static final int HOP_LIMIT = 10;
+    /** Maximum hops allowed in the witness search.
+     *
+     *  <p>On large networks (e.g. 500k+ nodes with transit overlays), a low hop limit
+     *  prevents the witness search from finding existing alternative paths, causing
+     *  unnecessary shortcuts that cascade into exponential edge/memory explosion.
+     *  The settled limit ({@link #SETTLED_LIMIT}) is the primary search bound;
+     *  the hop limit is a secondary safeguard. */
+    private static final int HOP_LIMIT = 500;
 
     /** Base maximum number of nodes settled in a single witness search.
      *  The actual limit is scaled up with the number of active targets
      *  to prevent unnecessary shortcuts on large networks where separator
      *  nodes have high degree.
      *  @see #effectiveSettledLimit(int) */
-    private static final int SETTLED_LIMIT = 1000;
+    private static final int SETTLED_LIMIT = 5_000;
 
     /** Maximum settled limit after scaling.  Prevents unbounded exploration
      *  on degenerate networks while allowing enough room for large separators. */
-    private static final int MAX_SETTLED_LIMIT = 50_000;
+    private static final int MAX_SETTLED_LIMIT = 200_000;
 
     /** Cheaper hop/settled limits for priority estimation witness search. */
     private static final int PRIO_HOP_LIMIT = 3;
@@ -932,15 +938,15 @@ public class CHBuilder {
      *
      * <p>Without this scaling, contraction of large separators creates O(inDeg × outDeg)
      * shortcuts whose cascading degree-inflation causes memory exhaustion (observed
-     * on the 532k-node Metropole Ruhr network).
+     * on the 532k-node Metropole Ruhr network with 1.16M links).
      *
      * @param numTargets number of active (uncontracted) out-neighbours of the
      *                   node being contracted.
      * @return settled limit in {@code [SETTLED_LIMIT, MAX_SETTLED_LIMIT]}.
      */
     private static int effectiveSettledLimit(int numTargets) {
-        // Scale linearly: at least SETTLED_LIMIT, plus 10× per target, capped.
-        return Math.min(MAX_SETTLED_LIMIT, SETTLED_LIMIT + numTargets * 10);
+        // Scale linearly: at least SETTLED_LIMIT, plus 50× per target, capped.
+        return Math.min(MAX_SETTLED_LIMIT, SETTLED_LIMIT + numTargets * 50);
     }
 
     /**

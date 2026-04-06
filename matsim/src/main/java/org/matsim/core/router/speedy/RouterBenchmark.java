@@ -1,6 +1,6 @@
 /* *********************************************************************** *
  * project: org.matsim.*
- * BenchmarkBerlinV70.java
+ * RouterBenchmark.java
  *                                                                         *
  * *********************************************************************** *
  *                                                                         *
@@ -44,30 +44,42 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Standalone benchmark comparing <b>router variants</b> on a MATSim network
- * (default: Berlin v7.0 ~88k nodes, ~200k links):
+ * Standalone benchmark comparing <b>router variants</b> on a MATSim network.
+ *
+ * <p>Supports two built-in networks that are automatically downloaded when
+ * {@code --network} is not specified:
+ * <ul>
+ *   <li><b>berlin</b> (default) — Berlin v7.0 (~88k nodes, ~200k links)</li>
+ *   <li><b>ruhr</b> — Metropole Ruhr v2024 high-res with PT (~532k nodes, ~1.16M links)</li>
+ * </ul>
+ *
+ * <p>Routers benchmarked:
  * <ol>
- *   <li>SpeedyALT</li>
- *   <li>CH Time-Dependent</li>
+ *   <li>SpeedyALT (with Z-order and identity ordering)</li>
+ *   <li>CH Time-Dependent (with Z-order and identity ordering)</li>
  * </ol>
  *
  * <p>Run with sufficient heap, e.g.:
  * <pre>
- *   java -Xmx8G -cp ... org.matsim.core.router.speedy.BenchmarkBerlinV70 \
- *        [--network path/to/network.xml.gz] \
+ *   java -Xmx8G -cp ... org.matsim.core.router.speedy.RouterBenchmark \
+ *        [--network path/to/network.xml.gz | berlin | ruhr] \
  *        [--queries 2000] [--warmup 200] [--landmarks 16]
  * </pre>
  *
- * <p>If {@code --network} is omitted, the Berlin v7.0 network is downloaded
- * from the TU Berlin SVN and cached in the system temp directory.
+ * <p>If {@code --network} is omitted, the Berlin v7.0 network is used.
  *
  * @author Steffen Axer
  */
-public class BenchmarkBerlinV70 {
+public class RouterBenchmark {
 
-    private static final String NETWORK_URL =
+    private static final String BERLIN_NETWORK_URL =
             "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/berlin/"
                     + "berlin-v7.0/input/berlin-v7.0-network.xml.gz";
+
+    private static final String RUHR_NETWORK_URL =
+            "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/metropole-ruhr/"
+                    + "metropole-ruhr-v2024/metropole-ruhr-v2024.0/input/"
+                    + "metropole-ruhr-v2024.1-network_resolutionHigh-with-pt.xml.gz";
 
     private static int warmupQueries    = 200;
     private static int benchmarkQueries = 2_000;
@@ -86,8 +98,8 @@ public class BenchmarkBerlinV70 {
                 case "--landmarks" -> altLandmarks        = Integer.parseInt(args[++i]);
                 default -> {
                     System.err.println("Unknown argument: " + args[i]);
-                    System.err.println("Usage: java ... BenchmarkBerlinV70 "
-                            + "[--network <path>] [--queries <n>] [--warmup <n>] [--landmarks <n>]");
+                    System.err.println("Usage: java ... RouterBenchmark "
+                            + "[--network <path|berlin|ruhr>] [--queries <n>] [--warmup <n>] [--landmarks <n>]");
                     System.exit(1);
                 }
             }
@@ -97,7 +109,7 @@ public class BenchmarkBerlinV70 {
         System.out.printf("JVM max heap: %,d MB%n", maxHeapMB);
         if (maxHeapMB < 3000) {
             System.err.println("ERROR: Need at least -Xmx4G. Current max heap: " + maxHeapMB + " MB.");
-            System.err.println("  Usage: java -Xmx8G -cp <classpath> " + BenchmarkBerlinV70.class.getName());
+            System.err.println("  Usage: java -Xmx8G -cp <classpath> " + RouterBenchmark.class.getName());
             System.exit(1);
         }
 
@@ -288,17 +300,23 @@ public class BenchmarkBerlinV70 {
     // -----------------------------------------------------------------------
 
     /**
-     * Loads a MATSim network from a local file, or downloads Berlin v7.0 if
-     * {@code networkPath} is {@code null}.
+     * Loads a MATSim network from a local file, a named built-in network,
+     * or downloads Berlin v7.0 if {@code networkPath} is {@code null}.
+     *
+     * <p>Recognized built-in names: {@code "berlin"}, {@code "ruhr"}.
      */
     private static Network loadNetwork(String networkPath) {
-        if (networkPath != null) {
-            System.out.println("Loading network from " + networkPath + " ...");
-            Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
-            new MatsimNetworkReader(scenario.getNetwork()).readFile(networkPath);
-            return scenario.getNetwork();
+        if (networkPath == null || "berlin".equalsIgnoreCase(networkPath)) {
+            return downloadAndLoadNetwork(BERLIN_NETWORK_URL, "berlin-v7.0-network.xml.gz", "Berlin v7.0");
         }
-        return downloadAndLoadNetwork();
+        if ("ruhr".equalsIgnoreCase(networkPath)) {
+            return downloadAndLoadNetwork(RUHR_NETWORK_URL,
+                    "metropole-ruhr-v2024.1-network_resolutionHigh-with-pt.xml.gz", "Metropole Ruhr v2024");
+        }
+        System.out.println("Loading network from " + networkPath + " ...");
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork()).readFile(networkPath);
+        return scenario.getNetwork();
     }
 
     // -----------------------------------------------------------------------
@@ -325,13 +343,12 @@ public class BenchmarkBerlinV70 {
 
     // -----------------------------------------------------------------------
 
-    private static Network downloadAndLoadNetwork() {
-        java.nio.file.Path localPath = Paths.get(System.getProperty("java.io.tmpdir"),
-                "berlin-v7.0-network.xml.gz");
+    private static Network downloadAndLoadNetwork(String url, String filename, String label) {
+        java.nio.file.Path localPath = Paths.get(System.getProperty("java.io.tmpdir"), filename);
 
         if (!Files.exists(localPath) || fileSize(localPath) < 1000) {
-            System.out.println("Downloading Berlin v7.0 network ...");
-            System.out.println("  URL:   " + NETWORK_URL);
+            System.out.println("Downloading " + label + " network ...");
+            System.out.println("  URL:   " + url);
             System.out.println("  Cache: " + localPath);
             try {
                 HttpClient client = HttpClient.newBuilder()
@@ -339,8 +356,8 @@ public class BenchmarkBerlinV70 {
                         .followRedirects(HttpClient.Redirect.NORMAL)
                         .build();
                 HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(NETWORK_URL))
-                        .timeout(Duration.ofSeconds(120))
+                        .uri(URI.create(url))
+                        .timeout(Duration.ofSeconds(300))
                         .GET()
                         .build();
                 HttpResponse<InputStream> response = client.send(request,
@@ -353,11 +370,11 @@ public class BenchmarkBerlinV70 {
                 }
                 System.out.printf("  Downloaded %.1f MB%n", fileSize(localPath) / (1024.0 * 1024.0));
             } catch (Exception e) {
-                throw new RuntimeException("Cannot download Berlin v7.0 network: " + e.getMessage(), e);
+                throw new RuntimeException("Cannot download " + label + " network: " + e.getMessage(), e);
             }
         } else {
-            System.out.printf("Using cached Berlin v7.0 network: %s (%.1f MB)%n",
-                    localPath, fileSize(localPath) / (1024.0 * 1024.0));
+            System.out.printf("Using cached %s network: %s (%.1f MB)%n",
+                    label, localPath, fileSize(localPath) / (1024.0 * 1024.0));
         }
 
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
