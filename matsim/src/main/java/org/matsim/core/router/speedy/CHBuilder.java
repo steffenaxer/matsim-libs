@@ -121,6 +121,20 @@ public class CHBuilder {
      *  the more accurate iterative re-estimation approach. */
     private static final int ADAPTIVE_CONTRACTION_THRESHOLD = 50;
 
+    /** Maximum active degree product (active_in_degree × active_out_degree) for
+     *  a node to be contracted during ND rounds.  Nodes exceeding this threshold
+     *  are <em>deferred</em> to a final priority-queue (PQ) phase.
+     *
+     *  <p>On transit-augmented networks (e.g. Metropole Ruhr: 532k nodes, 1.16M
+     *  links), PT hub nodes at ND separator depths have active degree products
+     *  of 2000+, creating up to O(inDeg × outDeg) shortcuts per contraction.
+     *  With thousands of such hubs in a single ND round, this produces millions
+     *  of shortcuts and exhausts available memory (observed: 1.2M → 4M edges at
+     *  ND depth 18, OOM with 20 GB heap).  Deferring these hubs to the PQ phase
+     *  lets them be contracted <em>after</em> most of their neighbors, when the
+     *  active degree is drastically lower. */
+    private static final int DEFER_DEGREE_PRODUCT = 1000;
+
     /** Maximum number of threads to use for parallel contraction.
      *  Capping this limits memory usage (each thread holds a ~2.5 MB WitnessContext). */
     private static final int MAX_PARALLEL_THREADS = 8;
@@ -572,6 +586,139 @@ public class CHBuilder {
         if (pool != null) {
             pool.shutdown();
         }
+
+        // Contract deferred high-degree nodes using priority-queue ordering.
+        // These are nodes whose active degree product exceeded DEFER_DEGREE_PRODUCT
+        // during ND rounds and were skipped to prevent edge explosion.
+        int deferredCount = 0;
+        for (int n = 0; n < nodeCount; n++) {
+            if (!contracted[n]) deferredCount++;
+        }
+        if (deferredCount > 0) {
+            LOG.info("CH contraction (parallel): contracting {} deferred high-degree nodes with PQ…",
+                    deferredCount);
+            contractDeferredNodesPQ(deferredCount);
+        }
+    }
+
+    /**
+     * Contracts deferred high-degree nodes using a lazy priority-queue approach.
+     *
+     * <p>Nodes that were too expensive to contract during ND rounds (active degree
+     * product exceeded {@link #DEFER_DEGREE_PRODUCT}) are collected here and
+     * contracted in order of their edge-difference priority.  By this point, most
+     * of the graph is already contracted, so these high-degree hubs have much lower
+     * <em>active</em> degree (many neighbors already contracted), resulting in far
+     * fewer shortcuts than if they had been contracted during their ND round.
+     *
+     * <p>Levels for deferred nodes start at {@code nodeCount} to ensure they are
+     * above all ND-assigned levels (which are in {@code [0, nodeCount-1]}).
+     *
+     * @param deferredCount number of uncontracted nodes (for logging).
+     */
+    private void contractDeferredNodesPQ(int deferredCount) {
+        // Initialize contractedNeighborCount for deferred nodes — needed for
+        // accurate priority estimation in the PQ.
+        for (int node = 0; node < nodeCount; node++) {
+            if (contracted[node]) continue;
+            int count = 0;
+            int[] oArr = outEdges[node];
+            int oLen = this.outLen[node];
+            for (int i = 0; i < oLen; i++) {
+                int w = buildEdgeData[oArr[i] * BE_SIZE + BE_TO];
+                if (contracted[w]) count++;
+            }
+            int[] iArr = inEdges[node];
+            int iLen = this.inLen[node];
+            for (int j = 0; j < iLen; j++) {
+                int u = buildEdgeData[iArr[j] * BE_SIZE + BE_FROM];
+                if (contracted[u]) count++;
+            }
+            contractedNeighborCount[node] = count;
+        }
+
+        // Build PQ with initial priorities.
+        DAryMinHeap pq = new DAryMinHeap(nodeCount, 4);
+        int[] nodePriority = new int[nodeCount];
+        for (int node = 0; node < nodeCount; node++) {
+            if (contracted[node]) continue;
+            int prio = estimatePriority(node);
+            nodePriority[node] = prio;
+            pq.insert(node, prio + nodeCount);
+        }
+
+        int levelCounter = nodeCount; // above all ND levels
+        int contractedCount = 0;
+        int logInterval = Math.max(deferredCount / 20, 1);
+
+        while (!pq.isEmpty()) {
+            int node = pq.poll();
+            if (contracted[node]) continue;
+
+            // Lazy update: re-estimate and re-queue if priority increased.
+            int newPriority = estimatePriority(node);
+            if (newPriority > nodePriority[node]) {
+                nodePriority[node] = newPriority;
+                pq.insert(node, newPriority + nodeCount);
+                continue;
+            }
+
+            contractNodeBatched(node);
+            contracted[node] = true;
+            nodeLevel[node]  = levelCounter++;
+            contractedCount++;
+
+            if (contractedCount % logInterval == 0) {
+                LOG.info("  … deferred: contracted {}/{} nodes ({} edges so far)",
+                        contractedCount, deferredCount, buildEdgeCounter.get());
+            }
+
+            // Update contractedNeighborCount for remaining neighbors.
+            int[] oArr = outEdges[node];
+            int oLen = outLen[node];
+            for (int i = 0; i < oLen; i++) {
+                int toNode = buildEdgeData[oArr[i] * BE_SIZE + BE_TO];
+                if (!contracted[toNode]) contractedNeighborCount[toNode]++;
+            }
+            int[] iArr = inEdges[node];
+            int iLen = inLen[node];
+            for (int j = 0; j < iLen; j++) {
+                int fromNode = buildEdgeData[iArr[j] * BE_SIZE + BE_FROM];
+                if (!contracted[fromNode]) contractedNeighborCount[fromNode]++;
+            }
+        }
+
+        LOG.info("  … deferred: contracted {}/{} nodes ({} edges total)",
+                contractedCount, deferredCount, buildEdgeCounter.get());
+
+        // Remap all node levels to a contiguous permutation [0, nodeCount-1].
+        // ND-contracted nodes have levels in [0, nodeCount-1] but with gaps (the
+        // deferred nodes' ND slots were never used).  Deferred nodes have levels
+        // >= nodeCount.  We remap so that the relative order is preserved but the
+        // values form a dense range, which CHGraph requires for its sweep-order
+        // inverse mapping.
+        remapLevels();
+    }
+
+    /**
+     * Remaps {@link #nodeLevel} values to form a contiguous permutation
+     * {@code [0, nodeCount-1]}.  Preserves the relative order of all levels.
+     *
+     * <p>This is needed when deferred nodes are assigned levels >= nodeCount
+     * to keep them above all ND levels during contraction.  CHGraph requires
+     * levels to be exactly the set {0, 1, …, nodeCount-1}.
+     */
+    private void remapLevels() {
+        // Pair each node with its current level, sort by level, then reassign.
+        long[] pairs = new long[nodeCount];
+        for (int i = 0; i < nodeCount; i++) {
+            pairs[i] = ((long) nodeLevel[i] << 32) | (i & 0xFFFFFFFFL);
+        }
+        Arrays.sort(pairs);
+        for (int rank = 0; rank < nodeCount; rank++) {
+            int node = (int) pairs[rank];
+            nodeLevel[node] = rank;
+        }
     }
 
     private static int roundNodeCount(List<int[]> round) {
@@ -661,9 +808,41 @@ public class CHBuilder {
         return result;
     }
 
+    /**
+     * Checks whether a node should be deferred from ND contraction to the
+     * final priority-queue phase.  Returns {@code true} if the product of
+     * active (uncontracted, non-self) in-degree and out-degree exceeds
+     * {@link #DEFER_DEGREE_PRODUCT}.
+     *
+     * <p>Uses early termination: as soon as the running product exceeds the
+     * threshold while counting in-neighbours, the method returns immediately.
+     */
+    private boolean shouldDefer(int node) {
+        int outDeg = 0;
+        int[] oArr = outEdges[node];
+        int oLen = this.outLen[node];
+        for (int i = 0; i < oLen; i++) {
+            int w = buildEdgeData[oArr[i] * BE_SIZE + BE_TO];
+            if (!contracted[w] && w != node) outDeg++;
+        }
+        if (outDeg == 0) return false;
+
+        int[] iArr = inEdges[node];
+        int iLen = this.inLen[node];
+        int inDeg = 0;
+        for (int j = 0; j < iLen; j++) {
+            int u = buildEdgeData[iArr[j] * BE_SIZE + BE_FROM];
+            if (!contracted[u] && u != node) {
+                if (++inDeg * (long) outDeg > DEFER_DEGREE_PRODUCT) return true;
+            }
+        }
+        return false;
+    }
+
     /** Contract a cell sequentially using the builder's own witness state. */
     private void contractCellSequential(int[] cellNodes, int[] order) {
         for (int node : cellNodes) {
+            if (shouldDefer(node)) continue;
             contractNodeBatched(node);
             contracted[node] = true;
             nodeLevel[node]  = order[node];
@@ -677,6 +856,7 @@ public class CHBuilder {
      */
     private void contractCellWithContext(int[] cellNodes, int[] order, WitnessContext ctx) {
         for (int node : cellNodes) {
+            if (shouldDefer(node)) continue;
             contractNodeBatchedCtx(node, ctx);
             contracted[node] = true;
             nodeLevel[node]  = order[node];
@@ -747,6 +927,9 @@ public class CHBuilder {
                 pq.insert(node, newPrio + nodeCount);
                 continue;
             }
+
+            // Defer high-degree nodes to the final PQ phase.
+            if (shouldDefer(node)) continue;
 
             // Contract this node (full witness search, creates shortcuts).
             contractNodeBatched(node);
@@ -825,6 +1008,9 @@ public class CHBuilder {
                                             ForkJoinPool pool,
                                             ThreadLocal<WitnessContext> tlCtx) {
         for (int node : cellNodes) {
+            // Defer high-degree nodes to the final PQ phase.
+            if (shouldDefer(node)) continue;
+
             // Count active in-degree to decide parallelism strategy
             int[] iArr = inEdges[node];
             int iLen = Math.min(this.inLen[node], iArr.length);  // clamp: unsynchronized read
