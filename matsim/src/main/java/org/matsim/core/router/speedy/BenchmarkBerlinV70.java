@@ -28,9 +28,8 @@ import java.util.Random;
  * Standalone benchmark comparing <b>all router variants</b> on the Berlin v7.0
  * network (~88k nodes, ~200k links):
  * <ol>
- *   <li>Dijkstra (linked-list SpeedyGraph)</li>
- *   <li>Dijkstra (CSR SpeedyGraph)</li>
- *   <li>SpeedyALT</li>
+ *   <li>SpeedyALT (linked-list SpeedyGraph)</li>
+ *   <li>SpeedyALT (CSR SpeedyGraph)</li>
  *   <li>CH Time-Dependent (linked-list base graph)</li>
  *   <li>CH Time-Dependent (CSR base graph)</li>
  * </ol>
@@ -118,20 +117,25 @@ public class BenchmarkBerlinV70 {
         System.out.printf("  Total (excl order): %,6d ms%n", totalBuildCSRMs);
         System.out.printf("  CH edges:    %,d%n", chGraphCSR.totalEdgeCount);
 
-        // ---- 6. Build ALT data ----
+        // ---- 6. Build ALT data (LL and CSR) ----
         System.out.println();
-        System.out.println("Building SpeedyALT landmarks ...");
-        long altBuildStart = System.nanoTime();
-        SpeedyALTData altData = new SpeedyALTData(graphLL, Math.min(ALT_LANDMARKS, graphLL.nodeCount), tc, 1);
-        long altBuildMs = (System.nanoTime() - altBuildStart) / 1_000_000;
-        System.out.printf("  ALT build:   %,6d ms  (%d landmarks)%n", altBuildMs, ALT_LANDMARKS);
+        System.out.println("Building SpeedyALT landmarks (LL) ...");
+        long altLLBuildStart = System.nanoTime();
+        SpeedyALTData altDataLL = new SpeedyALTData(graphLL, Math.min(ALT_LANDMARKS, graphLL.nodeCount), tc, 1);
+        long altLLBuildMs = (System.nanoTime() - altLLBuildStart) / 1_000_000;
+        System.out.printf("  ALT build (LL):  %,6d ms  (%d landmarks)%n", altLLBuildMs, ALT_LANDMARKS);
 
-        // ---- 7. Create all 5 routers ----
-        SpeedyDijkstra dijkstraLL  = new SpeedyDijkstra(graphLL, tc, tc);
-        SpeedyDijkstra dijkstraCSR = new SpeedyDijkstra(graphCSR, tc, tc);
-        SpeedyALT altRouter        = new SpeedyALT(altData, tc, tc);
-        CHRouterTimeDep chLL       = new CHRouterTimeDep(chGraphLL, tc, tc);
-        CHRouterTimeDep chCSR      = new CHRouterTimeDep(chGraphCSR, tc, tc);
+        System.out.println("Building SpeedyALT landmarks (CSR) ...");
+        long altCSRBuildStart = System.nanoTime();
+        SpeedyALTData altDataCSR = new SpeedyALTData(graphCSR, Math.min(ALT_LANDMARKS, graphCSR.nodeCount), tc, 1);
+        long altCSRBuildMs = (System.nanoTime() - altCSRBuildStart) / 1_000_000;
+        System.out.printf("  ALT build (CSR): %,6d ms  (%d landmarks)%n", altCSRBuildMs, ALT_LANDMARKS);
+
+        // ---- 7. Create all 4 routers ----
+        SpeedyALT altLL       = new SpeedyALT(altDataLL, tc, tc);
+        SpeedyALT altCSR      = new SpeedyALT(altDataCSR, tc, tc);
+        CHRouterTimeDep chLL  = new CHRouterTimeDep(chGraphLL, tc, tc);
+        CHRouterTimeDep chCSR = new CHRouterTimeDep(chGraphCSR, tc, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
         int n = nodeList.size();
@@ -144,9 +148,8 @@ public class BenchmarkBerlinV70 {
             Node s = nodeList.get(rng.nextInt(n));
             Node d = nodeList.get(rng.nextInt(n));
             double depTime = 8.0 * 3600;
-            dijkstraLL.calcLeastCostPath(s, d, depTime, null, null);
-            dijkstraCSR.calcLeastCostPath(s, d, depTime, null, null);
-            altRouter.calcLeastCostPath(s, d, depTime, null, null);
+            altLL.calcLeastCostPath(s, d, depTime, null, null);
+            altCSR.calcLeastCostPath(s, d, depTime, null, null);
             chLL.calcLeastCostPath(s, d, depTime, null, null);
             chCSR.calcLeastCostPath(s, d, depTime, null, null);
         }
@@ -163,56 +166,54 @@ public class BenchmarkBerlinV70 {
         }
 
         // Benchmark each router separately to avoid interleaved GC interference
-        long dijkstraLLNs  = benchmarkRouter(dijkstraLL, nodeList, pairs, "Dijkstra (LL)");
-        long dijkstraCSRNs = benchmarkRouter(dijkstraCSR, nodeList, pairs, "Dijkstra (CSR)");
-        long altNs         = benchmarkRouter(altRouter, nodeList, pairs, "SpeedyALT");
-        long chLLNs        = benchmarkRouter(chLL, nodeList, pairs, "CH TimeDep (LL)");
-        long chCSRNs       = benchmarkRouter(chCSR, nodeList, pairs, "CH TimeDep (CSR)");
+        long altLLNs   = benchmarkRouter(altLL, nodeList, pairs, "SpeedyALT (LL)");
+        long altCSRNs  = benchmarkRouter(altCSR, nodeList, pairs, "SpeedyALT (CSR)");
+        long chLLNs    = benchmarkRouter(chLL, nodeList, pairs, "CH TimeDep (LL)");
+        long chCSRNs   = benchmarkRouter(chCSR, nodeList, pairs, "CH TimeDep (CSR)");
 
-        // Quick correctness check: compare Dijkstra LL vs CSR, and Dijkstra vs CH
+        // Quick correctness check: compare ALT LL vs CSR, and ALT vs CH
         int mismatches = 0;
         double maxCostDiff = 0;
         for (int i = 0; i < Math.min(200, BENCHMARK_QUERIES); i++) {
             Node s = nodeList.get(pairs[i][0]);
             Node d = nodeList.get(pairs[i][1]);
-            Path pathDLL  = dijkstraLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            Path pathDCSR = dijkstraCSR.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            Path pathCH   = chLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            if (pathDLL != null && pathDCSR != null) {
-                double diff = Math.abs(pathDLL.travelCost - pathDCSR.travelCost);
+            Path pathAltLL  = altLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            Path pathAltCSR = altCSR.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            Path pathCH     = chLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            if (pathAltLL != null && pathAltCSR != null) {
+                double diff = Math.abs(pathAltLL.travelCost - pathAltCSR.travelCost);
                 if (diff > 1e-6) {
-                    System.err.printf("  CSR MISMATCH: %s->%s  LL=%.4f  CSR=%.4f%n",
-                            s.getId(), d.getId(), pathDLL.travelCost, pathDCSR.travelCost);
+                    System.err.printf("  ALT CSR MISMATCH: %s->%s  LL=%.4f  CSR=%.4f%n",
+                            s.getId(), d.getId(), pathAltLL.travelCost, pathAltCSR.travelCost);
                 }
             }
-            if (pathDLL != null && pathCH != null) {
-                double diff = Math.abs(pathDLL.travelCost - pathCH.travelCost);
+            if (pathAltLL != null && pathCH != null) {
+                double diff = Math.abs(pathAltLL.travelCost - pathCH.travelCost);
                 maxCostDiff = Math.max(maxCostDiff, diff);
                 if (diff > 1e-3) {
                     mismatches++;
                     if (mismatches <= 5) {
-                        System.err.printf("  CH MISMATCH #%d: %s->%s  Dijkstra=%.4f  CH=%.4f  diff=%.6f%n",
+                        System.err.printf("  CH MISMATCH #%d: %s->%s  ALT=%.4f  CH=%.4f  diff=%.6f%n",
                                 mismatches, s.getId(), d.getId(),
-                                pathDLL.travelCost, pathCH.travelCost, diff);
+                                pathAltLL.travelCost, pathCH.travelCost, diff);
                     }
                 }
             }
         }
 
         // ---- 10. Results ----
-        double dijkstraLLAvgUs  = dijkstraLLNs  / (BENCHMARK_QUERIES * 1000.0);
-        double dijkstraCSRAvgUs = dijkstraCSRNs / (BENCHMARK_QUERIES * 1000.0);
-        double altAvgUs         = altNs         / (BENCHMARK_QUERIES * 1000.0);
-        double chLLAvgUs        = chLLNs        / (BENCHMARK_QUERIES * 1000.0);
-        double chCSRAvgUs       = chCSRNs       / (BENCHMARK_QUERIES * 1000.0);
-        double csrDijkstraSpeedup = (double) dijkstraLLNs / Math.max(1, dijkstraCSRNs);
-        double chVsAlt        = (double) altNs / Math.max(1, chLLNs);
-        double chCsrVsChLL    = (double) chLLNs / Math.max(1, chCSRNs);
-        double chVsDijkstra   = (double) dijkstraLLNs / Math.max(1, chLLNs);
+        double altLLAvgUs   = altLLNs   / (BENCHMARK_QUERIES * 1000.0);
+        double altCSRAvgUs  = altCSRNs  / (BENCHMARK_QUERIES * 1000.0);
+        double chLLAvgUs    = chLLNs    / (BENCHMARK_QUERIES * 1000.0);
+        double chCSRAvgUs   = chCSRNs   / (BENCHMARK_QUERIES * 1000.0);
+        double altCsrVsAltLL  = (double) altLLNs  / Math.max(1, altCSRNs);
+        double chCsrVsChLL    = (double) chLLNs   / Math.max(1, chCSRNs);
+        double chLLVsAltLL    = (double) altLLNs  / Math.max(1, chLLNs);
+        double chCSRVsAltCSR  = (double) altCSRNs / Math.max(1, chCSRNs);
         double edgeOverhead   = ((double) chGraphLL.totalEdgeCount / network.getLinks().size() - 1) * 100;
 
         System.out.println();
-        printBox("Berlin v7.0  —  All Router Variants Comparison", new String[][] {
+        printBox("Berlin v7.0  —  Router Variants Comparison", new String[][] {
                 { "Network" },
                 { "  Nodes",           String.format("%,d", network.getNodes().size()) },
                 { "  Links",           String.format("%,d", network.getLinks().size()) },
@@ -223,25 +224,25 @@ public class BenchmarkBerlinV70 {
                 { "  ND Order",        String.format("%,d ms  (shared, computed once)", orderMs) },
                 { "  CH build (LL)",   String.format("%,d ms  (contraction + customize)", totalBuildLLMs) },
                 { "  CH build (CSR)",  String.format("%,d ms  (contraction + customize)", totalBuildCSRMs) },
-                { "  ALT landmarks",   String.format("%,d ms  (%d landmarks)", altBuildMs, ALT_LANDMARKS) },
+                { "  ALT build (LL)",  String.format("%,d ms  (%d landmarks)", altLLBuildMs, ALT_LANDMARKS) },
+                { "  ALT build (CSR)", String.format("%,d ms  (%d landmarks)", altCSRBuildMs, ALT_LANDMARKS) },
                 { "  CSR build",       String.format("%,d ms", csrBuildMs) },
                 null,
                 { "Query Performance", String.format("(%,d queries, %d warmup)", BENCHMARK_QUERIES, WARMUP_QUERIES) },
-                { "  Dijkstra (LL)",   String.format("%,.0f µs/query", dijkstraLLAvgUs) },
-                { "  Dijkstra (CSR)",  String.format("%,.0f µs/query  (%.2fx vs LL)", dijkstraCSRAvgUs, csrDijkstraSpeedup) },
-                { "  SpeedyALT",       String.format("%,.0f µs/query", altAvgUs) },
+                { "  SpeedyALT (LL)",  String.format("%,.0f µs/query", altLLAvgUs) },
+                { "  SpeedyALT (CSR)", String.format("%,.0f µs/query  (%.2fx vs ALT-LL)", altCSRAvgUs, altCsrVsAltLL) },
                 { "  CH TimeDep (LL)", String.format("%,.0f µs/query", chLLAvgUs) },
                 { "  CH TimeDep (CSR)",String.format("%,.0f µs/query  (%.2fx vs CH-LL)", chCSRAvgUs, chCsrVsChLL) },
                 null,
                 { "Speedups" },
-                { "  CH vs Dijkstra",  String.format("%.1fx", chVsDijkstra) },
-                { "  CH vs ALT",       String.format("%.1fx", chVsAlt) },
-                { "  CSR vs LL (Dij)", String.format("%.2fx", csrDijkstraSpeedup) },
-                { "  CSR vs LL (CH)",  String.format("%.2fx", chCsrVsChLL) },
+                { "  CH(LL) vs ALT(LL)",   String.format("%.2fx", chLLVsAltLL) },
+                { "  CH(CSR) vs ALT(CSR)", String.format("%.2fx", chCSRVsAltCSR) },
+                { "  CSR vs LL (ALT)",     String.format("%.2fx", altCsrVsAltLL) },
+                { "  CSR vs LL (CH)",      String.format("%.2fx", chCsrVsChLL) },
                 null,
                 { "Correctness" },
                 { "  Max cost diff",   String.format("%.6f", maxCostDiff) },
-                { "  Mismatches",      String.format("%d  (threshold: 1e-3)", mismatches) },
+                { "  Mismatches",      String.format("%d  (ALT vs CH, threshold: 1e-3)", mismatches) },
         });
     }
 
