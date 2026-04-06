@@ -82,9 +82,15 @@ public class CHBuilder {
      *  on degenerate networks while allowing enough room for large separators. */
     private static final int MAX_SETTLED_LIMIT = 200_000;
 
-    /** Cheaper hop/settled limits for priority estimation witness search. */
-    private static final int PRIO_HOP_LIMIT = 3;
-    private static final int PRIO_SETTLED_LIMIT = 200;
+    /** Cheaper hop/settled limits for priority estimation witness search.
+     *
+     *  <p>Higher values give more accurate priority estimates at the cost of
+     *  slower preprocessing.  On large networks (500k+ nodes), accurate estimates
+     *  are critical: inaccurate priorities cause high-degree hubs to be contracted
+     *  too early, cascading unnecessary shortcuts.  A hop limit of 10 and
+     *  settled limit of 500 provide a good balance between accuracy and speed. */
+    private static final int PRIO_HOP_LIMIT = 10;
+    private static final int PRIO_SETTLED_LIMIT = 500;
 
     /** Minimum cell size for priority-based reordering within a cell.
      *  Cells with fewer nodes are contracted in their given order because
@@ -99,6 +105,16 @@ public class CHBuilder {
      *  witnesses for the high-degree hubs, drastically reducing the final
      *  edge count. */
     private static final int CELL_REORDER_THRESHOLD = 50;
+
+    /** Cell size threshold for adaptive contraction.
+     *  Cells with at least this many nodes use iterative priority-queue-based
+     *  contraction where priorities are re-estimated after each contraction.
+     *  This is critical for large separator cells on 500k+ node networks:
+     *  a one-shot priority sort cannot predict the cascading effect of
+     *  shortcuts created by earlier contractions within the same cell.
+     *  Iterative re-estimation ensures each node is contracted at the optimal
+     *  time, using shortcuts from earlier contractions as witnesses. */
+    private static final int ADAPTIVE_CONTRACTION_THRESHOLD = 200;
 
     /** Maximum number of threads to use for parallel contraction.
      *  Capping this limits memory usage (each thread holds a ~2.5 MB WitnessContext). */
@@ -145,6 +161,11 @@ public class CHBuilder {
     private int[]    scratchTargets;     // out-neighbor node indices
     private double[] scratchMaxCosts;    // max cost u→v→w for each target
     private int[]    scratchOutEdgeIdx;  // the out-edge index v→w for each target
+
+    // Cell membership tracking for adaptive contraction (generation-stamped).
+    // cellMemberGen[node] == cellGeneration means node is in the current cell.
+    private int        cellGeneration = 0;
+    private final int[] cellMemberGen;
 
     /**
      * Per-thread witness search state, used for parallel contraction.
@@ -255,6 +276,9 @@ public class CHBuilder {
         this.scratchTargets    = new int[64];
         this.scratchMaxCosts   = new double[64];
         this.scratchOutEdgeIdx = new int[64];
+
+        // Cell membership tracking for adaptive contraction
+        this.cellMemberGen = new int[nodeCount];
     }
 
     /** Runs the full CH build pipeline and returns the ready-to-customize graph. */
@@ -478,19 +502,37 @@ public class CHBuilder {
             List<int[]> round = rounds.get(r);
             int roundNodes = roundNodeCount(round);
 
-            // Reorder nodes within each original ND cell by estimated edge-
-            // difference priority (low-priority nodes first).  This step runs
-            // BEFORE merging so that each cell's ND rank range stays intact and
-            // level assignments remain globally consistent.  The reordered nodes
-            // produce shortcuts that serve as witnesses for high-degree hubs,
-            // preventing cascading edge explosion on large PT+road networks.
-            reorderCellsByPriority(round, order);
+            // Separate cells into adaptive (large) and standard (small).
+            // Large cells use iterative PQ-based contraction with priority
+            // re-estimation after each contraction — this prevents cascading
+            // edge explosion on separator cells with high-degree hubs.
+            // Small cells use one-shot priority sort + sequential contraction.
+            List<int[]> adaptiveCells = new ArrayList<>();
+            List<int[]> standardCells = new ArrayList<>();
+            for (int[] cell : round) {
+                if (cell.length >= ADAPTIVE_CONTRACTION_THRESHOLD) {
+                    adaptiveCells.add(cell);
+                } else {
+                    standardCells.add(cell);
+                }
+            }
+
+            // Contract large cells adaptively (sequential, with iterative priority updates).
+            // These cells are the ones that cause edge explosion; the sequential cost
+            // is offset by drastically fewer shortcuts.
+            for (int[] cell : adaptiveCells) {
+                contractCellAdaptive(cell, order);
+            }
+
+            // Reorder nodes within each standard ND cell by estimated edge-
+            // difference priority (low-priority nodes first).
+            reorderCellsByPriority(standardCells, order);
 
             // Merge very small cells into chunks for better load balancing.
-            List<int[]> chunks = mergeSmallCells(round, 500);
+            List<int[]> chunks = mergeSmallCells(standardCells, 500);
 
-            if (pool == null) {
-                // No thread pool: everything sequential
+            if (pool == null || chunks.isEmpty()) {
+                // No thread pool or no standard cells: everything sequential
                 for (int[] chunk : chunks) {
                     contractCellSequential(chunk, order);
                 }
@@ -633,6 +675,107 @@ public class CHBuilder {
             contractNodeBatchedCtx(node, ctx);
             contracted[node] = true;
             nodeLevel[node]  = order[node];
+        }
+    }
+
+    /**
+     * Adaptively contracts a large cell using iterative priority-queue-based ordering.
+     *
+     * <p>Instead of sorting all nodes by a one-shot priority estimate and then
+     * contracting in that fixed order, this method:
+     * <ol>
+     *   <li>Estimates initial priorities for all nodes in the cell.</li>
+     *   <li>Inserts them into a min-heap (lowest priority = contract first).</li>
+     *   <li>Pops the minimum-priority node, contracts it.</li>
+     *   <li>Re-estimates priorities of uncontracted neighbors within the same cell
+     *       (because the shortcuts just created may serve as new witnesses, lowering
+     *       their edge-difference).</li>
+     *   <li>Assigns ranks to contracted nodes in the order they are actually contracted,
+     *       using the cell's original rank band.</li>
+     * </ol>
+     *
+     * <p>This prevents the cascading edge explosion observed on 500k+ node networks
+     * (e.g. Metropole Ruhr): contracting a low-degree node creates shortcuts that
+     * the witness search for high-degree neighbors can discover, avoiding unnecessary
+     * additional shortcuts.
+     *
+     * <p>Uses the builder's own (single-threaded) witness search state.
+     */
+    private void contractCellAdaptive(int[] cellNodes, int[] order) {
+        int n = cellNodes.length;
+
+        // 1. Collect and sort the rank band for this cell.
+        int[] ranks = new int[n];
+        for (int i = 0; i < n; i++) ranks[i] = order[cellNodes[i]];
+        Arrays.sort(ranks);
+
+        // 2. Mark cell membership using generation stamp.
+        int cellGen = ++this.cellGeneration;
+        for (int node : cellNodes) cellMemberGen[node] = cellGen;
+
+        // 3. Estimate initial priorities and insert into PQ.
+        DAryMinHeap pq = new DAryMinHeap(nodeCount, 4);
+        for (int node : cellNodes) {
+            int prio = estimatePriority(node);
+            // Shift priority to non-negative range for the heap (edge-diff can be negative).
+            // Add nodeCount to ensure all values are positive.
+            pq.insert(node, prio + nodeCount);
+        }
+
+        // 4. Iterative contraction with lazy priority re-estimation.
+        int contractionIdx = 0;
+        while (!pq.isEmpty()) {
+            int node = pq.poll();
+
+            // Contract this node (full witness search, creates shortcuts).
+            contractNodeBatched(node);
+            contracted[node] = true;
+            nodeLevel[node]  = ranks[contractionIdx];
+            order[node]      = ranks[contractionIdx];
+            contractionIdx++;
+
+            // Re-estimate priorities of uncontracted neighbors in this cell.
+            // The shortcuts just created may reduce their edge-difference,
+            // which means they should be contracted later (higher priority value).
+            reestimateCellNeighbors(node, cellGen, pq);
+        }
+    }
+
+    /**
+     * Re-estimates the priorities of uncontracted neighbors of the given node
+     * that belong to the current cell (identified by {@code cellGen}), and
+     * updates their position in the priority queue.
+     *
+     * <p>Uses {@code remove} + {@code insert} on the heap because priorities
+     * can both increase and decrease after a neighbor's contraction.
+     */
+    private void reestimateCellNeighbors(int node, int cellGen, DAryMinHeap pq) {
+        // Check out-neighbors
+        int[] oArr = outEdges[node];
+        int oLen = this.outLen[node];
+        for (int i = 0; i < oLen; i++) {
+            int edgeIdx = oArr[i];
+            int w = buildEdgeData[edgeIdx * BE_SIZE + BE_TO];
+            if (!contracted[w] && cellMemberGen[w] == cellGen) {
+                if (pq.remove(w)) {
+                    int newPrio = estimatePriority(w);
+                    pq.insert(w, newPrio + nodeCount);
+                }
+            }
+        }
+
+        // Check in-neighbors
+        int[] iArr = inEdges[node];
+        int iLen = this.inLen[node];
+        for (int j = 0; j < iLen; j++) {
+            int edgeIdx = iArr[j];
+            int u = buildEdgeData[edgeIdx * BE_SIZE + BE_FROM];
+            if (!contracted[u] && cellMemberGen[u] == cellGen) {
+                if (pq.remove(u)) {
+                    int newPrio = estimatePriority(u);
+                    pq.insert(u, newPrio + nodeCount);
+                }
+            }
         }
     }
 

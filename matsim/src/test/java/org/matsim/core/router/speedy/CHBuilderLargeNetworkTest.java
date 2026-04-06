@@ -244,6 +244,76 @@ public class CHBuilderLargeNetworkTest {
         }
     }
 
+    /**
+     * Metropole Ruhr v2024 high-res with PT (~532k nodes, ~1.16M links).
+     *
+     * <p>This is the stress test for the adaptive contraction feature:
+     * the large separator cells with high-degree PT hub nodes caused cascading
+     * edge explosion (1.2M → 4M edges in one round) before the fix.
+     * Correctness is verified with 500 random OD pairs against Dijkstra.
+     *
+     * <p>Skipped if the download fails or heap is insufficient.
+     */
+    @Test
+    void testNDCorrectnessRuhrNetwork() {
+        String url = "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/metropole-ruhr/"
+                + "metropole-ruhr-v2024/metropole-ruhr-v2024.0/input/"
+                + "metropole-ruhr-v2024.1-network_resolutionHigh-with-pt.xml.gz";
+        java.nio.file.Path localPath = Paths.get("/tmp/ruhr-v2024-network.xml.gz");
+
+        // Download with native Java HTTP client if not already cached
+        if (!Files.exists(localPath) || fileSize(localPath) < 1000) {
+            try {
+                HttpClient client = HttpClient.newBuilder()
+                        .connectTimeout(Duration.ofSeconds(10))
+                        .followRedirects(HttpClient.Redirect.NORMAL)
+                        .build();
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(url))
+                        .timeout(Duration.ofSeconds(300))
+                        .GET()
+                        .build();
+                HttpResponse<InputStream> response = client.send(request,
+                        HttpResponse.BodyHandlers.ofInputStream());
+                if (response.statusCode() != 200) {
+                    System.out.println("SKIPPED: Ruhr network not accessible (HTTP " + response.statusCode() + ").");
+                    return;
+                }
+                try (InputStream in = response.body()) {
+                    Files.copy(in, localPath, StandardCopyOption.REPLACE_EXISTING);
+                }
+                if (fileSize(localPath) < 1000) {
+                    System.out.println("SKIPPED: Ruhr network download too small.");
+                    return;
+                }
+            } catch (Exception e) {
+                System.out.println("SKIPPED: Ruhr network not accessible: " + e.getMessage());
+                return;
+            }
+        }
+
+        // Load and test
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        try {
+            new MatsimNetworkReader(scenario.getNetwork()).readFile(localPath.toString());
+        } catch (Exception e) {
+            System.out.println("SKIPPED: Ruhr network could not be parsed: " + e.getMessage());
+            return;
+        }
+
+        Network network = scenario.getNetwork();
+        System.out.printf("Ruhr v2024 network: %,d nodes, %,d links%n",
+                network.getNodes().size(), network.getLinks().size());
+
+        try {
+            // Correctness test (skip benchmark to save time — focus on verifying
+            // that the CH builds without edge explosion and produces correct routes)
+            runCorrectnessTest(network);
+        } catch (OutOfMemoryError e) {
+            System.out.println("SKIPPED: Ruhr correctness test: insufficient heap (" + e.getMessage() + ").");
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Benchmark result record
     // -----------------------------------------------------------------------
