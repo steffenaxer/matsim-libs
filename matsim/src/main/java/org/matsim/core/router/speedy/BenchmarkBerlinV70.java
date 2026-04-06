@@ -82,39 +82,43 @@ public class BenchmarkBerlinV70 {
         long csrBuildMs = (System.nanoTime() - csrBuildStart) / 1_000_000;
         System.out.printf("  CSR build:   %,6d ms%n", csrBuildMs);
 
-        // ---- 3. Build CH on linked-list graph ----
+        // ---- 3. Compute ND order ONCE (topology-only, same for LL and CSR) ----
         System.out.println();
-        System.out.println("Building CH on linked-list graph (InertialFlowCutter order, parallel) ...");
+        System.out.println("Computing InertialFlowCutter ND order (shared for LL and CSR) ...");
 
         long t0 = System.nanoTime();
         InertialFlowCutter.NDOrderResult orderResult = new InertialFlowCutter(graphLL).computeOrderWithBatches();
         long orderMs = (System.nanoTime() - t0) / 1_000_000;
+        System.out.printf("  Order:       %,6d ms%n", orderMs);
 
+        // ---- 4. Build CH on linked-list graph ----
+        System.out.println();
+        System.out.println("Building CH on linked-list graph ...");
         long t1 = System.nanoTime();
         CHGraph chGraphLL = new CHBuilder(graphLL, tc).buildWithOrderParallel(orderResult);
-        long contractionMs = (System.nanoTime() - t1) / 1_000_000;
-
+        long contractionLLMs = (System.nanoTime() - t1) / 1_000_000;
         new CHTTFCustomizer().customize(chGraphLL, tc, tc);
-        long totalBuildMs = (System.nanoTime() - t0) / 1_000_000;
+        long totalBuildLLMs = orderMs + (System.nanoTime() - t1) / 1_000_000;
 
-        System.out.printf("  Order:       %,6d ms%n", orderMs);
-        System.out.printf("  Contraction: %,6d ms%n", contractionMs);
-        System.out.printf("  Total build: %,6d ms%n", totalBuildMs);
+        System.out.printf("  Contraction: %,6d ms%n", contractionLLMs);
+        System.out.printf("  Total (incl order): %,6d ms%n", totalBuildLLMs);
         System.out.printf("  CH edges:    %,d (base links: %,d)%n",
                 chGraphLL.totalEdgeCount, network.getLinks().size());
 
-        // ---- 4. Build CH on CSR graph ----
+        // ---- 5. Build CH on CSR graph (reuses same ND order) ----
         System.out.println();
-        System.out.println("Building CH on CSR graph ...");
+        System.out.println("Building CH on CSR graph (reusing same ND order) ...");
         long t2 = System.nanoTime();
-        InertialFlowCutter.NDOrderResult orderResult2 = new InertialFlowCutter(graphCSR).computeOrderWithBatches();
-        CHGraph chGraphCSR = new CHBuilder(graphCSR, tc).buildWithOrderParallel(orderResult2);
+        CHGraph chGraphCSR = new CHBuilder(graphCSR, tc).buildWithOrderParallel(orderResult);
+        long contractionCSRMs = (System.nanoTime() - t2) / 1_000_000;
         new CHTTFCustomizer().customize(chGraphCSR, tc, tc);
-        long chCsrBuildMs = (System.nanoTime() - t2) / 1_000_000;
-        System.out.printf("  CH+CSR build: %,6d ms%n", chCsrBuildMs);
-        System.out.printf("  CH edges:     %,d%n", chGraphCSR.totalEdgeCount);
+        long totalBuildCSRMs = (System.nanoTime() - t2) / 1_000_000;
 
-        // ---- 5. Build ALT data ----
+        System.out.printf("  Contraction: %,6d ms%n", contractionCSRMs);
+        System.out.printf("  Total (excl order): %,6d ms%n", totalBuildCSRMs);
+        System.out.printf("  CH edges:    %,d%n", chGraphCSR.totalEdgeCount);
+
+        // ---- 6. Build ALT data ----
         System.out.println();
         System.out.println("Building SpeedyALT landmarks ...");
         long altBuildStart = System.nanoTime();
@@ -122,7 +126,7 @@ public class BenchmarkBerlinV70 {
         long altBuildMs = (System.nanoTime() - altBuildStart) / 1_000_000;
         System.out.printf("  ALT build:   %,6d ms  (%d landmarks)%n", altBuildMs, ALT_LANDMARKS);
 
-        // ---- 6. Create all 5 routers ----
+        // ---- 7. Create all 5 routers ----
         SpeedyDijkstra dijkstraLL  = new SpeedyDijkstra(graphLL, tc, tc);
         SpeedyDijkstra dijkstraCSR = new SpeedyDijkstra(graphCSR, tc, tc);
         SpeedyALT altRouter        = new SpeedyALT(altData, tc, tc);
@@ -132,7 +136,7 @@ public class BenchmarkBerlinV70 {
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
         int n = nodeList.size();
 
-        // ---- 7. Warm-up ----
+        // ---- 8. Warm-up ----
         System.out.println();
         System.out.printf("Warming up (%d queries per router) ...%n", WARMUP_QUERIES);
         Random rng = new Random(42);
@@ -147,7 +151,7 @@ public class BenchmarkBerlinV70 {
             chCSR.calcLeastCostPath(s, d, depTime, null, null);
         }
 
-        // ---- 8. Benchmark ----
+        // ---- 9. Benchmark ----
         System.out.printf("Running benchmark (%,d queries per router) ...%n", BENCHMARK_QUERIES);
         rng = new Random(123);
 
@@ -195,7 +199,7 @@ public class BenchmarkBerlinV70 {
             }
         }
 
-        // ---- 9. Results ----
+        // ---- 10. Results ----
         double dijkstraLLAvgUs  = dijkstraLLNs  / (BENCHMARK_QUERIES * 1000.0);
         double dijkstraCSRAvgUs = dijkstraCSRNs / (BENCHMARK_QUERIES * 1000.0);
         double altAvgUs         = altNs         / (BENCHMARK_QUERIES * 1000.0);
@@ -216,10 +220,9 @@ public class BenchmarkBerlinV70 {
                 { "  CH edges (CSR)",  String.format("%,d", chGraphCSR.totalEdgeCount) },
                 null, // separator
                 { "Preprocessing" },
-                { "  CH total (LL)",   String.format("%,d ms", totalBuildMs) },
-                { "    Order",         String.format("%,d ms", orderMs) },
-                { "    Contraction",   String.format("%,d ms", contractionMs) },
-                { "  CH total (CSR)",  String.format("%,d ms", chCsrBuildMs) },
+                { "  ND Order",        String.format("%,d ms  (shared, computed once)", orderMs) },
+                { "  CH build (LL)",   String.format("%,d ms  (contraction + customize)", totalBuildLLMs) },
+                { "  CH build (CSR)",  String.format("%,d ms  (contraction + customize)", totalBuildCSRMs) },
                 { "  ALT landmarks",   String.format("%,d ms  (%d landmarks)", altBuildMs, ALT_LANDMARKS) },
                 { "  CSR build",       String.format("%,d ms", csrBuildMs) },
                 null,
