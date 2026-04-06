@@ -62,10 +62,20 @@ public class BenchmarkBerlinV70 {
         FreespeedTravelTimeAndDisutility tc =
                 new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 
-        // ---- 2. Build CH (ND-ordered) ----
+        // ---- 2. Build graphs ----
+        System.out.println();
+        System.out.println("Building SpeedyGraph (linked-list + CSR) ...");
+        SpeedyGraph graph = SpeedyGraphBuilder.build(network);
+
+        // Build CSR variant for Dijkstra comparison
+        SpeedyGraph graphCSR = SpeedyGraphBuilder.build(network);
+        long csrBuildStart = System.nanoTime();
+        graphCSR.buildCSR();
+        long csrBuildMs = (System.nanoTime() - csrBuildStart) / 1_000_000;
+        System.out.printf("  CSR build:   %,6d ms%n", csrBuildMs);
+
         System.out.println();
         System.out.println("Building CH (InertialFlowCutter order, parallel) ...");
-        SpeedyGraph graph = SpeedyGraphBuilder.build(network);
 
         long t0 = System.nanoTime();
         InertialFlowCutter.NDOrderResult orderResult = new InertialFlowCutter(graph).computeOrderWithBatches();
@@ -95,6 +105,8 @@ public class BenchmarkBerlinV70 {
         // ---- 4. Create routers ----
         CHRouterTimeDep chTimeDep = new CHRouterTimeDep(chGraph, tc, tc);
         SpeedyALT altRouter = new SpeedyALT(altData, tc, tc);
+        SpeedyDijkstra dijkstraLL = new SpeedyDijkstra(graph, tc, tc);
+        SpeedyDijkstra dijkstraCSR = new SpeedyDijkstra(graphCSR, tc, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
         int n = nodeList.size();
@@ -108,6 +120,8 @@ public class BenchmarkBerlinV70 {
             Node d = nodeList.get(rng.nextInt(n));
             chTimeDep.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
             altRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            dijkstraLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            dijkstraCSR.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
         }
 
         // ---- 6. Benchmark ----
@@ -116,6 +130,8 @@ public class BenchmarkBerlinV70 {
 
         long altTotalNs = 0;
         long chTotalNs = 0;
+        long dijkstraLLTotalNs = 0;
+        long dijkstraCSRTotalNs = 0;
         int mismatches = 0;
         double maxCostDiff = 0;
 
@@ -131,6 +147,14 @@ public class BenchmarkBerlinV70 {
             Path chPath = chTimeDep.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
             chTotalNs += System.nanoTime() - c0;
 
+            long dll0 = System.nanoTime();
+            Path dijkstraLLPath = dijkstraLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            dijkstraLLTotalNs += System.nanoTime() - dll0;
+
+            long dcsr0 = System.nanoTime();
+            Path dijkstraCSRPath = dijkstraCSR.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            dijkstraCSRTotalNs += System.nanoTime() - dcsr0;
+
             // quick correctness check
             if (altPath != null && chPath != null) {
                 double diff = Math.abs(altPath.travelCost - chPath.travelCost);
@@ -144,16 +168,28 @@ public class BenchmarkBerlinV70 {
                     }
                 }
             }
+            // verify CSR Dijkstra correctness
+            if (dijkstraLLPath != null && dijkstraCSRPath != null) {
+                double diff = Math.abs(dijkstraLLPath.travelCost - dijkstraCSRPath.travelCost);
+                if (diff > 1e-6) {
+                    System.err.printf("  CSR MISMATCH: %s->%s  LL=%.4f  CSR=%.4f%n",
+                            s.getId(), d.getId(),
+                            dijkstraLLPath.travelCost, dijkstraCSRPath.travelCost);
+                }
+            }
         }
 
         // ---- 7. Results ----
         double altAvgUs = altTotalNs / (BENCHMARK_QUERIES * 1000.0);
         double chAvgUs  = chTotalNs  / (BENCHMARK_QUERIES * 1000.0);
+        double dijkstraLLAvgUs  = dijkstraLLTotalNs  / (BENCHMARK_QUERIES * 1000.0);
+        double dijkstraCSRAvgUs = dijkstraCSRTotalNs / (BENCHMARK_QUERIES * 1000.0);
         double speedup  = (double) altTotalNs / Math.max(1, chTotalNs);
+        double csrSpeedup = (double) dijkstraLLTotalNs / Math.max(1, dijkstraCSRTotalNs);
         double edgeOverhead = ((double) chGraph.totalEdgeCount / network.getLinks().size() - 1) * 100;
 
         System.out.println();
-        printBox("Berlin v7.0  —  SpeedyALT vs CH Time-Dependent", new String[][] {
+        printBox("Berlin v7.0  —  Router Comparison", new String[][] {
                 { "Network" },
                 { "  Nodes",           String.format("%,d", network.getNodes().size()) },
                 { "  Links",           String.format("%,d", network.getLinks().size()) },
@@ -164,11 +200,14 @@ public class BenchmarkBerlinV70 {
                 { "    Order",         String.format("%,d ms", orderMs) },
                 { "    Contraction",   String.format("%,d ms", contractionMs) },
                 { "  ALT landmarks",   String.format("%,d ms  (%d landmarks)", altBuildMs, ALT_LANDMARKS) },
+                { "  CSR build",       String.format("%,d ms", csrBuildMs) },
                 null,
                 { "Query Performance", String.format("(%,d queries, %d warmup)", BENCHMARK_QUERIES, WARMUP_QUERIES) },
+                { "  Dijkstra (LL)",   String.format("%,.0f µs/query", dijkstraLLAvgUs) },
+                { "  Dijkstra (CSR)",  String.format("%,.0f µs/query  (%.2fx vs LL)", dijkstraCSRAvgUs, csrSpeedup) },
                 { "  SpeedyALT",       String.format("%,.0f µs/query", altAvgUs) },
                 { "  CH TimeDep",      String.format("%,.0f µs/query", chAvgUs) },
-                { "  Speedup",         String.format("%.1fx  (CH TimeDep vs SpeedyALT)", speedup) },
+                { "  CH vs ALT",       String.format("%.1fx  speedup", speedup) },
                 null,
                 { "Correctness" },
                 { "  Max cost diff",   String.format("%.6f", maxCostDiff) },
