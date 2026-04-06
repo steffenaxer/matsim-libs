@@ -7,6 +7,7 @@ import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.config.groups.ScoringConfigGroup;
 import org.matsim.core.network.io.MatsimNetworkReader;
 import org.matsim.core.router.costcalculators.FreespeedTravelTimeAndDisutility;
+import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.scenario.ScenarioUtils;
 
@@ -24,8 +25,15 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Standalone benchmark comparing <b>SpeedyALT</b> vs <b>CH Time-Dependent</b>
- * routing on the Berlin v7.0 network (~88k nodes).
+ * Standalone benchmark comparing <b>all router variants</b> on the Berlin v7.0
+ * network (~88k nodes, ~200k links):
+ * <ol>
+ *   <li>Dijkstra (linked-list SpeedyGraph)</li>
+ *   <li>Dijkstra (CSR SpeedyGraph)</li>
+ *   <li>SpeedyALT</li>
+ *   <li>CH Time-Dependent (linked-list base graph)</li>
+ *   <li>CH Time-Dependent (CSR base graph)</li>
+ * </ol>
  *
  * <p>Run with sufficient heap, e.g.:
  * <pre>
@@ -41,8 +49,8 @@ public class BenchmarkBerlinV70 {
             "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/berlin/"
                     + "berlin-v7.0/input/berlin-v7.0-network.xml.gz";
 
-    private static final int WARMUP_QUERIES    = 50;
-    private static final int BENCHMARK_QUERIES = 50_000;
+    private static final int WARMUP_QUERIES    = 200;
+    private static final int BENCHMARK_QUERIES = 2_000;
     private static final int ALT_LANDMARKS     = 16;
 
     public static void main(String[] args) {
@@ -64,155 +72,200 @@ public class BenchmarkBerlinV70 {
 
         // ---- 2. Build graphs ----
         System.out.println();
-        System.out.println("Building SpeedyGraph (linked-list + CSR) ...");
-        SpeedyGraph graph = SpeedyGraphBuilder.build(network);
+        System.out.println("Building SpeedyGraph (linked-list) ...");
+        SpeedyGraph graphLL = SpeedyGraphBuilder.build(network);
 
-        // Build CSR variant for Dijkstra comparison
+        System.out.println("Building SpeedyGraph (CSR) ...");
         SpeedyGraph graphCSR = SpeedyGraphBuilder.build(network);
         long csrBuildStart = System.nanoTime();
         graphCSR.buildCSR();
         long csrBuildMs = (System.nanoTime() - csrBuildStart) / 1_000_000;
         System.out.printf("  CSR build:   %,6d ms%n", csrBuildMs);
 
+        // ---- 3. Build CH on linked-list graph ----
         System.out.println();
-        System.out.println("Building CH (InertialFlowCutter order, parallel) ...");
+        System.out.println("Building CH on linked-list graph (InertialFlowCutter order, parallel) ...");
 
         long t0 = System.nanoTime();
-        InertialFlowCutter.NDOrderResult orderResult = new InertialFlowCutter(graph).computeOrderWithBatches();
+        InertialFlowCutter.NDOrderResult orderResult = new InertialFlowCutter(graphLL).computeOrderWithBatches();
         long orderMs = (System.nanoTime() - t0) / 1_000_000;
 
         long t1 = System.nanoTime();
-        CHGraph chGraph = new CHBuilder(graph, tc).buildWithOrderParallel(orderResult);
+        CHGraph chGraphLL = new CHBuilder(graphLL, tc).buildWithOrderParallel(orderResult);
         long contractionMs = (System.nanoTime() - t1) / 1_000_000;
 
-        new CHTTFCustomizer().customize(chGraph, tc, tc);
+        new CHTTFCustomizer().customize(chGraphLL, tc, tc);
         long totalBuildMs = (System.nanoTime() - t0) / 1_000_000;
 
         System.out.printf("  Order:       %,6d ms%n", orderMs);
         System.out.printf("  Contraction: %,6d ms%n", contractionMs);
         System.out.printf("  Total build: %,6d ms%n", totalBuildMs);
         System.out.printf("  CH edges:    %,d (base links: %,d)%n",
-                chGraph.totalEdgeCount, network.getLinks().size());
+                chGraphLL.totalEdgeCount, network.getLinks().size());
 
-        // ---- 3. Build ALT data ----
+        // ---- 4. Build CH on CSR graph ----
+        System.out.println();
+        System.out.println("Building CH on CSR graph ...");
+        long t2 = System.nanoTime();
+        InertialFlowCutter.NDOrderResult orderResult2 = new InertialFlowCutter(graphCSR).computeOrderWithBatches();
+        CHGraph chGraphCSR = new CHBuilder(graphCSR, tc).buildWithOrderParallel(orderResult2);
+        new CHTTFCustomizer().customize(chGraphCSR, tc, tc);
+        long chCsrBuildMs = (System.nanoTime() - t2) / 1_000_000;
+        System.out.printf("  CH+CSR build: %,6d ms%n", chCsrBuildMs);
+        System.out.printf("  CH edges:     %,d%n", chGraphCSR.totalEdgeCount);
+
+        // ---- 5. Build ALT data ----
         System.out.println();
         System.out.println("Building SpeedyALT landmarks ...");
         long altBuildStart = System.nanoTime();
-        SpeedyALTData altData = new SpeedyALTData(graph, Math.min(ALT_LANDMARKS, graph.nodeCount), tc, 1);
+        SpeedyALTData altData = new SpeedyALTData(graphLL, Math.min(ALT_LANDMARKS, graphLL.nodeCount), tc, 1);
         long altBuildMs = (System.nanoTime() - altBuildStart) / 1_000_000;
         System.out.printf("  ALT build:   %,6d ms  (%d landmarks)%n", altBuildMs, ALT_LANDMARKS);
 
-        // ---- 4. Create routers ----
-        CHRouterTimeDep chTimeDep = new CHRouterTimeDep(chGraph, tc, tc);
-        SpeedyALT altRouter = new SpeedyALT(altData, tc, tc);
-        SpeedyDijkstra dijkstraLL = new SpeedyDijkstra(graph, tc, tc);
+        // ---- 6. Create all 5 routers ----
+        SpeedyDijkstra dijkstraLL  = new SpeedyDijkstra(graphLL, tc, tc);
         SpeedyDijkstra dijkstraCSR = new SpeedyDijkstra(graphCSR, tc, tc);
+        SpeedyALT altRouter        = new SpeedyALT(altData, tc, tc);
+        CHRouterTimeDep chLL       = new CHRouterTimeDep(chGraphLL, tc, tc);
+        CHRouterTimeDep chCSR      = new CHRouterTimeDep(chGraphCSR, tc, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
         int n = nodeList.size();
 
-        // ---- 5. Warm-up ----
+        // ---- 7. Warm-up ----
         System.out.println();
         System.out.printf("Warming up (%d queries per router) ...%n", WARMUP_QUERIES);
         Random rng = new Random(42);
         for (int i = 0; i < WARMUP_QUERIES; i++) {
             Node s = nodeList.get(rng.nextInt(n));
             Node d = nodeList.get(rng.nextInt(n));
-            chTimeDep.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            altRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            dijkstraLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            dijkstraCSR.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            double depTime = 8.0 * 3600;
+            dijkstraLL.calcLeastCostPath(s, d, depTime, null, null);
+            dijkstraCSR.calcLeastCostPath(s, d, depTime, null, null);
+            altRouter.calcLeastCostPath(s, d, depTime, null, null);
+            chLL.calcLeastCostPath(s, d, depTime, null, null);
+            chCSR.calcLeastCostPath(s, d, depTime, null, null);
         }
 
-        // ---- 6. Benchmark ----
-        System.out.printf("Running benchmark (%,d queries) ...%n", BENCHMARK_QUERIES);
+        // ---- 8. Benchmark ----
+        System.out.printf("Running benchmark (%,d queries per router) ...%n", BENCHMARK_QUERIES);
         rng = new Random(123);
 
-        long altTotalNs = 0;
-        long chTotalNs = 0;
-        long dijkstraLLTotalNs = 0;
-        long dijkstraCSRTotalNs = 0;
+        // Pre-generate random pairs so all routers use the exact same queries
+        int[][] pairs = new int[BENCHMARK_QUERIES][2];
+        for (int i = 0; i < BENCHMARK_QUERIES; i++) {
+            pairs[i][0] = rng.nextInt(n);
+            pairs[i][1] = rng.nextInt(n);
+        }
+
+        // Benchmark each router separately to avoid interleaved GC interference
+        long dijkstraLLNs  = benchmarkRouter(dijkstraLL, nodeList, pairs, "Dijkstra (LL)");
+        long dijkstraCSRNs = benchmarkRouter(dijkstraCSR, nodeList, pairs, "Dijkstra (CSR)");
+        long altNs         = benchmarkRouter(altRouter, nodeList, pairs, "SpeedyALT");
+        long chLLNs        = benchmarkRouter(chLL, nodeList, pairs, "CH TimeDep (LL)");
+        long chCSRNs       = benchmarkRouter(chCSR, nodeList, pairs, "CH TimeDep (CSR)");
+
+        // Quick correctness check: compare Dijkstra LL vs CSR, and Dijkstra vs CH
         int mismatches = 0;
         double maxCostDiff = 0;
-
-        for (int i = 0; i < BENCHMARK_QUERIES; i++) {
-            Node s = nodeList.get(rng.nextInt(n));
-            Node d = nodeList.get(rng.nextInt(n));
-
-            long a0 = System.nanoTime();
-            Path altPath = altRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            altTotalNs += System.nanoTime() - a0;
-
-            long c0 = System.nanoTime();
-            Path chPath = chTimeDep.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            chTotalNs += System.nanoTime() - c0;
-
-            long dll0 = System.nanoTime();
-            Path dijkstraLLPath = dijkstraLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            dijkstraLLTotalNs += System.nanoTime() - dll0;
-
-            long dcsr0 = System.nanoTime();
-            Path dijkstraCSRPath = dijkstraCSR.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            dijkstraCSRTotalNs += System.nanoTime() - dcsr0;
-
-            // quick correctness check
-            if (altPath != null && chPath != null) {
-                double diff = Math.abs(altPath.travelCost - chPath.travelCost);
+        for (int i = 0; i < Math.min(200, BENCHMARK_QUERIES); i++) {
+            Node s = nodeList.get(pairs[i][0]);
+            Node d = nodeList.get(pairs[i][1]);
+            Path pathDLL  = dijkstraLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            Path pathDCSR = dijkstraCSR.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            Path pathCH   = chLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            if (pathDLL != null && pathDCSR != null) {
+                double diff = Math.abs(pathDLL.travelCost - pathDCSR.travelCost);
+                if (diff > 1e-6) {
+                    System.err.printf("  CSR MISMATCH: %s->%s  LL=%.4f  CSR=%.4f%n",
+                            s.getId(), d.getId(), pathDLL.travelCost, pathDCSR.travelCost);
+                }
+            }
+            if (pathDLL != null && pathCH != null) {
+                double diff = Math.abs(pathDLL.travelCost - pathCH.travelCost);
                 maxCostDiff = Math.max(maxCostDiff, diff);
                 if (diff > 1e-3) {
                     mismatches++;
                     if (mismatches <= 5) {
-                        System.err.printf("  MISMATCH #%d: %s->%s  ALT=%.4f  CH=%.4f  diff=%.6f%n",
+                        System.err.printf("  CH MISMATCH #%d: %s->%s  Dijkstra=%.4f  CH=%.4f  diff=%.6f%n",
                                 mismatches, s.getId(), d.getId(),
-                                altPath.travelCost, chPath.travelCost, diff);
+                                pathDLL.travelCost, pathCH.travelCost, diff);
                     }
-                }
-            }
-            // verify CSR Dijkstra correctness
-            if (dijkstraLLPath != null && dijkstraCSRPath != null) {
-                double diff = Math.abs(dijkstraLLPath.travelCost - dijkstraCSRPath.travelCost);
-                if (diff > 1e-6) {
-                    System.err.printf("  CSR MISMATCH: %s->%s  LL=%.4f  CSR=%.4f%n",
-                            s.getId(), d.getId(),
-                            dijkstraLLPath.travelCost, dijkstraCSRPath.travelCost);
                 }
             }
         }
 
-        // ---- 7. Results ----
-        double altAvgUs = altTotalNs / (BENCHMARK_QUERIES * 1000.0);
-        double chAvgUs  = chTotalNs  / (BENCHMARK_QUERIES * 1000.0);
-        double dijkstraLLAvgUs  = dijkstraLLTotalNs  / (BENCHMARK_QUERIES * 1000.0);
-        double dijkstraCSRAvgUs = dijkstraCSRTotalNs / (BENCHMARK_QUERIES * 1000.0);
-        double speedup  = (double) altTotalNs / Math.max(1, chTotalNs);
-        double csrSpeedup = (double) dijkstraLLTotalNs / Math.max(1, dijkstraCSRTotalNs);
-        double edgeOverhead = ((double) chGraph.totalEdgeCount / network.getLinks().size() - 1) * 100;
+        // ---- 9. Results ----
+        double dijkstraLLAvgUs  = dijkstraLLNs  / (BENCHMARK_QUERIES * 1000.0);
+        double dijkstraCSRAvgUs = dijkstraCSRNs / (BENCHMARK_QUERIES * 1000.0);
+        double altAvgUs         = altNs         / (BENCHMARK_QUERIES * 1000.0);
+        double chLLAvgUs        = chLLNs        / (BENCHMARK_QUERIES * 1000.0);
+        double chCSRAvgUs       = chCSRNs       / (BENCHMARK_QUERIES * 1000.0);
+        double csrDijkstraSpeedup = (double) dijkstraLLNs / Math.max(1, dijkstraCSRNs);
+        double chVsAlt        = (double) altNs / Math.max(1, chLLNs);
+        double chCsrVsChLL    = (double) chLLNs / Math.max(1, chCSRNs);
+        double chVsDijkstra   = (double) dijkstraLLNs / Math.max(1, chLLNs);
+        double edgeOverhead   = ((double) chGraphLL.totalEdgeCount / network.getLinks().size() - 1) * 100;
 
         System.out.println();
-        printBox("Berlin v7.0  —  Router Comparison", new String[][] {
+        printBox("Berlin v7.0  —  All Router Variants Comparison", new String[][] {
                 { "Network" },
                 { "  Nodes",           String.format("%,d", network.getNodes().size()) },
                 { "  Links",           String.format("%,d", network.getLinks().size()) },
-                { "  CH edges",        String.format("%,d  (%+.1f%% overhead)", chGraph.totalEdgeCount, edgeOverhead) },
+                { "  CH edges (LL)",   String.format("%,d  (%+.1f%% overhead)", chGraphLL.totalEdgeCount, edgeOverhead) },
+                { "  CH edges (CSR)",  String.format("%,d", chGraphCSR.totalEdgeCount) },
                 null, // separator
                 { "Preprocessing" },
-                { "  CH total",        String.format("%,d ms", totalBuildMs) },
+                { "  CH total (LL)",   String.format("%,d ms", totalBuildMs) },
                 { "    Order",         String.format("%,d ms", orderMs) },
                 { "    Contraction",   String.format("%,d ms", contractionMs) },
+                { "  CH total (CSR)",  String.format("%,d ms", chCsrBuildMs) },
                 { "  ALT landmarks",   String.format("%,d ms  (%d landmarks)", altBuildMs, ALT_LANDMARKS) },
                 { "  CSR build",       String.format("%,d ms", csrBuildMs) },
                 null,
                 { "Query Performance", String.format("(%,d queries, %d warmup)", BENCHMARK_QUERIES, WARMUP_QUERIES) },
                 { "  Dijkstra (LL)",   String.format("%,.0f µs/query", dijkstraLLAvgUs) },
-                { "  Dijkstra (CSR)",  String.format("%,.0f µs/query  (%.2fx vs LL)", dijkstraCSRAvgUs, csrSpeedup) },
+                { "  Dijkstra (CSR)",  String.format("%,.0f µs/query  (%.2fx vs LL)", dijkstraCSRAvgUs, csrDijkstraSpeedup) },
                 { "  SpeedyALT",       String.format("%,.0f µs/query", altAvgUs) },
-                { "  CH TimeDep",      String.format("%,.0f µs/query", chAvgUs) },
-                { "  CH vs ALT",       String.format("%.1fx  speedup", speedup) },
+                { "  CH TimeDep (LL)", String.format("%,.0f µs/query", chLLAvgUs) },
+                { "  CH TimeDep (CSR)",String.format("%,.0f µs/query  (%.2fx vs CH-LL)", chCSRAvgUs, chCsrVsChLL) },
+                null,
+                { "Speedups" },
+                { "  CH vs Dijkstra",  String.format("%.1fx", chVsDijkstra) },
+                { "  CH vs ALT",       String.format("%.1fx", chVsAlt) },
+                { "  CSR vs LL (Dij)", String.format("%.2fx", csrDijkstraSpeedup) },
+                { "  CSR vs LL (CH)",  String.format("%.2fx", chCsrVsChLL) },
                 null,
                 { "Correctness" },
                 { "  Max cost diff",   String.format("%.6f", maxCostDiff) },
                 { "  Mismatches",      String.format("%d  (threshold: 1e-3)", mismatches) },
         });
+    }
+
+    /**
+     * Benchmarks a single router with the given query pairs.
+     * Returns total elapsed nanoseconds for all queries.
+     */
+    private static long benchmarkRouter(LeastCostPathCalculator router,
+                                         List<Node> nodeList, int[][] pairs, String label) {
+        int total = pairs.length;
+        System.out.printf("  %-20s  ", label);
+        System.out.flush();
+        long startNs = System.nanoTime();
+        for (int i = 0; i < total; i++) {
+            Node s = nodeList.get(pairs[i][0]);
+            Node d = nodeList.get(pairs[i][1]);
+            router.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            // progress dots every 500 queries
+            if ((i + 1) % 500 == 0) {
+                System.out.print(".");
+                System.out.flush();
+            }
+        }
+        long elapsedNs = System.nanoTime() - startNs;
+        double avgUs = elapsedNs / (total * 1000.0);
+        System.out.printf("  %,.0f µs/query%n", avgUs);
+        return elapsedNs;
     }
 
     // -----------------------------------------------------------------------
