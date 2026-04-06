@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 
 /**
- * Implements a least-cost-path-tree upon a {@link SpeedyGraph} datastructure. Besides using the more efficient Graph datastructure, it also makes use of a custom priority-queue implementation (NodeMinHeap)
+ * Implements a least-cost-path-tree upon a {@link SpeedyGraph} datastructure. Besides using the more efficient Graph datastructure, it also makes use of a custom priority-queue implementation ({@link DAryMinHeap})
  * which operates directly on the least-cost-path-three data for additional performance gains.
  * <p>
  * In some limited tests, this resulted in a speed-up of at least a factor 2.5 compared to MATSim's default LeastCostPathTree.
@@ -38,7 +38,7 @@ public class LeastCostPathTree implements ShortestPathTree {
     private final int[] comingFromLink;
     private final SpeedyGraph.LinkIterator outLI;
     private final SpeedyGraph.LinkIterator inLI;
-    private final NodeMinHeap pq;
+    private final DAryMinHeap pq;
 
     public LeastCostPathTree(SpeedyGraph graph, TravelTime tt, TravelDisutility td) {
         this.graph = graph;
@@ -48,7 +48,7 @@ public class LeastCostPathTree implements ShortestPathTree {
         this.comingFrom = new int[graph.nodeCount];
         this.fromLink = new int[graph.nodeCount];
         this.comingFromLink = new int[graph.linkCount];
-        this.pq = new NodeMinHeap(graph.nodeCount, this::getCost, this::setCost);
+        this.pq = new DAryMinHeap(graph.nodeCount, 6);
         this.outLI = graph.getOutLinkIterator();
         this.inLI = graph.getInLinkIterator();
     }
@@ -92,7 +92,7 @@ public class LeastCostPathTree implements ShortestPathTree {
         setData(startNode, 0, startTime, 0);
 
         this.pq.clear();
-        this.pq.insert(startNode);
+        this.pq.insert(startNode, 0);
 
         while (!this.pq.isEmpty()) {
             final int nodeIdx = this.pq.poll();
@@ -125,7 +125,7 @@ public class LeastCostPathTree implements ShortestPathTree {
                     }
                 } else {
                     setData(toNode, newCost, newTime, currDistance + link.getLength());
-                    this.pq.insert(toNode);
+                    this.pq.insert(toNode, newCost);
                     this.comingFrom[toNode] = nodeIdx;
                     this.fromLink[toNode] = linkIdx;
                 }
@@ -164,7 +164,7 @@ public class LeastCostPathTree implements ShortestPathTree {
 
         int arrivalNode = graph.getNodeIndex(arrivalLink.getFromNode());
         setData(arrivalNode, 0, arrivalTime, 0);
-        this.pq.insert(arrivalNode);
+        this.pq.insert(arrivalNode, 0);
 
         if(graph.getTurnRestrictions().isPresent()) {
             TurnRestrictionsContext turnRestrictionsContext = graph.getTurnRestrictions().get();
@@ -176,7 +176,7 @@ public class LeastCostPathTree implements ShortestPathTree {
                 if (replacedLink != null && replacedLink.toColoredNode != null) {
                     int coloredArrivalNode = replacedLink.toColoredNode.index();
                     setData(coloredArrivalNode, 0, arrivalTime, 0);
-                    this.pq.insert(coloredArrivalNode);
+                    this.pq.insert(coloredArrivalNode, 0);
                 }
                 List<TurnRestrictionsContext.ColoredLink> coloredLinks = turnRestrictionsContext.coloredLinksPerLinkMap.get(inLink.getId());
                 if (coloredLinks != null) {
@@ -184,7 +184,7 @@ public class LeastCostPathTree implements ShortestPathTree {
                         if (coloredLink.toColoredNode != null) {
                             int coloredArrivalNode = coloredLink.toColoredNode.index();
                             setData(coloredArrivalNode, 0, arrivalTime, 0);
-                            this.pq.insert(coloredArrivalNode);
+                            this.pq.insert(coloredArrivalNode, 0);
                         }
                     }
                 }
@@ -222,7 +222,7 @@ public class LeastCostPathTree implements ShortestPathTree {
                     }
                 } else {
                     setData(fromNode, newCost, newTime, currDistance + link.getLength());
-                    this.pq.insert(fromNode);
+                    this.pq.insert(fromNode, newCost);
                     this.comingFrom[fromNode] = nodeIdx;
                     this.fromLink[fromNode] = linkIdx;
                 }
