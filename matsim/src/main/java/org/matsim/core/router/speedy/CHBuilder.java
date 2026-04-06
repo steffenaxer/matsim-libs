@@ -65,9 +65,16 @@ public class CHBuilder {
     /** Maximum hops allowed in the witness search. */
     private static final int HOP_LIMIT = 10;
 
-    /** Default maximum number of nodes settled in a single witness search.
-     *  Used by the priority-queue-based build() method. */
+    /** Base maximum number of nodes settled in a single witness search.
+     *  The actual limit is scaled up with the number of active targets
+     *  to prevent unnecessary shortcuts on large networks where separator
+     *  nodes have high degree.
+     *  @see #effectiveSettledLimit(int) */
     private static final int SETTLED_LIMIT = 1000;
+
+    /** Maximum settled limit after scaling.  Prevents unbounded exploration
+     *  on degenerate networks while allowing enough room for large separators. */
+    private static final int MAX_SETTLED_LIMIT = 50_000;
 
     /** Cheaper hop/settled limits for priority estimation witness search. */
     private static final int PRIO_HOP_LIMIT = 3;
@@ -695,7 +702,7 @@ public class CHBuilder {
                 }
 
                 // Run witness search
-                batchedWitnessSearchCtx(u, node, globalMaxCost, HOP_LIMIT, SETTLED_LIMIT, ctx);
+                batchedWitnessSearchCtx(u, node, globalMaxCost, HOP_LIMIT, effectiveSettledLimit(nt), ctx);
 
                 // Dedup lookup
                 ctx.dedupGeneration++;
@@ -877,7 +884,7 @@ public class CHBuilder {
             }
 
             // Run one bounded Dijkstra from u, avoiding node.
-            batchedWitnessSearch(u, node, globalMaxCost, HOP_LIMIT, SETTLED_LIMIT);
+            batchedWitnessSearch(u, node, globalMaxCost, HOP_LIMIT, effectiveSettledLimit(numTargets));
 
             // Build O(1) dedup lookup: best existing out-edge cost from u to each neighbor.
             dedupGeneration++;
@@ -915,6 +922,26 @@ public class CHBuilder {
     // -------------------------------------------------------------------------
     // Batched witness search – one Dijkstra from source, finds all targets
     // -------------------------------------------------------------------------
+
+    /**
+     * Computes the effective settled limit for a witness search based on the
+     * number of active targets.  On small-to-medium networks the base
+     * {@link #SETTLED_LIMIT} is sufficient, but on large networks with high-degree
+     * separator nodes the witness search must explore more nodes to discover
+     * existing paths and avoid creating unnecessary shortcuts.
+     *
+     * <p>Without this scaling, contraction of large separators creates O(inDeg × outDeg)
+     * shortcuts whose cascading degree-inflation causes memory exhaustion (observed
+     * on the 532k-node Metropole Ruhr network).
+     *
+     * @param numTargets number of active (uncontracted) out-neighbours of the
+     *                   node being contracted.
+     * @return settled limit in {@code [SETTLED_LIMIT, MAX_SETTLED_LIMIT]}.
+     */
+    private static int effectiveSettledLimit(int numTargets) {
+        // Scale linearly: at least SETTLED_LIMIT, plus 10× per target, capped.
+        return Math.min(MAX_SETTLED_LIMIT, SETTLED_LIMIT + numTargets * 10);
+    }
 
     /**
      * Runs a single bounded Dijkstra from {@code source}, avoiding {@code avoidNode},
@@ -1011,7 +1038,7 @@ public class CHBuilder {
                 if (bound > globalMaxCost) globalMaxCost = bound;
             }
 
-            batchedWitnessSearchCtx(u, node, globalMaxCost, HOP_LIMIT, SETTLED_LIMIT, ctx);
+            batchedWitnessSearchCtx(u, node, globalMaxCost, HOP_LIMIT, effectiveSettledLimit(numTargets), ctx);
 
             // Dedup lookup (read shared state — stale reads are conservative)
             ctx.dedupGeneration++;
