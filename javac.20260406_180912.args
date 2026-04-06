@@ -1,0 +1,8 @@
+--release
+17
+-d
+build-check
+-proc:none
+-cp
+matsim/src/main/java
+matsim/src/main/java/org/matsim/core/router/speedy/BenchmarkBerlinV70.java
