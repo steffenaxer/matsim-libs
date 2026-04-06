@@ -284,6 +284,14 @@ public class LeastCostPathTree implements ShortestPathTree {
         return OptionalTime.defined(time);
     }
 
+    /**
+     * Returns the internal (spatially ordered) node index for the given MATSim node.
+     * Use this instead of {@code node.getId().index()} when querying tree results.
+     */
+    public int getNodeIndex(Node node) {
+        return graph.getNodeIndex(node);
+    }
+
     public double getDistance(int nodeIndex) {
         return this.data[nodeIndex * 3 + 2];
     }
