@@ -164,6 +164,67 @@ public class SpeedyGraphBuilder {
 	private static final int MORTON_COORD_MAX = 0xFFFF;
 
 	/**
+	 * Builds a SpeedyGraph <b>without</b> Z-order spatial node reordering.
+	 * Nodes receive dense internal indices in the natural order of their external IDs.
+	 * This is package-private and intended only for benchmarking comparisons.
+	 */
+	static SpeedyGraph buildWithIdentityOrdering(Network network) {
+		return new SpeedyGraphBuilder().buildWithoutTurnRestrictionsIdentity(network);
+	}
+
+	private SpeedyGraph buildWithoutTurnRestrictionsIdentity(Network network) {
+		List<Node> networkNodes = new ArrayList<>(network.getNodes().values());
+		int actualNodeCount = networkNodes.size();
+		int totalIdSlots = Id.getNumberOfIds(Node.class);
+
+		int[] extIndices = new int[actualNodeCount];
+		for (int i = 0; i < actualNodeCount; i++) {
+			extIndices[i] = networkNodes.get(i).getId().index();
+		}
+
+		this.nodeReorder = computeIdentityOrder(extIndices, totalIdSlots);
+		this.nodeCount = actualNodeCount;
+		this.linkCount = Id.getNumberOfIds(Link.class);
+
+		this.nodeData = new int[this.nodeCount * SpeedyGraph.NODE_SIZE];
+		this.linkData = new int[this.linkCount * SpeedyGraph.LINK_SIZE];
+		this.links = new Link[this.linkCount];
+		this.nodes = new Node[this.nodeCount];
+
+		Arrays.fill(this.nodeData, -1);
+		Arrays.fill(this.linkData, -1);
+
+		for (Node node : networkNodes) {
+			int internalIdx = this.nodeReorder[node.getId().index()];
+			this.nodes[internalIdx] = node;
+		}
+		List<Id<Link>> linkIds = new ArrayList<>(network.getLinks().keySet());
+		Collections.sort(linkIds);
+		for (Id<Link> linkId : linkIds) {
+			Link link = network.getLinks().get(linkId);
+			addLink(link);
+		}
+
+		return new SpeedyGraph(this.nodeData, this.linkData, this.nodes, this.links, null, this.nodeReorder);
+	}
+
+	/**
+	 * Computes a dense identity ordering (no spatial reordering).
+	 * Nodes are numbered by their external index order for a deterministic, non-spatial mapping.
+	 */
+	static int[] computeIdentityOrder(int[] externalIndices, int reorderSize) {
+		int n = externalIndices.length;
+		int[] sorted = externalIndices.clone();
+		Arrays.sort(sorted);
+		int[] reorder = new int[reorderSize];
+		Arrays.fill(reorder, -1);
+		for (int rank = 0; rank < n; rank++) {
+			reorder[sorted[rank]] = rank;
+		}
+		return reorder;
+	}
+
+	/**
 	 * Computes a spatial ordering using the Z-order (Morton) curve.
 	 *
 	 * @param externalIndices  external node indices (parallel to coords)
