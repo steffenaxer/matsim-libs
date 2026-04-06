@@ -122,8 +122,13 @@ public class CHTTFCustomizer {
      * each iteration, so sampling ~20 edges reliably detects any change.
      * The cost is ~60 {@code getLinkTravelTime} calls vs ~20 million for
      * the full customization of a 200k-link network.
+     *
+     * <p>This method is safe to call without holding the CH graph lock because
+     * it only reads from the (volatile) fingerprint field and the immutable
+     * base-graph structure, and calls {@code getLinkTravelTime} which is
+     * thread-safe in MATSim's travel-time implementations.
      */
-    private static boolean needsRecustomization(CHGraph chGraph, TravelTime tt) {
+    public static boolean needsRecustomization(CHGraph chGraph, TravelTime tt) {
         // First-ever customization: ttfHash is NaN
         if (Double.isNaN(chGraph.customizationFingerprint)) return true;
 

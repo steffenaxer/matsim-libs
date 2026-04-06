@@ -76,12 +76,18 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
         });
 
         // Customise with time-dependent TTFs (fast O(edges × bins) pass).
-        // Synchronized per chGraph to prevent concurrent writes to the shared
-        // TTF arrays when multiple threads call createPathCalculator simultaneously.
-        // Within a single MATSim iteration, all threads share the same TravelTime
-        // state, so the second and subsequent calls are fast no-ops (dirty check).
-        synchronized (chGraph) {
-            new CHTTFCustomizer().customize(chGraph, travelTimes, travelCosts);
+        //
+        // Double-checked locking: the volatile customizationFingerprint field on
+        // CHGraph allows a fast unsynchronized pre-check.  Only when travel times
+        // have actually changed (typically once per MATSim iteration) do we enter
+        // the synchronized block.  This eliminates lock contention in the common
+        // case where many threads request a path calculator within the same
+        // iteration — they all see the matching fingerprint and skip the lock.
+        if (CHTTFCustomizer.needsRecustomization(chGraph, travelTimes)) {
+            synchronized (chGraph) {
+                // Re-check under lock: another thread may have customized while we waited.
+                new CHTTFCustomizer().customize(chGraph, travelTimes, travelCosts);
+            }
         }
 
         return new CHRouterTimeDep(chGraph, travelTimes, travelCosts);

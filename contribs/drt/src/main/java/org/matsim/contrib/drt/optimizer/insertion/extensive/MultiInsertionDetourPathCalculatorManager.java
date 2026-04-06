@@ -84,10 +84,15 @@ public class MultiInsertionDetourPathCalculatorManager implements MobsimBeforeCl
 			InertialFlowCutter.NDOrderResult ndOrder = new InertialFlowCutter(baseGraph).computeOrderWithBatches();
 			return new CHBuilder(baseGraph, travelDisutility).buildWithOrderParallel(ndOrder);
 		});
-		// (Re-)customise with current travel times.  The CHTTFCustomizer uses a
-		// fingerprint-based fast check and returns immediately if nothing changed.
-		synchronized (chGraph) {
-			new CHTTFCustomizer().customize(chGraph, travelTime, travelDisutility);
+		// (Re-)customise with current travel times.
+		// Double-checked locking: check the volatile fingerprint outside the lock
+		// to avoid contention when travel times haven't changed (common case within
+		// a single MATSim iteration).  Only enter synchronized when a real update
+		// is needed; the inner customize() re-checks under lock.
+		if (CHTTFCustomizer.needsRecustomization(chGraph, travelTime)) {
+			synchronized (chGraph) {
+				new CHTTFCustomizer().customize(chGraph, travelTime, travelDisutility);
+			}
 		}
 		return chGraph;
 	}
