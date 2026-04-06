@@ -87,10 +87,11 @@ public class CHBuilder {
      *  <p>Higher values give more accurate priority estimates at the cost of
      *  slower preprocessing.  On large networks (500k+ nodes), accurate estimates
      *  are critical: inaccurate priorities cause high-degree hubs to be contracted
-     *  too early, cascading unnecessary shortcuts.  A hop limit of 10 and
-     *  settled limit of 500 provide a good balance between accuracy and speed. */
-    private static final int PRIO_HOP_LIMIT = 10;
-    private static final int PRIO_SETTLED_LIMIT = 500;
+     *  too early, cascading unnecessary shortcuts.  A hop limit of 20 and
+     *  settled limit of 1000 provide a good balance between accuracy and speed
+     *  while being sufficient for shortcut-dense graphs after partial contraction. */
+    private static final int PRIO_HOP_LIMIT = 20;
+    private static final int PRIO_SETTLED_LIMIT = 1_000;
 
     /** Minimum cell size for priority-based reordering within a cell.
      *  Cells with fewer nodes are contracted in their given order because
@@ -109,12 +110,16 @@ public class CHBuilder {
     /** Cell size threshold for adaptive contraction.
      *  Cells with at least this many nodes use iterative priority-queue-based
      *  contraction where priorities are re-estimated after each contraction.
-     *  This is critical for large separator cells on 500k+ node networks:
+     *  This is critical for separator cells on 500k+ node networks:
      *  a one-shot priority sort cannot predict the cascading effect of
      *  shortcuts created by earlier contractions within the same cell.
      *  Iterative re-estimation ensures each node is contracted at the optimal
-     *  time, using shortcuts from earlier contractions as witnesses. */
-    private static final int ADAPTIVE_CONTRACTION_THRESHOLD = 200;
+     *  time, using shortcuts from earlier contractions as witnesses.
+     *
+     *  <p>Lowered from 200 to match CELL_REORDER_THRESHOLD: any cell large
+     *  enough to benefit from priority-aware ordering also benefits from
+     *  the more accurate iterative re-estimation approach. */
+    private static final int ADAPTIVE_CONTRACTION_THRESHOLD = 50;
 
     /** Maximum number of threads to use for parallel contraction.
      *  Capping this limits memory usage (each thread holds a ~2.5 MB WitnessContext). */
@@ -714,18 +719,34 @@ public class CHBuilder {
         for (int node : cellNodes) cellMemberGen[node] = cellGen;
 
         // 3. Estimate initial priorities and insert into PQ.
+        //    Track stored priorities for lazy update comparison.
         DAryMinHeap pq = new DAryMinHeap(nodeCount, 4);
+        int[] storedPrio = new int[nodeCount];
         for (int node : cellNodes) {
             int prio = estimatePriority(node);
+            storedPrio[node] = prio;
             // Shift priority to non-negative range for the heap (edge-diff can be negative).
             // Add nodeCount to ensure all values are positive.
             pq.insert(node, prio + nodeCount);
         }
 
-        // 4. Iterative contraction with lazy priority re-estimation.
+        // 4. Iterative contraction with lazy priority update.
+        //    When a node is popped, re-estimate its priority.  If it increased
+        //    (i.e. contracting it now would create more shortcuts than expected),
+        //    re-insert it and try the next node.  This prevents premature
+        //    contraction of high-degree hubs whose true priority rises as
+        //    the graph structure changes from earlier contractions.
         int contractionIdx = 0;
         while (!pq.isEmpty()) {
             int node = pq.poll();
+
+            // Lazy update: re-estimate and re-queue if priority increased.
+            int newPrio = estimatePriority(node);
+            if (newPrio > storedPrio[node]) {
+                storedPrio[node] = newPrio;
+                pq.insert(node, newPrio + nodeCount);
+                continue;
+            }
 
             // Contract this node (full witness search, creates shortcuts).
             contractNodeBatched(node);
@@ -735,9 +756,8 @@ public class CHBuilder {
             contractionIdx++;
 
             // Re-estimate priorities of uncontracted neighbors in this cell.
-            // The shortcuts just created may reduce their edge-difference,
-            // which means they should be contracted later (higher priority value).
-            reestimateCellNeighbors(node, cellGen, pq);
+            // The shortcuts just created may change their edge-difference.
+            reestimateCellNeighbors(node, cellGen, pq, storedPrio);
         }
     }
 
@@ -748,8 +768,10 @@ public class CHBuilder {
      *
      * <p>Uses {@code remove} + {@code insert} on the heap because priorities
      * can both increase and decrease after a neighbor's contraction.
+     * Updates the {@code storedPrio} array so that the lazy update check
+     * in the caller has accurate previous-priority information.
      */
-    private void reestimateCellNeighbors(int node, int cellGen, DAryMinHeap pq) {
+    private void reestimateCellNeighbors(int node, int cellGen, DAryMinHeap pq, int[] storedPrio) {
         // Check out-neighbors
         int[] oArr = outEdges[node];
         int oLen = this.outLen[node];
@@ -759,6 +781,7 @@ public class CHBuilder {
             if (!contracted[w] && cellMemberGen[w] == cellGen) {
                 if (pq.remove(w)) {
                     int newPrio = estimatePriority(w);
+                    storedPrio[w] = newPrio;
                     pq.insert(w, newPrio + nodeCount);
                 }
             }
@@ -773,6 +796,7 @@ public class CHBuilder {
             if (!contracted[u] && cellMemberGen[u] == cellGen) {
                 if (pq.remove(u)) {
                     int newPrio = estimatePriority(u);
+                    storedPrio[u] = newPrio;
                     pq.insert(u, newPrio + nodeCount);
                 }
             }
