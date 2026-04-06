@@ -19,8 +19,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Time-dependent CATCHUp bidirectional CH query using the optimised
- * CSR-based {@link CHGraph} with flat TTF array.
+ * Time-dependent CATCHUp bidirectional CH query using
+ * {@link CHGraph} with flat TTF array.
  *
  * @author Implementation for CCH/CATCHUp router
  */

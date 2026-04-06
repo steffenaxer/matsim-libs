@@ -55,7 +55,7 @@ public class SpeedyALT implements LeastCostPathCalculator {
 	/**
 	 * Creates a SpeedyALT router using the given ALT landmark data but a separate
 	 * graph for iteration.  This allows sharing precomputed landmarks across
-	 * different graph representations (e.g. linked-list vs CSR) for fair benchmarking.
+	 * different graph instances for fair benchmarking.
 	 *
 	 * @param astarData precomputed ALT landmark data
 	 * @param graph     the graph to use for edge iteration during queries

@@ -19,8 +19,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Bidirectional Contraction Hierarchies (CH) shortest-path query using the
- * optimised CSR-based {@link CHGraph}.
+ * Bidirectional Contraction Hierarchies (CH) shortest-path query using
+ * {@link CHGraph}.
  *
  * <p>Per-node search state is packed into contiguous arrays following the
  * SpeedyALT cache-locality pattern:

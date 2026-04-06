@@ -25,13 +25,11 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Standalone benchmark comparing <b>all router variants</b> on the Berlin v7.0
+ * Standalone benchmark comparing <b>router variants</b> on the Berlin v7.0
  * network (~88k nodes, ~200k links):
  * <ol>
- *   <li>SpeedyALT (linked-list SpeedyGraph)</li>
- *   <li>SpeedyALT (CSR SpeedyGraph)</li>
- *   <li>CH Time-Dependent (linked-list base graph)</li>
- *   <li>CH Time-Dependent (CSR base graph)</li>
+ *   <li>SpeedyALT</li>
+ *   <li>CH Time-Dependent</li>
  * </ol>
  *
  * <p>Run with sufficient heap, e.g.:
@@ -69,73 +67,50 @@ public class BenchmarkBerlinV70 {
         FreespeedTravelTimeAndDisutility tc =
                 new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 
-        // ---- 2. Build graphs ----
+        // ---- 2. Build graph (spatial node ordering via Morton Z-curve) ----
         System.out.println();
-        System.out.println("Building SpeedyGraph (linked-list) ...");
-        SpeedyGraph graphLL = SpeedyGraphBuilder.build(network);
+        System.out.println("Building SpeedyGraph (Morton Z-order node reordering) ...");
+        SpeedyGraph graph = SpeedyGraphBuilder.build(network);
 
-        System.out.println("Building SpeedyGraph (CSR) ...");
-        SpeedyGraph graphCSR = SpeedyGraphBuilder.build(network);
-        long csrBuildStart = System.nanoTime();
-        graphCSR.buildCSR();
-        long csrBuildMs = (System.nanoTime() - csrBuildStart) / 1_000_000;
-        System.out.printf("  CSR build:   %,6d ms%n", csrBuildMs);
-
-        // ---- 3. Compute ND order ONCE (topology-only, same for LL and CSR) ----
+        // ---- 3. Compute ND order ----
         System.out.println();
-        System.out.println("Computing InertialFlowCutter ND order (shared for LL and CSR) ...");
+        System.out.println("Computing InertialFlowCutter ND order ...");
 
         long t0 = System.nanoTime();
-        InertialFlowCutter.NDOrderResult orderResult = new InertialFlowCutter(graphLL).computeOrderWithBatches();
+        InertialFlowCutter.NDOrderResult orderResult = new InertialFlowCutter(graph).computeOrderWithBatches();
         long orderMs = (System.nanoTime() - t0) / 1_000_000;
         System.out.printf("  Order:       %,6d ms%n", orderMs);
 
-        // ---- 4. Build CH on linked-list graph ----
+        // ---- 4. Build CH ----
         System.out.println();
-        System.out.println("Building CH on linked-list graph ...");
+        System.out.println("Building CH ...");
         long t1 = System.nanoTime();
-        CHGraph chGraphLL = new CHBuilder(graphLL, tc).buildWithOrderParallel(orderResult);
-        long contractionLLMs = (System.nanoTime() - t1) / 1_000_000;
-        new CHTTFCustomizer().customize(chGraphLL, tc, tc);
-        long totalBuildLLMs = orderMs + (System.nanoTime() - t1) / 1_000_000;
+        CHGraph chGraph = new CHBuilder(graph, tc).buildWithOrderParallel(orderResult);
+        long contractionMs = (System.nanoTime() - t1) / 1_000_000;
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
+        long totalBuildMs = orderMs + (System.nanoTime() - t1) / 1_000_000;
 
-        System.out.printf("  Contraction: %,6d ms%n", contractionLLMs);
-        System.out.printf("  Total (incl order): %,6d ms%n", totalBuildLLMs);
+        System.out.printf("  Contraction: %,6d ms%n", contractionMs);
+        System.out.printf("  Total (incl order): %,6d ms%n", totalBuildMs);
         System.out.printf("  CH edges:    %,d (base links: %,d)%n",
-                chGraphLL.totalEdgeCount, network.getLinks().size());
+                chGraph.totalEdgeCount, network.getLinks().size());
 
-        // ---- 5. Build CH on CSR graph (reuses same ND order) ----
+        // ---- 5. Build ALT data ----
         System.out.println();
-        System.out.println("Building CH on CSR graph (reusing same ND order) ...");
-        long t2 = System.nanoTime();
-        CHGraph chGraphCSR = new CHBuilder(graphCSR, tc).buildWithOrderParallel(orderResult);
-        long contractionCSRMs = (System.nanoTime() - t2) / 1_000_000;
-        new CHTTFCustomizer().customize(chGraphCSR, tc, tc);
-        long totalBuildCSRMs = (System.nanoTime() - t2) / 1_000_000;
-
-        System.out.printf("  Contraction: %,6d ms%n", contractionCSRMs);
-        System.out.printf("  Total (excl order): %,6d ms%n", totalBuildCSRMs);
-        System.out.printf("  CH edges:    %,d%n", chGraphCSR.totalEdgeCount);
-
-        // ---- 6. Build ALT data ONCE (on LL graph, shared for fair comparison) ----
-        System.out.println();
-        System.out.println("Building SpeedyALT landmarks (shared for LL and CSR) ...");
+        System.out.println("Building SpeedyALT landmarks ...");
         long altBuildStart = System.nanoTime();
-        SpeedyALTData altData = new SpeedyALTData(graphLL, Math.min(ALT_LANDMARKS, graphLL.nodeCount), tc, 1);
+        SpeedyALTData altData = new SpeedyALTData(graph, Math.min(ALT_LANDMARKS, graph.nodeCount), tc, 1);
         long altBuildMs = (System.nanoTime() - altBuildStart) / 1_000_000;
         System.out.printf("  ALT build:   %,6d ms  (%d landmarks)%n", altBuildMs, ALT_LANDMARKS);
 
-        // ---- 7. Create all 4 routers ----
-        // ALT routers share the same landmark data; only the graph (LL vs CSR) differs
-        SpeedyALT altLL       = new SpeedyALT(altData, graphLL, tc, tc);
-        SpeedyALT altCSR      = new SpeedyALT(altData, graphCSR, tc, tc);
-        CHRouterTimeDep chLL  = new CHRouterTimeDep(chGraphLL, tc, tc);
-        CHRouterTimeDep chCSR = new CHRouterTimeDep(chGraphCSR, tc, tc);
+        // ---- 6. Create routers ----
+        SpeedyALT alt       = new SpeedyALT(altData, tc, tc);
+        CHRouterTimeDep ch   = new CHRouterTimeDep(chGraph, tc, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
         int n = nodeList.size();
 
-        // ---- 8. Warm-up ----
+        // ---- 7. Warm-up ----
         System.out.println();
         System.out.printf("Warming up (%d queries per router) ...%n", WARMUP_QUERIES);
         Random rng = new Random(42);
@@ -143,13 +118,11 @@ public class BenchmarkBerlinV70 {
             Node s = nodeList.get(rng.nextInt(n));
             Node d = nodeList.get(rng.nextInt(n));
             double depTime = 8.0 * 3600;
-            altLL.calcLeastCostPath(s, d, depTime, null, null);
-            altCSR.calcLeastCostPath(s, d, depTime, null, null);
-            chLL.calcLeastCostPath(s, d, depTime, null, null);
-            chCSR.calcLeastCostPath(s, d, depTime, null, null);
+            alt.calcLeastCostPath(s, d, depTime, null, null);
+            ch.calcLeastCostPath(s, d, depTime, null, null);
         }
 
-        // ---- 9. Benchmark ----
+        // ---- 8. Benchmark ----
         System.out.printf("Running benchmark (%,d queries per router) ...%n", BENCHMARK_QUERIES);
         rng = new Random(123);
 
@@ -161,78 +134,52 @@ public class BenchmarkBerlinV70 {
         }
 
         // Benchmark each router separately to avoid interleaved GC interference
-        long altLLNs   = benchmarkRouter(altLL, nodeList, pairs, "SpeedyALT (LL)");
-        long altCSRNs  = benchmarkRouter(altCSR, nodeList, pairs, "SpeedyALT (CSR)");
-        long chLLNs    = benchmarkRouter(chLL, nodeList, pairs, "CH TimeDep (LL)");
-        long chCSRNs   = benchmarkRouter(chCSR, nodeList, pairs, "CH TimeDep (CSR)");
+        long altNs  = benchmarkRouter(alt, nodeList, pairs, "SpeedyALT");
+        long chNs   = benchmarkRouter(ch, nodeList, pairs, "CH TimeDep");
 
-        // Quick correctness check: compare ALT LL vs CSR, and ALT vs CH
+        // Quick correctness check: compare ALT vs CH
         int mismatches = 0;
         double maxCostDiff = 0;
         for (int i = 0; i < Math.min(200, BENCHMARK_QUERIES); i++) {
             Node s = nodeList.get(pairs[i][0]);
             Node d = nodeList.get(pairs[i][1]);
-            Path pathAltLL  = altLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            Path pathAltCSR = altCSR.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            Path pathCH     = chLL.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            if (pathAltLL != null && pathAltCSR != null) {
-                double diff = Math.abs(pathAltLL.travelCost - pathAltCSR.travelCost);
-                if (diff > 1e-6) {
-                    System.err.printf("  ALT CSR MISMATCH: %s->%s  LL=%.4f  CSR=%.4f%n",
-                            s.getId(), d.getId(), pathAltLL.travelCost, pathAltCSR.travelCost);
-                }
-            }
-            if (pathAltLL != null && pathCH != null) {
-                double diff = Math.abs(pathAltLL.travelCost - pathCH.travelCost);
+            Path pathALT = alt.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            Path pathCH  = ch.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
+            if (pathALT != null && pathCH != null) {
+                double diff = Math.abs(pathALT.travelCost - pathCH.travelCost);
                 maxCostDiff = Math.max(maxCostDiff, diff);
                 if (diff > 1e-3) {
                     mismatches++;
                     if (mismatches <= 5) {
                         System.err.printf("  CH MISMATCH #%d: %s->%s  ALT=%.4f  CH=%.4f  diff=%.6f%n",
                                 mismatches, s.getId(), d.getId(),
-                                pathAltLL.travelCost, pathCH.travelCost, diff);
+                                pathALT.travelCost, pathCH.travelCost, diff);
                     }
                 }
             }
         }
 
-        // ---- 10. Results ----
-        double altLLAvgUs   = altLLNs   / (BENCHMARK_QUERIES * 1000.0);
-        double altCSRAvgUs  = altCSRNs  / (BENCHMARK_QUERIES * 1000.0);
-        double chLLAvgUs    = chLLNs    / (BENCHMARK_QUERIES * 1000.0);
-        double chCSRAvgUs   = chCSRNs   / (BENCHMARK_QUERIES * 1000.0);
-        double altCsrVsAltLL  = (double) altLLNs  / Math.max(1, altCSRNs);
-        double chCsrVsChLL    = (double) chLLNs   / Math.max(1, chCSRNs);
-        double chLLVsAltLL    = (double) altLLNs  / Math.max(1, chLLNs);
-        double chCSRVsAltCSR  = (double) altCSRNs / Math.max(1, chCSRNs);
-        double edgeOverhead   = ((double) chGraphLL.totalEdgeCount / network.getLinks().size() - 1) * 100;
+        // ---- 9. Results ----
+        double altAvgUs  = altNs  / (BENCHMARK_QUERIES * 1000.0);
+        double chAvgUs   = chNs   / (BENCHMARK_QUERIES * 1000.0);
+        double chVsAlt   = (double) altNs / Math.max(1, chNs);
+        double edgeOverhead = ((double) chGraph.totalEdgeCount / network.getLinks().size() - 1) * 100;
 
         System.out.println();
         printBox("Berlin v7.0  —  Router Variants Comparison", new String[][] {
                 { "Network" },
                 { "  Nodes",           String.format("%,d", network.getNodes().size()) },
                 { "  Links",           String.format("%,d", network.getLinks().size()) },
-                { "  CH edges (LL)",   String.format("%,d  (%+.1f%% overhead)", chGraphLL.totalEdgeCount, edgeOverhead) },
-                { "  CH edges (CSR)",  String.format("%,d", chGraphCSR.totalEdgeCount) },
+                { "  CH edges",        String.format("%,d  (%+.1f%% overhead)", chGraph.totalEdgeCount, edgeOverhead) },
                 null, // separator
                 { "Preprocessing" },
-                { "  ND Order",        String.format("%,d ms  (shared, computed once)", orderMs) },
-                { "  CH build (LL)",   String.format("%,d ms  (contraction + customize)", totalBuildLLMs) },
-                { "  CH build (CSR)",  String.format("%,d ms  (contraction + customize)", totalBuildCSRMs) },
-                { "  ALT landmarks",   String.format("%,d ms  (%d landmarks, shared)", altBuildMs, ALT_LANDMARKS) },
-                { "  CSR build",       String.format("%,d ms", csrBuildMs) },
+                { "  ND Order",        String.format("%,d ms", orderMs) },
+                { "  CH build",        String.format("%,d ms  (contraction + customize)", totalBuildMs) },
+                { "  ALT landmarks",   String.format("%,d ms  (%d landmarks)", altBuildMs, ALT_LANDMARKS) },
                 null,
                 { "Query Performance", String.format("(%,d queries, %d warmup)", BENCHMARK_QUERIES, WARMUP_QUERIES) },
-                { "  SpeedyALT (LL)",  String.format("%,.0f µs/query", altLLAvgUs) },
-                { "  SpeedyALT (CSR)", String.format("%,.0f µs/query  (%.2fx vs ALT-LL)", altCSRAvgUs, altCsrVsAltLL) },
-                { "  CH TimeDep (LL)", String.format("%,.0f µs/query", chLLAvgUs) },
-                { "  CH TimeDep (CSR)",String.format("%,.0f µs/query  (%.2fx vs CH-LL)", chCSRAvgUs, chCsrVsChLL) },
-                null,
-                { "Speedups" },
-                { "  CH(LL) vs ALT(LL)",   String.format("%.2fx", chLLVsAltLL) },
-                { "  CH(CSR) vs ALT(CSR)", String.format("%.2fx", chCSRVsAltCSR) },
-                { "  CSR vs LL (ALT)",     String.format("%.2fx", altCsrVsAltLL) },
-                { "  CSR vs LL (CH)",      String.format("%.2fx", chCsrVsChLL) },
+                { "  SpeedyALT",       String.format("%,.0f µs/query", altAvgUs) },
+                { "  CH TimeDep",      String.format("%,.0f µs/query  (%.2fx vs ALT)", chAvgUs, chVsAlt) },
                 null,
                 { "Correctness" },
                 { "  Max cost diff",   String.format("%.6f", maxCostDiff) },
