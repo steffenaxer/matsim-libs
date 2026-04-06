@@ -62,12 +62,25 @@ public class SpeedyGraphCSRTest {
 
 		Assertions.assertEquals(linkedListIn.keySet(), csrIn.keySet());
 		for (int node : linkedListIn.keySet()) {
+			// Compare link indices
 			Set<Integer> llLinks = new HashSet<>();
 			for (int[] edge : linkedListIn.get(node)) llLinks.add(edge[0]);
 			Set<Integer> csrLinks = new HashSet<>();
 			for (int[] edge : csrIn.get(node)) csrLinks.add(edge[0]);
 			Assertions.assertEquals(llLinks, csrLinks,
 					"In-links mismatch for node " + node);
+
+			// Compare toNode/fromNode values per link (catches to/from swap bugs)
+			Map<Integer, int[]> llByLink = new HashMap<>();
+			for (int[] edge : linkedListIn.get(node)) llByLink.put(edge[0], edge);
+			for (int[] csrEdge : csrIn.get(node)) {
+				int[] llEdge = llByLink.get(csrEdge[0]);
+				Assertions.assertNotNull(llEdge);
+				Assertions.assertEquals(llEdge[1], csrEdge[1],
+						"toNode mismatch for in-link " + csrEdge[0] + " at node " + node);
+				Assertions.assertEquals(llEdge[2], csrEdge[2],
+						"fromNode mismatch for in-link " + csrEdge[0] + " at node " + node);
+			}
 		}
 	}
 
@@ -77,21 +90,34 @@ public class SpeedyGraphCSRTest {
 		Network network = createTestNetwork();
 		SpeedyGraph graph = SpeedyGraphBuilder.build(network);
 
-		// Collect detailed edge data with linked-list
-		Map<Integer, double[]> linkedListData = collectOutEdgeData(graph);
+		// Collect detailed edge data with linked-list (out AND in edges)
+		Map<Integer, double[]> linkedListOutData = collectOutEdgeData(graph);
+		Map<Integer, double[]> linkedListInData = collectInEdgeData(graph);
 
 		graph.buildCSR();
-		Map<Integer, double[]> csrData = collectOutEdgeData(graph);
+		Map<Integer, double[]> csrOutData = collectOutEdgeData(graph);
+		Map<Integer, double[]> csrInData = collectInEdgeData(graph);
 
-		for (int linkIdx : linkedListData.keySet()) {
-			Assertions.assertTrue(csrData.containsKey(linkIdx),
-					"CSR missing link " + linkIdx);
-			double[] ll = linkedListData.get(linkIdx);
-			double[] csr = csrData.get(linkIdx);
-			Assertions.assertEquals(ll[0], csr[0], "fromNode mismatch for link " + linkIdx);
-			Assertions.assertEquals(ll[1], csr[1], "toNode mismatch for link " + linkIdx);
-			Assertions.assertEquals(ll[2], csr[2], 1e-2, "length mismatch for link " + linkIdx);
-			Assertions.assertEquals(ll[3], csr[3], 1e-2, "freespeedTT mismatch for link " + linkIdx);
+		for (int linkIdx : linkedListOutData.keySet()) {
+			Assertions.assertTrue(csrOutData.containsKey(linkIdx),
+					"CSR missing out-link " + linkIdx);
+			double[] ll = linkedListOutData.get(linkIdx);
+			double[] csr = csrOutData.get(linkIdx);
+			Assertions.assertEquals(ll[0], csr[0], "out-edge fromNode mismatch for link " + linkIdx);
+			Assertions.assertEquals(ll[1], csr[1], "out-edge toNode mismatch for link " + linkIdx);
+			Assertions.assertEquals(ll[2], csr[2], 1e-2, "out-edge length mismatch for link " + linkIdx);
+			Assertions.assertEquals(ll[3], csr[3], 1e-2, "out-edge freespeedTT mismatch for link " + linkIdx);
+		}
+
+		for (int linkIdx : linkedListInData.keySet()) {
+			Assertions.assertTrue(csrInData.containsKey(linkIdx),
+					"CSR missing in-link " + linkIdx);
+			double[] ll = linkedListInData.get(linkIdx);
+			double[] csr = csrInData.get(linkIdx);
+			Assertions.assertEquals(ll[0], csr[0], "in-edge fromNode mismatch for link " + linkIdx);
+			Assertions.assertEquals(ll[1], csr[1], "in-edge toNode mismatch for link " + linkIdx);
+			Assertions.assertEquals(ll[2], csr[2], 1e-2, "in-edge length mismatch for link " + linkIdx);
+			Assertions.assertEquals(ll[3], csr[3], 1e-2, "in-edge freespeedTT mismatch for link " + linkIdx);
 		}
 	}
 
@@ -280,6 +306,22 @@ public class SpeedyGraphCSRTest {
 	private Map<Integer, double[]> collectOutEdgeData(SpeedyGraph graph) {
 		Map<Integer, double[]> result = new HashMap<>();
 		LinkIterator li = graph.getOutLinkIterator();
+		for (int n = 0; n < graph.nodeCount; n++) {
+			if (graph.getNode(n) == null) continue;
+			li.reset(n);
+			while (li.next()) {
+				result.put(li.getLinkIndex(), new double[] {
+						li.getFromNodeIndex(), li.getToNodeIndex(),
+						li.getLength(), li.getFreespeedTravelTime()
+				});
+			}
+		}
+		return result;
+	}
+
+	private Map<Integer, double[]> collectInEdgeData(SpeedyGraph graph) {
+		Map<Integer, double[]> result = new HashMap<>();
+		LinkIterator li = graph.getInLinkIterator();
 		for (int n = 0; n < graph.nodeCount; n++) {
 			if (graph.getNode(n) == null) continue;
 			li.reset(n);

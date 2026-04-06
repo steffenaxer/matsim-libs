@@ -49,7 +49,22 @@ public class SpeedyALT implements LeastCostPathCalculator {
 	private final DAryMinHeap pq;
 
 	public SpeedyALT(SpeedyALTData astarData, TravelTime tt, TravelDisutility td) {
-		this.graph = astarData.graph;
+		this(astarData, astarData.graph, tt, td);
+	}
+
+	/**
+	 * Creates a SpeedyALT router using the given ALT landmark data but a separate
+	 * graph for iteration.  This allows sharing precomputed landmarks across
+	 * different graph representations (e.g. linked-list vs CSR) for fair benchmarking.
+	 *
+	 * @param astarData precomputed ALT landmark data
+	 * @param graph     the graph to use for edge iteration during queries
+	 *                  (must have the same topology as the graph used to build astarData)
+	 * @param tt        travel time function
+	 * @param td        travel disutility function
+	 */
+	public SpeedyALT(SpeedyALTData astarData, SpeedyGraph graph, TravelTime tt, TravelDisutility td) {
+		this.graph = graph;
 		this.astarData = astarData;
 		this.tt = tt;
 		this.td = td;

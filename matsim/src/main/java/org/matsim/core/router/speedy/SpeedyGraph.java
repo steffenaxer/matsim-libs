@@ -67,8 +67,8 @@ public class SpeedyGraph {
     static final int CSR_STRIDE = 5;
     /** Offsets within one CSR edge slot. */
     static final int CSR_LINK_IDX   = 0;
-    static final int CSR_TO_NODE    = 1;  // toNode for out-edges, fromNode for in-edges
-    static final int CSR_FROM_NODE  = 2;  // fromNode for out-edges, toNode for in-edges
+    static final int CSR_TO_NODE    = 1;  // always the toNode of the link
+    static final int CSR_FROM_NODE  = 2;  // always the fromNode of the link
     static final int CSR_LENGTH     = 3;  // link.getLength() * 100
     static final int CSR_FREESPEED  = 4;  // freespeed travel time * 100
 
@@ -176,8 +176,8 @@ public class SpeedyGraph {
                 int base = slot * CSR_STRIDE;
                 int lBase = linkIdx * LINK_SIZE;
                 iEdges[base + CSR_LINK_IDX]  = linkIdx;
-                iEdges[base + CSR_TO_NODE]   = linkData[lBase + 2]; // fromNode (=the "other" node for in-edges)
-                iEdges[base + CSR_FROM_NODE] = linkData[lBase + 3]; // toNode
+                iEdges[base + CSR_TO_NODE]   = linkData[lBase + 3]; // toNode
+                iEdges[base + CSR_FROM_NODE] = linkData[lBase + 2]; // fromNode
                 iEdges[base + CSR_LENGTH]    = linkData[lBase + 4];
                 iEdges[base + CSR_FREESPEED] = linkData[lBase + 5];
                 linkIdx = linkData[lBase + 1]; // next in-link
@@ -406,8 +406,8 @@ public class SpeedyGraph {
 
     /**
      * CSR in-link iterator.  All in-edges for a node are stored contiguously
-     * in {@link #inEdges} with colocated linkIdx, fromNode, toNode, length
-     * and freespeed data.
+     * in {@link #inEdges} with colocated linkIdx, toNode, fromNode, length
+     * and freespeed data — no pointer chasing required.
      */
     private static class CSRInLinkIterator implements LinkIterator {
 
@@ -444,13 +444,11 @@ public class SpeedyGraph {
 
         @Override
         public int getToNodeIndex() {
-            // For in-edges: "toNode" returns the fromNode of the link (the other end)
             return graph.inEdges[base + CSR_TO_NODE];
         }
 
         @Override
         public int getFromNodeIndex() {
-            // For in-edges: "fromNode" returns the toNode of the link (the node we're iterating)
             return graph.inEdges[base + CSR_FROM_NODE];
         }
 

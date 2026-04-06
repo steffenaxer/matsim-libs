@@ -117,23 +117,18 @@ public class BenchmarkBerlinV70 {
         System.out.printf("  Total (excl order): %,6d ms%n", totalBuildCSRMs);
         System.out.printf("  CH edges:    %,d%n", chGraphCSR.totalEdgeCount);
 
-        // ---- 6. Build ALT data (LL and CSR) ----
+        // ---- 6. Build ALT data ONCE (on LL graph, shared for fair comparison) ----
         System.out.println();
-        System.out.println("Building SpeedyALT landmarks (LL) ...");
-        long altLLBuildStart = System.nanoTime();
-        SpeedyALTData altDataLL = new SpeedyALTData(graphLL, Math.min(ALT_LANDMARKS, graphLL.nodeCount), tc, 1);
-        long altLLBuildMs = (System.nanoTime() - altLLBuildStart) / 1_000_000;
-        System.out.printf("  ALT build (LL):  %,6d ms  (%d landmarks)%n", altLLBuildMs, ALT_LANDMARKS);
-
-        System.out.println("Building SpeedyALT landmarks (CSR) ...");
-        long altCSRBuildStart = System.nanoTime();
-        SpeedyALTData altDataCSR = new SpeedyALTData(graphCSR, Math.min(ALT_LANDMARKS, graphCSR.nodeCount), tc, 1);
-        long altCSRBuildMs = (System.nanoTime() - altCSRBuildStart) / 1_000_000;
-        System.out.printf("  ALT build (CSR): %,6d ms  (%d landmarks)%n", altCSRBuildMs, ALT_LANDMARKS);
+        System.out.println("Building SpeedyALT landmarks (shared for LL and CSR) ...");
+        long altBuildStart = System.nanoTime();
+        SpeedyALTData altData = new SpeedyALTData(graphLL, Math.min(ALT_LANDMARKS, graphLL.nodeCount), tc, 1);
+        long altBuildMs = (System.nanoTime() - altBuildStart) / 1_000_000;
+        System.out.printf("  ALT build:   %,6d ms  (%d landmarks)%n", altBuildMs, ALT_LANDMARKS);
 
         // ---- 7. Create all 4 routers ----
-        SpeedyALT altLL       = new SpeedyALT(altDataLL, tc, tc);
-        SpeedyALT altCSR      = new SpeedyALT(altDataCSR, tc, tc);
+        // ALT routers share the same landmark data; only the graph (LL vs CSR) differs
+        SpeedyALT altLL       = new SpeedyALT(altData, graphLL, tc, tc);
+        SpeedyALT altCSR      = new SpeedyALT(altData, graphCSR, tc, tc);
         CHRouterTimeDep chLL  = new CHRouterTimeDep(chGraphLL, tc, tc);
         CHRouterTimeDep chCSR = new CHRouterTimeDep(chGraphCSR, tc, tc);
 
@@ -224,8 +219,7 @@ public class BenchmarkBerlinV70 {
                 { "  ND Order",        String.format("%,d ms  (shared, computed once)", orderMs) },
                 { "  CH build (LL)",   String.format("%,d ms  (contraction + customize)", totalBuildLLMs) },
                 { "  CH build (CSR)",  String.format("%,d ms  (contraction + customize)", totalBuildCSRMs) },
-                { "  ALT build (LL)",  String.format("%,d ms  (%d landmarks)", altLLBuildMs, ALT_LANDMARKS) },
-                { "  ALT build (CSR)", String.format("%,d ms  (%d landmarks)", altCSRBuildMs, ALT_LANDMARKS) },
+                { "  ALT landmarks",   String.format("%,d ms  (%d landmarks, shared)", altBuildMs, ALT_LANDMARKS) },
                 { "  CSR build",       String.format("%,d ms", csrBuildMs) },
                 null,
                 { "Query Performance", String.format("(%,d queries, %d warmup)", BENCHMARK_QUERIES, WARMUP_QUERIES) },
