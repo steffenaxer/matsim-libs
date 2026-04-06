@@ -86,6 +86,20 @@ public class CHBuilder {
     private static final int PRIO_HOP_LIMIT = 3;
     private static final int PRIO_SETTLED_LIMIT = 200;
 
+    /** Minimum cell size for priority-based reordering within a cell.
+     *  Cells with fewer nodes are contracted in their given order because
+     *  the overhead of priority estimation outweighs the benefit.
+     *
+     *  <p>On large networks with PT overlays, separator cells at certain ND
+     *  depths can contain thousands of high-degree hub nodes.  Without
+     *  reordering, contracting these hubs in arbitrary order cascades edge
+     *  inflation (observed: 1.2M → 4M edges in one round on the 532k-node
+     *  Metropole Ruhr network).  Reordering by edge-difference priority
+     *  contracts low-degree nodes first; their shortcuts then serve as
+     *  witnesses for the high-degree hubs, drastically reducing the final
+     *  edge count. */
+    private static final int CELL_REORDER_THRESHOLD = 50;
+
     /** Maximum number of threads to use for parallel contraction.
      *  Capping this limits memory usage (each thread holds a ~2.5 MB WitnessContext). */
     private static final int MAX_PARALLEL_THREADS = 8;
@@ -464,6 +478,14 @@ public class CHBuilder {
             List<int[]> round = rounds.get(r);
             int roundNodes = roundNodeCount(round);
 
+            // Reorder nodes within each original ND cell by estimated edge-
+            // difference priority (low-priority nodes first).  This step runs
+            // BEFORE merging so that each cell's ND rank range stays intact and
+            // level assignments remain globally consistent.  The reordered nodes
+            // produce shortcuts that serve as witnesses for high-degree hubs,
+            // preventing cascading edge explosion on large PT+road networks.
+            reorderCellsByPriority(round, order);
+
             // Merge very small cells into chunks for better load balancing.
             List<int[]> chunks = mergeSmallCells(round, 500);
 
@@ -509,6 +531,47 @@ public class CHBuilder {
         int count = 0;
         for (int[] cell : round) count += cell.length;
         return count;
+    }
+
+    /**
+     * Reorders nodes within each original ND cell by estimated priority
+     * (edge-difference heuristic) and updates the {@code order} array so
+     * that the assigned ND ranks match the new contraction order.
+     *
+     * <p>This must be called <b>before</b> {@link #mergeSmallCells} to
+     * ensure each cell's rank range stays intact.  After this call, each
+     * cell's nodes are sorted by ascending priority (low-priority = low
+     * edge-difference nodes first), and their ND ranks are reassigned
+     * within the cell's original rank band.
+     *
+     * <p>On large networks with PT overlays, separator cells at certain ND
+     * depths contain thousands of high-degree hub nodes.  Without
+     * reordering, contracting these hubs in arbitrary order cascades edge
+     * inflation.  Reordering by edge-difference contracts low-degree
+     * nodes first; their shortcuts then serve as witnesses for the
+     * high-degree hubs.
+     *
+     * <p>Uses the builder's shared witness state (single-threaded context).
+     */
+    private void reorderCellsByPriority(List<int[]> cells, int[] order) {
+        for (int[] cell : cells) {
+            if (cell.length < CELL_REORDER_THRESHOLD) continue;
+
+            // 1. Collect current ND ranks for this cell, sorted ascending.
+            int n = cell.length;
+            int[] ranks = new int[n];
+            for (int i = 0; i < n; i++) ranks[i] = order[cell[i]];
+            Arrays.sort(ranks);
+
+            // 2. Sort cell nodes by estimated priority (ascending).
+            sortCellByPriority(cell);
+
+            // 3. Reassign ranks: i-th contracted node gets i-th smallest rank.
+            //    This preserves the cell's rank band while matching the new order.
+            for (int i = 0; i < n; i++) {
+                order[cell[i]] = ranks[i];
+            }
+        }
     }
 
     /**
@@ -842,6 +905,109 @@ public class CHBuilder {
         scratchTargets    = Arrays.copyOf(scratchTargets, newLen);
         scratchMaxCosts   = Arrays.copyOf(scratchMaxCosts, newLen);
         scratchOutEdgeIdx = Arrays.copyOf(scratchOutEdgeIdx, newLen);
+    }
+
+    // ---- Priority-based cell reordering ----
+
+    /**
+     * Thread-safe priority estimation using a {@link WitnessContext}.
+     * Semantically identical to {@link #estimatePriority(int)} but uses the
+     * context's witness arrays, heap, and scratch space.
+     */
+    private int estimatePriorityCtx(int node, WitnessContext ctx) {
+        int[] oArr = outEdges[node];
+        int oLen = outLen[node];
+        int[] iArr = inEdges[node];
+        int iLen = inLen[node];
+
+        int numTargets = 0;
+        for (int i = 0; i < oLen; i++) {
+            int outIdx = oArr[i];
+            int w = buildEdgeData[outIdx * BE_SIZE + BE_TO];
+            if (contracted[w] || w == node) continue;
+            if (numTargets >= ctx.scratchTargets.length) ctx.growScratch();
+            ctx.scratchTargets[numTargets]  = w;
+            ctx.scratchMaxCosts[numTargets] = buildEdgeWeights[outIdx];
+            numTargets++;
+        }
+
+        int inDeg  = 0;
+        int outDeg = numTargets;
+        int shortcuts = 0;
+
+        for (int j = 0; j < iLen; j++) {
+            int inIdx = iArr[j];
+            int u = buildEdgeData[inIdx * BE_SIZE + BE_FROM];
+            if (contracted[u] || u == node) continue;
+            inDeg++;
+            if (numTargets == 0) continue;
+
+            double wUV = buildEdgeWeights[inIdx];
+            double globalMax = 0;
+            for (int t = 0; t < numTargets; t++) {
+                if (ctx.scratchTargets[t] == u) continue;
+                double bound = wUV + ctx.scratchMaxCosts[t];
+                if (bound > globalMax) globalMax = bound;
+            }
+
+            batchedWitnessSearchCtx(u, node, globalMax, PRIO_HOP_LIMIT, PRIO_SETTLED_LIMIT, ctx);
+
+            for (int t = 0; t < numTargets; t++) {
+                int w = ctx.scratchTargets[t];
+                if (w == u) continue;
+                double scCost = wUV + ctx.scratchMaxCosts[t];
+                double witCost = (ctx.witnessIterIds[w] == ctx.witnessIteration)
+                        ? ctx.witnessCost[w] : Double.POSITIVE_INFINITY;
+                if (witCost <= scCost) continue;
+                shortcuts++;
+            }
+        }
+
+        return shortcuts - (inDeg + outDeg) + contractedNeighborCount[node];
+    }
+
+    /**
+     * Sorts cell nodes in-place by ascending estimated priority (edge-difference
+     * heuristic).  Uses the builder's shared witness state – must be called
+     * from a single-threaded context.
+     *
+     * <p>This ensures low-degree nodes are contracted first.  Their shortcuts
+     * then serve as witnesses during high-degree contractions, preventing the
+     * cascading edge explosion observed on large PT+road networks.
+     */
+    private void sortCellByPriority(int[] cellNodes) {
+        int n = cellNodes.length;
+        if (n < CELL_REORDER_THRESHOLD) return;
+
+        long[] pairs = new long[n];
+        for (int i = 0; i < n; i++) {
+            int prio = estimatePriority(cellNodes[i]);
+            pairs[i] = ((long) prio << 32) | (cellNodes[i] & 0xFFFFFFFFL);
+        }
+        Arrays.sort(pairs);
+        for (int i = 0; i < n; i++) {
+            cellNodes[i] = (int) pairs[i];
+        }
+    }
+
+    /**
+     * Like {@link #sortCellByPriority(int[])} but uses a thread-local
+     * {@link WitnessContext} for the priority estimation, making it safe
+     * for use in parallel cell contraction.
+     */
+    private void sortCellByPriorityCtx(int[] cellNodes, WitnessContext ctx) {
+        int n = cellNodes.length;
+        if (n < CELL_REORDER_THRESHOLD) return;
+
+        long[] pairs = new long[n];
+        for (int i = 0; i < n; i++) {
+            int prio = estimatePriorityCtx(cellNodes[i], ctx);
+            pairs[i] = ((long) prio << 32) | (cellNodes[i] & 0xFFFFFFFFL);
+        }
+        Arrays.sort(pairs);
+        for (int i = 0; i < n; i++) {
+            cellNodes[i] = (int) pairs[i];
+        }
     }
 
     /**
