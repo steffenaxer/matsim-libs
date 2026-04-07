@@ -986,8 +986,6 @@ public class CHLeastCostPathTreeTest {
 
                 if (!connected) {
                     disconnectedPaths++;
-                    System.err.printf("FORWARD PATH DISCONNECTED src=%s tgt=%s, links=%d%n",
-                            srcLink.getId(), tgtLink.getId(), chLinks.size());
                 }
             }
         }
@@ -1062,8 +1060,6 @@ public class CHLeastCostPathTreeTest {
 
                 if (!connected) {
                     disconnectedPaths++;
-                    System.err.printf("BACKWARD PATH DISCONNECTED arr=%s src=%s, links=%d%n",
-                            arrivalLink.getId(), startLink.getId(), chLinks.size());
                 }
             }
         }
