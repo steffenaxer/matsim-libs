@@ -26,7 +26,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -257,16 +256,23 @@ public class InertialFlowCutter {
         int nThreads = Runtime.getRuntime().availableProcessors();
         ForkJoinPool pool = (count >= PARALLEL_MIN_SIZE && nThreads > 1) ? new ForkJoinPool(nThreads) : null;
 
-        Map<Integer, List<int[]>> cellsByDepth = new ConcurrentHashMap<>();
-        AtomicInteger levelCounter = new AtomicInteger(0);
-        recursiveDissectWithBatches(nodes, adj, order, levelCounter, cellsByDepth, 0, pool);
+        // Phase 1: Recursively partition (possibly in parallel) and build a
+        // deterministic tree of cells.  No global level counter is used during
+        // this phase, so thread scheduling cannot affect the result.
+        NDCell root = recursiveDissectWithBatches(nodes, adj, 0, pool);
 
         if (pool != null) pool.shutdown();
 
-        // Fill any unassigned nodes
+        // Phase 2: Walk the tree depth-first (deterministic) to assign levels
+        // and collect cells-by-depth.
+        Map<Integer, List<int[]>> cellsByDepth = new java.util.HashMap<>();
+        int[] levelCounter = {0};
+        assignLevels(root, order, levelCounter, cellsByDepth);
+
+        // Fill any unassigned (isolated / null nodes)
         for (int i = 0; i < n; i++) {
             if (order[i] < 0) {
-                order[i] = levelCounter.getAndIncrement();
+                order[i] = levelCounter[0]++;
             }
         }
 
@@ -290,32 +296,55 @@ public class InertialFlowCutter {
     }
 
     /**
-     * Recursive dissection that also tracks partition cells by depth.
+     * Lightweight tree node representing one recursive dissection step.
+     * Built during the (possibly parallel) partitioning phase without assigning
+     * any global level numbers, so thread scheduling cannot cause non-determinism.
+     */
+    private static class NDCell {
+        final int depth;
+        /** Leaf cell: nodes in this cell (non-null only for leaves). */
+        final int[] leafNodes;
+        /** Interior cell: separator nodes (non-null only for interior). */
+        final int[] separator;
+        /** Interior cell: left / right children (null for leaves). */
+        final NDCell childA;
+        final NDCell childB;
+
+        /** Leaf constructor. */
+        NDCell(int depth, int[] leafNodes) {
+            this.depth = depth;
+            this.leafNodes = leafNodes;
+            this.separator = null;
+            this.childA = null;
+            this.childB = null;
+        }
+
+        /** Interior constructor. */
+        NDCell(int depth, int[] separator, NDCell childA, NDCell childB) {
+            this.depth = depth;
+            this.leafNodes = null;
+            this.separator = separator;
+            this.childA = childA;
+            this.childB = childB;
+        }
+    }
+
+    /**
+     * Recursive dissection that builds a deterministic {@link NDCell} tree.
      * Supports parallel recursion via ForkJoinPool when subgraphs are large enough.
      *
      * <p>Thread-safety for parallel mode: all scratch arrays are indexed by node ID,
      * and concurrent recursive calls operate on disjoint node sets (partitions).
      * Subgraph membership uses generation stamps (no cleanup needed), and boundary
      * generation uses an AtomicInteger counter.
+     *
+     * <p>No global level counter is touched here — level assignment happens in the
+     * sequential {@link #assignLevels} pass, guaranteeing determinism.
      */
-    private void recursiveDissectWithBatches(int[] subNodes, int[][] adj, int[] order,
-                                              AtomicInteger levelCounter,
-                                              Map<Integer, List<int[]>> cellsByDepth,
-                                              int depth, ForkJoinPool pool) {
+    private NDCell recursiveDissectWithBatches(int[] subNodes, int[][] adj,
+                                               int depth, ForkJoinPool pool) {
         if (subNodes.length <= MIN_PARTITION_SIZE) {
-            // Base case: this is a leaf cell
-            int ci = 0;
-            int[] cellOrdered = new int[subNodes.length];
-            for (int node : subNodes) {
-                if (order[node] < 0) {
-                    order[node] = levelCounter.getAndIncrement();
-                    cellOrdered[ci++] = node;
-                }
-            }
-            if (ci > 0) {
-                addCell(cellsByDepth, depth, Arrays.copyOf(cellOrdered, ci));
-            }
-            return;
+            return new NDCell(depth, subNodes);
         }
 
         int[][] result = findSeparator(subNodes, adj);
@@ -323,37 +352,64 @@ public class InertialFlowCutter {
         int[] separator = result[1];
         int[] partB     = result[2];
 
+        NDCell cellA, cellB;
+
         // Recurse into partitions — fork when subgraph is large enough
         if (pool != null && (partA.length + partB.length) >= PARALLEL_MIN_SIZE) {
             // Fork one sub-task, run the other in-line
-            ForkJoinTask<?> taskA = pool.submit(() ->
-                    recursiveDissectWithBatches(partA, adj, order, levelCounter, cellsByDepth, depth + 1, pool));
-            recursiveDissectWithBatches(partB, adj, order, levelCounter, cellsByDepth, depth + 1, pool);
-            taskA.join();
+            ForkJoinTask<NDCell> taskA = pool.submit(() ->
+                    recursiveDissectWithBatches(partA, adj, depth + 1, pool));
+            cellB = recursiveDissectWithBatches(partB, adj, depth + 1, pool);
+            cellA = taskA.join();
         } else {
-            recursiveDissectWithBatches(partA, adj, order, levelCounter, cellsByDepth, depth + 1, pool);
-            recursiveDissectWithBatches(partB, adj, order, levelCounter, cellsByDepth, depth + 1, pool);
+            cellA = recursiveDissectWithBatches(partA, adj, depth + 1, pool);
+            cellB = recursiveDissectWithBatches(partB, adj, depth + 1, pool);
         }
 
-        // Separator nodes form a cell at this depth (must be assigned AFTER both
-        // partitions to ensure separator levels are higher than descendant levels).
-        int[] sepOrdered = new int[separator.length];
+        return new NDCell(depth, separator, cellA, cellB);
+    }
+
+    /**
+     * Deterministic depth-first walk of the {@link NDCell} tree.
+     * Assigns contraction levels (partA first, then partB, then separator)
+     * and collects cells by depth for batch contraction.
+     */
+    private static void assignLevels(NDCell cell, int[] order, int[] levelCounter,
+                                      Map<Integer, List<int[]>> cellsByDepth) {
+        if (cell.leafNodes != null) {
+            // Leaf cell
+            int ci = 0;
+            int[] cellOrdered = new int[cell.leafNodes.length];
+            for (int node : cell.leafNodes) {
+                if (order[node] < 0) {
+                    order[node] = levelCounter[0]++;
+                    cellOrdered[ci++] = node;
+                }
+            }
+            if (ci > 0) {
+                cellsByDepth.computeIfAbsent(cell.depth, k -> new ArrayList<>())
+                        .add(Arrays.copyOf(cellOrdered, ci));
+            }
+            return;
+        }
+
+        // Interior: recurse children first (partA then partB)
+        assignLevels(cell.childA, order, levelCounter, cellsByDepth);
+        assignLevels(cell.childB, order, levelCounter, cellsByDepth);
+
+        // Separator nodes get highest levels at this depth
         int si = 0;
-        for (int node : separator) {
+        int[] sepOrdered = new int[cell.separator.length];
+        for (int node : cell.separator) {
             if (order[node] < 0) {
-                order[node] = levelCounter.getAndIncrement();
+                order[node] = levelCounter[0]++;
                 sepOrdered[si++] = node;
             }
         }
         if (si > 0) {
-            addCell(cellsByDepth, depth, Arrays.copyOf(sepOrdered, si));
+            cellsByDepth.computeIfAbsent(cell.depth, k -> new ArrayList<>())
+                    .add(Arrays.copyOf(sepOrdered, si));
         }
-    }
-
-    /** Thread-safe cell addition to the depth map. */
-    private static void addCell(Map<Integer, List<int[]>> cellsByDepth, int depth, int[] cell) {
-        cellsByDepth.computeIfAbsent(depth, k -> java.util.Collections.synchronizedList(new ArrayList<>()))
-                .add(cell);
     }
 
     /**

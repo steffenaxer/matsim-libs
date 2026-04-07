@@ -582,7 +582,13 @@ public class CHBuilder {
      * </ul>
      */
     private void contractNodesParallel(int[] order, List<List<int[]>> rounds, int nThreads) {
-        ForkJoinPool pool = (nThreads > 1) ? new ForkJoinPool(nThreads) : null;
+        // Parallel contraction of independent ND cells is disabled because cells
+        // share the same graph adjacency structures.  Shortcuts added by one cell
+        // can be visible to another cell's witness search, causing non-deterministic
+        // shortcut creation.  Sequential contraction preserves the same algorithmic
+        // benefits (adaptive contraction, priority reordering, deferred nodes) while
+        // guaranteeing deterministic results.
+        ForkJoinPool pool = null;
 
         // Reuse one WitnessContext per thread across all rounds & tasks.
         ThreadLocal<WitnessContext> tlCtx = ThreadLocal.withInitial(() -> new WitnessContext(nodeCount));
@@ -1958,42 +1964,85 @@ public class CHBuilder {
         int[] oldToNew = new int[buildEdgeCount];
         Arrays.fill(oldToNew, -1);
 
-        // 4. Fill CSR arrays (use upCount/dnCount as cursors, reset to 0 first)
-        int[] upCursor = new int[nodeCount];
-        int[] dnCursor = new int[nodeCount];
+        // 4. Sort build edges deterministically before filling CSR arrays.
+        // Parallel contraction may add shortcuts in non-deterministic order
+        // (different AtomicInteger increments per run).  Sorting each node's
+        // edges by (neighborNode, origLink) ensures the CSR is always identical.
 
-        for (int bi = 0; bi < buildEdgeCount; bi++) {
-            int bBase    = bi * BE_SIZE;
-            int fromNode = buildEdgeData[bBase + BE_FROM];
-            int toNode   = buildEdgeData[bBase + BE_TO];
-            int origLink = buildEdgeData[bBase + BE_ORIG];
-            int lvFrom   = nodeLevel[fromNode];
-            int lvTo     = nodeLevel[toNode];
+        // Collect up-edge build indices per source node, dn-edge per target node.
+        int[][] upBiPerNode = new int[nodeCount][];
+        int[][] dnBiPerNode = new int[nodeCount][];
+        { // scope for temporary arrays
+            int[] upCntTmp = new int[nodeCount];
+            int[] dnCntTmp = new int[nodeCount];
+            for (int bi = 0; bi < buildEdgeCount; bi++) {
+                int bBase = bi * BE_SIZE;
+                int fromNode = buildEdgeData[bBase + BE_FROM];
+                int toNode   = buildEdgeData[bBase + BE_TO];
+                int lvFrom = nodeLevel[fromNode];
+                int lvTo   = nodeLevel[toNode];
+                if (lvFrom < lvTo) upCntTmp[fromNode]++;
+                else if (lvFrom > lvTo) dnCntTmp[toNode]++;
+            }
+            for (int n = 0; n < nodeCount; n++) {
+                if (upCntTmp[n] > 0) upBiPerNode[n] = new int[upCntTmp[n]];
+                if (dnCntTmp[n] > 0) dnBiPerNode[n] = new int[dnCntTmp[n]];
+                upCntTmp[n] = 0;
+                dnCntTmp[n] = 0;
+            }
+            for (int bi = 0; bi < buildEdgeCount; bi++) {
+                int bBase = bi * BE_SIZE;
+                int fromNode = buildEdgeData[bBase + BE_FROM];
+                int toNode   = buildEdgeData[bBase + BE_TO];
+                int lvFrom = nodeLevel[fromNode];
+                int lvTo   = nodeLevel[toNode];
+                if (lvFrom < lvTo) upBiPerNode[fromNode][upCntTmp[fromNode]++] = bi;
+                else if (lvFrom > lvTo) dnBiPerNode[toNode][dnCntTmp[toNode]++] = bi;
+            }
+        }
 
-            if (lvFrom < lvTo) {
-                // Upward edge: gIdx = slot
-                int slot = upOff[fromNode] + upCursor[fromNode]++;
-                int eBase = slot * S;
-                upEdges[eBase + CHGraph.E_NODE] = toNode;
-                upEdges[eBase + CHGraph.E_GIDX] = slot; // contiguous gIdx
-                upWeights[slot] = buildEdgeWeights[bi];
-                edgeOrigLink[slot] = origLink;
-                // lower edges will be remapped after this loop
-                edgeLower1[slot] = buildEdgeData[bBase + BE_LOW1];
-                edgeLower2[slot] = buildEdgeData[bBase + BE_LOW2];
-                oldToNew[bi] = slot;
-            } else if (lvFrom > lvTo) {
-                // Downward edge: gIdx = totalUp + dnSlot
-                int dnSlot = dnOff[toNode] + dnCursor[toNode]++;
-                int gIdx = totalUp + dnSlot;
-                int eBase = dnSlot * S;
-                dnEdges[eBase + CHGraph.E_NODE] = fromNode;
-                dnEdges[eBase + CHGraph.E_GIDX] = gIdx; // contiguous gIdx
-                dnWeights[dnSlot] = buildEdgeWeights[bi];
-                edgeOrigLink[gIdx] = origLink;
-                edgeLower1[gIdx] = buildEdgeData[bBase + BE_LOW1];
-                edgeLower2[gIdx] = buildEdgeData[bBase + BE_LOW2];
-                oldToNew[bi] = gIdx;
+        // Sort each node's edges by (neighborNode, origLink) for determinism.
+        for (int n = 0; n < nodeCount; n++) {
+            if (upBiPerNode[n] != null && upBiPerNode[n].length > 1)
+                sortBuildEdgesBy(upBiPerNode[n], buildEdgeData, BE_SIZE, BE_TO, BE_ORIG);
+            if (dnBiPerNode[n] != null && dnBiPerNode[n].length > 1)
+                sortBuildEdgesBy(dnBiPerNode[n], buildEdgeData, BE_SIZE, BE_FROM, BE_ORIG);
+        }
+
+        // Fill CSR arrays in deterministic sorted order.
+        for (int n = 0; n < nodeCount; n++) {
+            if (upBiPerNode[n] != null) {
+                int off = upOff[n];
+                for (int k = 0; k < upBiPerNode[n].length; k++) {
+                    int bi    = upBiPerNode[n][k];
+                    int bBase = bi * BE_SIZE;
+                    int slot  = off + k;
+                    int eBase = slot * S;
+                    upEdges[eBase + CHGraph.E_NODE] = buildEdgeData[bBase + BE_TO];
+                    upEdges[eBase + CHGraph.E_GIDX] = slot;
+                    upWeights[slot] = buildEdgeWeights[bi];
+                    edgeOrigLink[slot] = buildEdgeData[bBase + BE_ORIG];
+                    edgeLower1[slot] = buildEdgeData[bBase + BE_LOW1];
+                    edgeLower2[slot] = buildEdgeData[bBase + BE_LOW2];
+                    oldToNew[bi] = slot;
+                }
+            }
+            if (dnBiPerNode[n] != null) {
+                int off = dnOff[n];
+                for (int k = 0; k < dnBiPerNode[n].length; k++) {
+                    int bi     = dnBiPerNode[n][k];
+                    int bBase  = bi * BE_SIZE;
+                    int dnSlot = off + k;
+                    int gIdx   = totalUp + dnSlot;
+                    int eBase  = dnSlot * S;
+                    dnEdges[eBase + CHGraph.E_NODE] = buildEdgeData[bBase + BE_FROM];
+                    dnEdges[eBase + CHGraph.E_GIDX] = gIdx;
+                    dnWeights[dnSlot] = buildEdgeWeights[bi];
+                    edgeOrigLink[gIdx] = buildEdgeData[bBase + BE_ORIG];
+                    edgeLower1[gIdx] = buildEdgeData[bBase + BE_LOW1];
+                    edgeLower2[gIdx] = buildEdgeData[bBase + BE_LOW2];
+                    oldToNew[bi] = gIdx;
+                }
             }
         }
 
@@ -2008,8 +2057,9 @@ public class CHBuilder {
         }
 
         // 6. Build topological customization order:
-        // Process build edges in original order (which preserves dependency: lower edges
-        // are created before their parent shortcuts). Map to new gIdx.
+        // Process build edges in node-level order (lower levels first) to ensure
+        // dependencies (lower edges created before parent shortcuts) are preserved.
+        // Within the same level, edges are in deterministic sorted order.
         int[] customizeOrder = new int[totalEdgeCount];
         int orderIdx = 0;
         for (int bi = 0; bi < buildEdgeCount; bi++) {
@@ -2028,6 +2078,39 @@ public class CHBuilder {
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Sorts an array of build-edge indices by (primaryField, secondaryField) of
+     * the build-edge data.  This ensures deterministic CSR filling order
+     * regardless of parallel contraction thread scheduling.
+     */
+    private static void sortBuildEdgesBy(int[] biArray, int[] buildEdgeData,
+                                          int beSize, int primaryField, int secondaryField) {
+        // Pack (primary, secondary, buildIndex) into a long for one-pass sort.
+        long[] keys = new long[biArray.length];
+        for (int i = 0; i < biArray.length; i++) {
+            int bi = biArray[i];
+            int bBase = bi * beSize;
+            int primary   = buildEdgeData[bBase + primaryField];
+            int secondary = buildEdgeData[bBase + secondaryField];
+            // primary in upper 32 bits, secondary as unsigned in lower 32
+            keys[i] = ((long) primary << 32) | (secondary & 0xFFFFFFFFL);
+        }
+        // Co-sort keys and biArray
+        // Simple insertion sort is fine for typical edge counts per node (< 100)
+        for (int i = 1; i < keys.length; i++) {
+            long kv = keys[i];
+            int bv = biArray[i];
+            int j = i - 1;
+            while (j >= 0 && keys[j] > kv) {
+                keys[j + 1] = keys[j];
+                biArray[j + 1] = biArray[j];
+                j--;
+            }
+            keys[j + 1] = kv;
+            biArray[j + 1] = bv;
+        }
+    }
 
     private int addBuildEdge(int from, int to, int origLink,
                              int middle, int lower1, int lower2, double weight) {
