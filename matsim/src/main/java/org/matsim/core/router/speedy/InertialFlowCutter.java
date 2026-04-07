@@ -1619,6 +1619,8 @@ public class InertialFlowCutter {
 
     /**
      * Build symmetric (undirected) adjacency lists from the directed SpeedyGraph.
+     * Uses generation-stamped dedup (O(d) per node) instead of sort-based dedup
+     * (O(d log d) per node) for faster adjacency construction.
      */
     private int[][] buildSymmetricAdjacency() {
         int n = graph.nodeCount;
@@ -1652,20 +1654,27 @@ public class InertialFlowCutter {
             }
         }
 
-        // Deduplicate (remove duplicate neighbor entries)
+        // Deduplicate using generation-stamped approach: O(d) per node instead of O(d log d).
+        // For each node, scan its neighbors and keep only the first occurrence of each.
+        int[] dedupGen = new int[n];
+        int dedupGeneration = 0;
         for (int i = 0; i < n; i++) {
             if (pos[i] == 0) {
                 adj[i] = new int[0];
                 continue;
             }
-            Arrays.sort(adj[i], 0, pos[i]);
-            int unique = 1;
-            for (int j = 1; j < pos[i]; j++) {
-                if (adj[i][j] != adj[i][j - 1]) {
-                    adj[i][unique++] = adj[i][j];
+            dedupGeneration++;
+            int unique = 0;
+            for (int j = 0; j < pos[i]; j++) {
+                int neighbor = adj[i][j];
+                if (dedupGen[neighbor] != dedupGeneration) {
+                    dedupGen[neighbor] = dedupGeneration;
+                    adj[i][unique++] = neighbor;
                 }
             }
-            adj[i] = Arrays.copyOf(adj[i], unique);
+            if (unique < adj[i].length) {
+                adj[i] = Arrays.copyOf(adj[i], unique);
+            }
         }
 
         return adj;
