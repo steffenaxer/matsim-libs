@@ -50,7 +50,7 @@ import java.util.Random;
  * {@code --network} is not specified:
  * <ul>
  *   <li><b>berlin</b> (default) — Berlin v7.0 (~88k nodes, ~200k links)</li>
- *   <li><b>ruhr</b> — Metropole Ruhr v2024 high-res with PT (~532k nodes, ~1.16M links)</li>
+ *   <li><b>duesseldorf</b> — Düsseldorf v1.2 network</li>
  * </ul>
  *
  * <p>Routers benchmarked:
@@ -62,7 +62,7 @@ import java.util.Random;
  * <p>Run with sufficient heap, e.g.:
  * <pre>
  *   java -Xmx8G -cp ... org.matsim.core.router.speedy.RouterBenchmark \
- *        [--network path/to/network.xml.gz | berlin | ruhr] \
+ *        [--network path/to/network.xml.gz | berlin | duesseldorf] \
  *        [--queries 2000] [--warmup 200] [--landmarks 16]
  * </pre>
  *
@@ -98,7 +98,7 @@ public class RouterBenchmark {
                 default -> {
                     System.err.println("Unknown argument: " + args[i]);
                     System.err.println("Usage: java ... RouterBenchmark "
-                            + "[--network <path|berlin|ruhr>] [--queries <n>] [--warmup <n>] [--landmarks <n>]");
+                            + "[--network <path|berlin|duesseldorf>] [--queries <n>] [--warmup <n>] [--landmarks <n>]");
                     System.exit(1);
                 }
             }
@@ -308,7 +308,7 @@ public class RouterBenchmark {
         if (networkPath == null || "berlin".equalsIgnoreCase(networkPath)) {
             return downloadAndLoadNetwork(BERLIN_NETWORK_URL, "berlin-v7.0-network.xml.gz", "Berlin v7.0");
         }
-        if ("duesseldorf".equalsIgnoreCase(networkPath) || "ruhr".equalsIgnoreCase(networkPath)) {
+        if ("duesseldorf".equalsIgnoreCase(networkPath)) {
             return downloadAndLoadNetwork(DUESSELDORF_NETWORK_URL,
                     "duesseldorf-v1.2-network.xml.gz", "Düsseldorf v1.2");
         }
