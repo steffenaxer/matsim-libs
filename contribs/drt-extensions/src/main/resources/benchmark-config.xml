@@ -20,7 +20,28 @@
 		<param name="vehiclesPerHundredAgents" value="1"/>
 
 		<!-- ================================================================== -->
-		<!-- Partitioner Configuration                                          -->
+		<!-- Request Inserter & Insertion Search Configuration                  -->
+		<!-- ================================================================== -->
+
+		<!-- Comma-separated list of request inserter types to benchmark.
+		     Options:
+		       - Default:  Sequential processing (DefaultUnplannedRequestInserter)
+		       - Parallel: Partitioned parallel processing (ParallelUnplannedRequestInserter)
+		     Note: Partitioner/collection period settings only apply to 'Parallel'.
+		-->
+		<param name="requestInserterTypes" value="Default,Parallel"/>
+
+		<!-- Comma-separated list of insertion search strategies to benchmark.
+		     Options:
+		       - Selective:         Fast heuristic (single best insertion per request)
+		       - Extensive:         Evaluates all feasible insertions (higher quality, slower)
+		       - RepeatedSelective: Retries selective search multiple times
+		     Each search strategy is combined with each inserter type (cross-product).
+		-->
+		<param name="insertionSearchStrategies" value="Extensive"/>
+
+		<!-- ================================================================== -->
+		<!-- Partitioner Configuration (only for Parallel inserter type)        -->
 		<!-- ================================================================== -->
 
 		<!-- Vehicle partitioners to test (comma-separated)
@@ -39,7 +60,7 @@
 		<param name="requestPartitioners" value="LoadAware"/>
 
 		<!-- ================================================================== -->
-		<!-- Parallel Inserter Settings                                         -->
+		<!-- Parallel Inserter Settings (only for Parallel inserter type)       -->
 		<!-- ================================================================== -->
 
 		<!-- Collection periods in seconds (comma-separated)
@@ -68,7 +89,7 @@
 		<param name="warmupRuns" value="0"/>
 
 		<!-- Number of measured runs (results averaged) -->
-		<param name="measuredRuns" value="2"/>
+		<param name="measuredRuns" value="1"/>
 
 		<!-- ================================================================== -->
 		<!-- Output Settings                                                    -->
@@ -80,9 +101,13 @@
 		<!-- Enable spatial request-fleet filter (reduces search space) -->
 		<param name="useSpatialFilter" value="true"/>
 
-		<!-- Use CH (Contraction Hierarchies) instead of SpeedyALT for DRT insertion search routing.
-		     Enables faster routing in large networks (e.g. Berlin v7) at the cost of a one-time CH build. -->
-		<param name="useCHForInsertionSearch" value="false"/>
+		<!-- Comma-separated list of detour path calculator types to benchmark.
+		     Options:
+		       - SpeedyALT: Default Dijkstra-based one-to-many router (good for small/medium networks)
+		       - CH:        Contraction Hierarchies (dramatically faster on large networks, one-time build cost)
+		     Each calculator type is combined with each search strategy and inserter type (cross-product).
+		-->
+		<param name="detourPathCalculatorTypes" value="SpeedyALT,CH"/>
 
 		<!-- Optional: URL or local file path to an external MATSim network (xml or xml.gz).
 		     If empty, a synthetic 100x100 grid network is generated automatically.
