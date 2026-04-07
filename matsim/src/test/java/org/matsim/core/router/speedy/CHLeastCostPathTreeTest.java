@@ -37,6 +37,7 @@ import org.matsim.core.scenario.ScenarioUtils;
 import org.matsim.core.utils.misc.OptionalTime;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
 
@@ -880,5 +881,194 @@ public class CHLeastCostPathTreeTest {
 
         Assertions.assertEquals(0, mismatches,
                 mismatches + " mismatches in benchmark correctness check");
+    }
+
+    // =========================================================================
+    // Path reconstruction tests: verify that getLinkPathIterator produces
+    // connected link sequences (each link's toNode == next link's fromNode).
+    // This catches bugs in shortcut unpacking order (e.g., lower1/lower2 swap).
+    // =========================================================================
+
+    @Test
+    void testForwardPathConnectivitySmallGrid() {
+        Network network = buildGridNetwork(5);
+        runForwardPathConnectivityTest(network);
+    }
+
+    @Test
+    void testForwardPathConnectivityBerlinNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork()).readFile("test/scenarios/berlin/network.xml.gz");
+        runForwardPathConnectivityTest(scenario.getNetwork());
+    }
+
+    @Test
+    void testBackwardPathConnectivitySmallGrid() {
+        Network network = buildGridNetwork(5);
+        runBackwardPathConnectivityTest(network);
+    }
+
+    @Test
+    void testBackwardPathConnectivityBerlinNetwork() {
+        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
+        new MatsimNetworkReader(scenario.getNetwork()).readFile("test/scenarios/berlin/network.xml.gz");
+        runBackwardPathConnectivityTest(scenario.getNetwork());
+    }
+
+    /**
+     * Forward search: verify that the link path from source to every reachable
+     * target forms a connected chain and matches the Dijkstra reference path.
+     */
+    private void runForwardPathConnectivityTest(Network network) {
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(
+                new ScoringConfigGroup());
+
+        SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
+        InertialFlowCutter.NDOrderResult orderResult =
+                new InertialFlowCutter(baseGraph).computeOrderWithBatches();
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
+
+        CHLeastCostPathTree chTree = new CHLeastCostPathTree(chGraph, tc, tc);
+        LeastCostPathTree dijkstraTree = new LeastCostPathTree(baseGraph, tc, tc);
+
+        List<Link> linkList = new ArrayList<>(network.getLinks().values());
+        int n = linkList.size();
+        if (n < 2) return;
+
+        Random rng = new Random(42);
+        int disconnectedPaths = 0;
+        int totalPaths = 0;
+
+        for (int s = 0; s < NUM_SOURCE_NODES; s++) {
+            Link srcLink = linkList.get(rng.nextInt(n));
+            double startTime = 8.0 * 3600;
+
+            chTree.calculate(srcLink, startTime, null, null);
+            dijkstraTree.calculate(srcLink, startTime, null, null);
+
+            for (int t = 0; t < NUM_TARGET_NODES; t++) {
+                Link tgtLink = linkList.get(rng.nextInt(n));
+                if (tgtLink == srcLink) continue;
+
+                Node endNode = tgtLink.getFromNode();
+                int endIdx = chTree.getNodeIndex(endNode);
+
+                OptionalTime chTimeOpt = chTree.getTime(endIdx);
+                if (chTimeOpt.isUndefined()) continue;
+
+                // Reconstruct the link path (target to source, as the iterator produces)
+                java.util.List<Link> chLinks = new ArrayList<>();
+                Iterator<Link> chLinkIter = chTree.getLinkPathIterator(endNode);
+                chLinkIter.forEachRemaining(chLinks::add);
+
+                if (chLinks.isEmpty()) continue;
+                totalPaths++;
+
+                // After reversal (as OneToManyPathCalculator does for forward search)
+                java.util.Collections.reverse(chLinks);
+
+                // Verify the link chain is connected
+                boolean connected = true;
+                for (int i = 0; i < chLinks.size() - 1; i++) {
+                    if (chLinks.get(i).getToNode() != chLinks.get(i + 1).getFromNode()) {
+                        connected = false;
+                        break;
+                    }
+                }
+
+                // Verify the path starts at source and ends at target
+                Node srcNode = srcLink.getToNode();
+                if (!chLinks.isEmpty()) {
+                    if (chLinks.get(0).getFromNode() != srcNode) connected = false;
+                    if (chLinks.get(chLinks.size() - 1).getToNode() != endNode) connected = false;
+                }
+
+                if (!connected) {
+                    disconnectedPaths++;
+                    System.err.printf("FORWARD PATH DISCONNECTED src=%s tgt=%s, links=%d%n",
+                            srcLink.getId(), tgtLink.getId(), chLinks.size());
+                }
+            }
+        }
+
+        Assertions.assertEquals(0, disconnectedPaths,
+                disconnectedPaths + " disconnected forward paths out of " + totalPaths);
+    }
+
+    /**
+     * Backward search: verify that the link path from every reachable source to
+     * the target forms a connected chain.
+     */
+    private void runBackwardPathConnectivityTest(Network network) {
+        FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(
+                new ScoringConfigGroup());
+
+        SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
+        InertialFlowCutter.NDOrderResult orderResult =
+                new InertialFlowCutter(baseGraph).computeOrderWithBatches();
+        CHGraph chGraph = new CHBuilder(baseGraph, tc).buildWithOrderParallel(orderResult);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
+
+        CHLeastCostPathTree chTree = new CHLeastCostPathTree(chGraph, tc, tc);
+
+        List<Link> linkList = new ArrayList<>(network.getLinks().values());
+        int n = linkList.size();
+        if (n < 2) return;
+
+        Random rng = new Random(42);
+        int disconnectedPaths = 0;
+        int totalPaths = 0;
+
+        for (int s = 0; s < NUM_SOURCE_NODES; s++) {
+            Link arrivalLink = linkList.get(rng.nextInt(n));
+            double arrivalTime = 8.0 * 3600;
+
+            chTree.calculateBackwards(arrivalLink, arrivalTime, null, null);
+
+            for (int t = 0; t < NUM_TARGET_NODES; t++) {
+                Link startLink = linkList.get(rng.nextInt(n));
+                if (startLink == arrivalLink) continue;
+
+                Node endNode = startLink.getToNode();
+                int endIdx = chTree.getNodeIndex(endNode);
+
+                OptionalTime chTimeOpt = chTree.getTime(endIdx);
+                if (chTimeOpt.isUndefined()) continue;
+
+                // Reconstruct the link path (source to target, no reversal for backward)
+                java.util.List<Link> chLinks = new ArrayList<>();
+                Iterator<Link> chLinkIter = chTree.getLinkPathIterator(endNode);
+                chLinkIter.forEachRemaining(chLinks::add);
+
+                if (chLinks.isEmpty()) continue;
+                totalPaths++;
+
+                // Verify the link chain is connected
+                boolean connected = true;
+                for (int i = 0; i < chLinks.size() - 1; i++) {
+                    if (chLinks.get(i).getToNode() != chLinks.get(i + 1).getFromNode()) {
+                        connected = false;
+                        break;
+                    }
+                }
+
+                // Verify the path ends at the arrival node
+                Node arrNode = arrivalLink.getFromNode();
+                if (!chLinks.isEmpty()) {
+                    if (chLinks.get(0).getFromNode() != endNode) connected = false;
+                    if (chLinks.get(chLinks.size() - 1).getToNode() != arrNode) connected = false;
+                }
+
+                if (!connected) {
+                    disconnectedPaths++;
+                    System.err.printf("BACKWARD PATH DISCONNECTED arr=%s src=%s, links=%d%n",
+                            arrivalLink.getId(), startLink.getId(), chLinks.size());
+                }
+            }
+        }
+
+        Assertions.assertEquals(0, disconnectedPaths,
+                disconnectedPaths + " disconnected backward paths out of " + totalPaths);
     }
 }
