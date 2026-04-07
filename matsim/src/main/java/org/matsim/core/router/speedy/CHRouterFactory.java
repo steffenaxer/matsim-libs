@@ -29,6 +29,7 @@ import org.matsim.core.router.util.LeastCostPathCalculatorFactory;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -87,11 +88,34 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
 
         // Look up or build the contracted CH graph (expensive; cached per network).
         CHGraph chGraph = chGraphCache.computeIfAbsent(baseGraph, key -> {
-            LOG.info("Building CH contraction for network ({} nodes, {} links) – this is a one-time cost.",
-                    baseGraph.nodeCount, baseGraph.linkCount);
+            int nThreads = Runtime.getRuntime().availableProcessors();
+            LOG.info("[CH] Preparing contraction hierarchy for {} nodes, {} links ({} threads)…",
+                    fmt(baseGraph.nodeCount), fmt(baseGraph.linkCount), nThreads);
+
+            long totalStart = System.nanoTime();
+
             InertialFlowCutter.NDOrderResult ndOrder =
                     new InertialFlowCutter(baseGraph).computeOrderWithBatches();
-            return new CHBuilder(baseGraph, travelCosts).buildWithOrderParallel(ndOrder);
+            LOG.info("[CH]   Nested dissection ordering: {}s ({} rounds)",
+                    secs(ndOrder.elapsedNanos), ndOrder.rounds.size());
+
+            CHBuilder builder = new CHBuilder(baseGraph, travelCosts);
+            CHGraph result = builder.buildWithOrderParallel(ndOrder);
+            CHBuilder.BuildStats stats = builder.getLastBuildStats();
+
+            LOG.info("[CH]   Contraction: {}s ({} base + {} shortcuts = {} edges)",
+                    secs(stats.contractionNanos()),
+                    fmt(stats.baseEdges()), fmt(stats.shortcuts()), fmt(stats.totalEdges()));
+            if (stats.deferredNodes() > 0) {
+                LOG.info("[CH]     Deferred {} high-degree nodes → {}s",
+                        fmt(stats.deferredNodes()), secs(stats.deferredNanos()));
+            }
+            LOG.info("[CH]   Overlay graph: {}s", secs(stats.overlayBuildNanos()));
+
+            double totalSecs = (System.nanoTime() - totalStart) / 1_000_000_000.0;
+            LOG.info("[CH] CH preprocessing complete: {}s total",
+                    String.format(Locale.US, "%.1f", totalSecs));
+            return result;
         });
 
         // Customise with time-dependent TTFs (fast O(edges × bins) pass).
@@ -110,6 +134,16 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
         }
 
         return new CHRouterTimeDep(chGraph, travelTimes, travelCosts);
+    }
+
+    /** Formats an integer with thousands separators (e.g. 195,246). */
+    private static String fmt(int n) {
+        return String.format(Locale.US, "%,d", n);
+    }
+
+    /** Formats nanoseconds as seconds with one decimal (e.g. "4.1"). */
+    private static String secs(long nanos) {
+        return String.format(Locale.US, "%.1f", nanos / 1_000_000_000.0);
     }
 
 }

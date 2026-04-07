@@ -84,10 +84,13 @@ public class InertialFlowCutter {
     public static class NDOrderResult {
         public final int[] order;
         public final List<List<int[]>> rounds;
+        /** Wall-clock time spent computing the ordering (nanoseconds). */
+        public final long elapsedNanos;
 
-        NDOrderResult(int[] order, List<List<int[]>> rounds) {
+        NDOrderResult(int[] order, List<List<int[]>> rounds, long elapsedNanos) {
             this.order = order;
             this.rounds = rounds;
+            this.elapsedNanos = elapsedNanos;
         }
     }
 
@@ -112,8 +115,6 @@ public class InertialFlowCutter {
      *  Below this threshold the overhead of task scheduling exceeds the benefit. */
     private static final int PARALLEL_MIN_SIZE = 2000;
 
-    /** Maximum number of threads for parallel recursive dissection. */
-    private static final int MAX_ND_THREADS = 8;
 
     /** Subgraph size threshold below which fewer projection directions are used. */
     private static final int REDUCED_DIRECTIONS_THRESHOLD = 500;
@@ -220,7 +221,7 @@ public class InertialFlowCutter {
             }
         }
 
-        LOG.info("Nested dissection ordering computed for {} nodes", n);
+        LOG.debug("Nested dissection ordering computed for {} nodes", n);
         return order;
     }
 
@@ -236,6 +237,7 @@ public class InertialFlowCutter {
      *         a list of rounds of independent cells.
      */
     public NDOrderResult computeOrderWithBatches() {
+        long startNanos = System.nanoTime();
         int n = graph.nodeCount;
         int[] order = new int[n];
         Arrays.fill(order, -1);
@@ -252,7 +254,7 @@ public class InertialFlowCutter {
         int[][] adj = buildSymmetricAdjacency();
 
         // Use parallel recursion with ForkJoinPool for large graphs.
-        int nThreads = Math.min(Runtime.getRuntime().availableProcessors(), MAX_ND_THREADS);
+        int nThreads = Runtime.getRuntime().availableProcessors();
         ForkJoinPool pool = (count >= PARALLEL_MIN_SIZE && nThreads > 1) ? new ForkJoinPool(nThreads) : null;
 
         Map<Integer, List<int[]>> cellsByDepth = new ConcurrentHashMap<>();
@@ -281,8 +283,10 @@ public class InertialFlowCutter {
             }
         }
 
-        LOG.info("Nested dissection ordering with batches: {} nodes, {} rounds", n, rounds.size());
-        return new NDOrderResult(order, rounds);
+        long elapsed = System.nanoTime() - startNanos;
+        LOG.debug("Nested dissection ordering with batches: {} nodes, {} rounds, {}s",
+                n, rounds.size(), String.format(java.util.Locale.US, "%.1f", elapsed / 1_000_000_000.0));
+        return new NDOrderResult(order, rounds, elapsed);
     }
 
     /**

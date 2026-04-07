@@ -53,6 +53,29 @@ public class CHBuilder {
 
     private static final Logger LOG = LogManager.getLogger(CHBuilder.class);
 
+    /**
+     * Lightweight statistics collected during the CH build, used for concise
+     * summary logging in the caller ({@link CHRouterFactory}).
+     */
+    public record BuildStats(
+            long initEdgesNanos,
+            long contractionNanos,
+            long overlayBuildNanos,
+            int baseEdges,
+            int totalEdges,
+            int deferredNodes,
+            long deferredNanos
+    ) {
+        /** Shortcuts added during contraction. */
+        public int shortcuts() { return totalEdges - baseEdges; }
+    }
+
+    /** Statistics from the last build invocation. */
+    private BuildStats lastBuildStats;
+
+    /** Returns the build statistics collected during the most recent build. */
+    public BuildStats getLastBuildStats() { return lastBuildStats; }
+
     // Build-edge field indices (parallel arrays)
     private static final int BE_FROM  = 0;
     private static final int BE_TO    = 1;
@@ -135,15 +158,11 @@ public class CHBuilder {
      *  active degree is drastically lower. */
     private static final int DEFER_DEGREE_PRODUCT = 1000;
 
-    /** Maximum number of threads to use for parallel contraction.
-     *  Capping this limits memory usage (each thread holds a ~2.5 MB WitnessContext). */
-    private static final int MAX_PARALLEL_THREADS = 8;
-
     /** Number of lock stripes for adjacency-list synchronization.
-     *  Must be a power of two for fast modulo via bitmask.  4096 stripes provide
-     *  low contention with 8 threads while saving ~8 MB vs per-node locks
+     *  Must be a power of two for fast modulo via bitmask.  8192 stripes provide
+     *  low contention even with 32+ threads while saving memory vs per-node locks
      *  on 500k+ node networks. */
-    private static final int ADJ_LOCK_STRIPES = 4096;
+    private static final int ADJ_LOCK_STRIPES = 8192;
 
     private final SpeedyGraph graph;
     private final TravelDisutility td;
@@ -189,15 +208,21 @@ public class CHBuilder {
 
     // Cell membership tracking for adaptive contraction (generation-stamped).
     // cellMemberGen[node] == cellGeneration means node is in the current cell.
-    private int        cellGeneration = 0;
+    // AtomicInteger for thread-safe parallel adaptive cell processing.
+    private final AtomicInteger cellGeneration = new AtomicInteger(0);
     private final int[] cellMemberGen;
 
     // Guard for reestimateCellNeighborsParallel: prevents duplicate processing
     // of the same node (reachable via both out-edges and in-edges).
     // nbrRemovedGen[node] == nbrRemovedGeneration means node was already visited
     // during the current reestimate call.
-    private int        nbrRemovedGeneration = 0;
+    // AtomicInteger for thread-safe parallel adaptive cell processing.
+    private final AtomicInteger nbrRemovedGeneration = new AtomicInteger(0);
     private final int[] nbrRemovedGen;
+
+    // Deferred-node tracking for BuildStats (written by contractNodesParallel)
+    private int  lastDeferredCount;
+    private long lastDeferredNanos;
 
     /**
      * Per-thread witness search state, used for parallel contraction.
@@ -320,13 +345,24 @@ public class CHBuilder {
 
     /** Runs the full CH build pipeline and returns the ready-to-customize graph. */
     public CHGraph build() {
-        LOG.info("CH contraction: importing {} links from base graph ({} nodes)…",
-                graph.linkCount, nodeCount);
+        int baseEdges = graph.linkCount;
+        LOG.debug("CH contraction: importing {} links from base graph ({} nodes)…",
+                baseEdges, nodeCount);
+        long t0 = System.nanoTime();
         initEdges();
-        LOG.info("CH contraction: contracting {} nodes…", nodeCount);
+        long t1 = System.nanoTime();
+
+        LOG.debug("CH contraction: contracting {} nodes…", nodeCount);
         contractNodes();
-        LOG.info("CH contraction: building overlay graph ({} edges)…", buildEdgeCounter.get());
-        return buildCHGraph();
+        long t2 = System.nanoTime();
+
+        LOG.debug("CH contraction: building overlay graph ({} edges)…", buildEdgeCounter.get());
+        CHGraph result = buildCHGraph();
+        long t3 = System.nanoTime();
+
+        this.lastBuildStats = new BuildStats(t1 - t0, t2 - t1, t3 - t2,
+                baseEdges, result.totalEdgeCount, 0, 0);
+        return result;
     }
 
     /**
@@ -344,15 +380,24 @@ public class CHBuilder {
      * @return the ready-to-customize CH graph.
      */
     public CHGraph buildWithOrder(int[] order) {
-        LOG.info("CH contraction (fixed order): importing {} links from base graph ({} nodes)…",
-                graph.linkCount, nodeCount);
+        int baseEdges = graph.linkCount;
+        LOG.debug("CH contraction (fixed order): importing {} links from base graph ({} nodes)…",
+                baseEdges, nodeCount);
+        long t0 = System.nanoTime();
         initEdges();
+        long t1 = System.nanoTime();
 
-        LOG.info("CH contraction (fixed order): contracting {} nodes…", nodeCount);
+        LOG.debug("CH contraction (fixed order): contracting {} nodes…", nodeCount);
         contractNodesInOrder(order);
+        long t2 = System.nanoTime();
 
-        LOG.info("CH contraction (fixed order): building overlay graph ({} edges)…", buildEdgeCounter.get());
-        return buildCHGraph();
+        LOG.debug("CH contraction (fixed order): building overlay graph ({} edges)…", buildEdgeCounter.get());
+        CHGraph result = buildCHGraph();
+        long t3 = System.nanoTime();
+
+        this.lastBuildStats = new BuildStats(t1 - t0, t2 - t1, t3 - t2,
+                baseEdges, result.totalEdgeCount, 0, 0);
+        return result;
     }
 
     /**
@@ -368,17 +413,26 @@ public class CHBuilder {
      * @return the ready-to-customize CH graph.
      */
     public CHGraph buildWithOrderParallel(InertialFlowCutter.NDOrderResult orderResult) {
-        LOG.info("CH contraction (parallel): importing {} links from base graph ({} nodes)…",
-                graph.linkCount, nodeCount);
+        int baseEdges = graph.linkCount;
+        LOG.debug("CH contraction (parallel): importing {} links from base graph ({} nodes)…",
+                baseEdges, nodeCount);
+        long t0 = System.nanoTime();
         initEdges();
+        long t1 = System.nanoTime();
 
-        int nThreads = Math.min(Runtime.getRuntime().availableProcessors(), MAX_PARALLEL_THREADS);
-        LOG.info("CH contraction (parallel): contracting {} nodes with {} rounds, {} threads…",
+        int nThreads = Runtime.getRuntime().availableProcessors();
+        LOG.debug("CH contraction (parallel): contracting {} nodes with {} rounds, {} threads…",
                 nodeCount, orderResult.rounds.size(), nThreads);
         contractNodesParallel(orderResult.order, orderResult.rounds, nThreads);
+        long t2 = System.nanoTime();
 
-        LOG.info("CH contraction (parallel): building overlay graph ({} edges)…", buildEdgeCounter.get());
-        return buildCHGraph();
+        LOG.debug("CH contraction (parallel): building overlay graph ({} edges)…", buildEdgeCounter.get());
+        CHGraph result = buildCHGraph();
+        long t3 = System.nanoTime();
+
+        this.lastBuildStats = new BuildStats(t1 - t0, t2 - t1, t3 - t2,
+                baseEdges, result.totalEdgeCount, lastDeferredCount, lastDeferredNanos);
+        return result;
     }
 
     // ---- per-node adjacency helpers ----
@@ -457,7 +511,7 @@ public class CHBuilder {
             nodeLevel[node]   = levelCounter++;
 
             if (levelCounter % logInterval == 0) {
-                LOG.info("  … contracted {}/{} nodes ({} edges so far)",
+                LOG.debug("  … contracted {}/{} nodes ({} edges so far)",
                         levelCounter, nodeCount, buildEdgeCounter.get());
             }
 
@@ -498,7 +552,7 @@ public class CHBuilder {
             nodeLevel[node]  = level;
 
             if ((level + 1) % logInterval == 0) {
-                LOG.info("  … contracted {}/{} nodes ({} edges so far)",
+                LOG.debug("  … contracted {}/{} nodes ({} edges so far)",
                         level + 1, nodeCount, buildEdgeCounter.get());
             }
         }
@@ -557,13 +611,26 @@ public class CHBuilder {
             // Contract large cells adaptively with iterative priority updates.
             // These cells cause edge explosion; adaptive PQ contraction offsets that
             // risk while intra-node parallelism keeps it fast.
-            for (int[] cell : adaptiveCells) {
-                contractCellAdaptive(cell, order, pool, tlCtx);
+            // Cells within the same round are ND-independent (no edges between them),
+            // so they can be contracted in parallel.
+            if (pool != null && adaptiveCells.size() > 1) {
+                List<ForkJoinTask<?>> adaptiveTasks = new ArrayList<>(adaptiveCells.size());
+                for (int[] cell : adaptiveCells) {
+                    adaptiveTasks.add(pool.submit(() ->
+                            contractCellAdaptive(cell, order, pool, tlCtx)));
+                }
+                for (ForkJoinTask<?> task : adaptiveTasks) {
+                    task.join();
+                }
+            } else {
+                for (int[] cell : adaptiveCells) {
+                    contractCellAdaptive(cell, order, pool, tlCtx);
+                }
             }
 
             // Reorder nodes within each standard ND cell by estimated edge-
             // difference priority (low-priority nodes first).
-            reorderCellsByPriority(standardCells, order);
+            reorderCellsByPriority(standardCells, order, pool, tlCtx);
 
             // Merge very small cells into chunks for better load balancing.
             List<int[]> chunks = mergeSmallCells(standardCells, 500);
@@ -595,7 +662,7 @@ public class CHBuilder {
             }
 
             totalContracted += roundNodes;
-            LOG.info("  … contracted {}/{} nodes ({}%), depth {}/{} ({} edges so far)",
+            LOG.debug("  … contracted {}/{} nodes ({}%), depth {}/{} ({} edges so far)",
                     totalContracted, nodeCount,
                     (int) (100.0 * totalContracted / nodeCount),
                     r + 1, rounds.size(), buildEdgeCounter.get());
@@ -610,10 +677,15 @@ public class CHBuilder {
         for (int n = 0; n < nodeCount; n++) {
             if (!contracted[n]) deferredCount++;
         }
+        this.lastDeferredCount = deferredCount;
         if (deferredCount > 0) {
-            LOG.info("CH contraction (parallel): contracting {} deferred high-degree nodes with PQ…",
+            LOG.debug("CH contraction (parallel): contracting {} deferred high-degree nodes with PQ…",
                     deferredCount);
+            long deferStart = System.nanoTime();
             contractDeferredNodesPQ(deferredCount, pool, tlCtx);
+            this.lastDeferredNanos = System.nanoTime() - deferStart;
+        } else {
+            this.lastDeferredNanos = 0;
         }
 
         if (pool != null) {
@@ -698,7 +770,7 @@ public class CHBuilder {
             contractedCount++;
 
             if (contractedCount % logInterval == 0) {
-                LOG.info("  … deferred: contracted {}/{} nodes ({} edges so far)",
+                LOG.debug("  … deferred: contracted {}/{} nodes ({} edges so far)",
                         contractedCount, deferredCount, buildEdgeCounter.get());
             }
 
@@ -717,7 +789,7 @@ public class CHBuilder {
             }
         }
 
-        LOG.info("  … deferred: contracted {}/{} nodes ({} edges total)",
+        LOG.debug("  … deferred: contracted {}/{} nodes ({} edges total)",
                 contractedCount, deferredCount, buildEdgeCounter.get());
 
         // Remap all node levels to a contiguous permutation [0, nodeCount-1].
@@ -774,23 +846,48 @@ public class CHBuilder {
      * nodes first; their shortcuts then serve as witnesses for the
      * high-degree hubs.
      *
-     * <p>Uses the builder's shared witness state (single-threaded context).
+     * <p>Uses either the builder's shared witness state (single-threaded) or
+     * thread-local WitnessContexts for parallel execution across cells.
      */
-    private void reorderCellsByPriority(List<int[]> cells, int[] order) {
+    private void reorderCellsByPriority(List<int[]> cells, int[] order,
+                                         ForkJoinPool pool,
+                                         ThreadLocal<WitnessContext> tlCtx) {
+        // Phase 0: Identify cells that need reordering and collect their rank bands.
+        List<int[]> largeCells = new ArrayList<>();
+        List<int[]> cellRanks = new ArrayList<>();
         for (int[] cell : cells) {
             if (cell.length < CELL_REORDER_THRESHOLD) continue;
-
-            // 1. Collect current ND ranks for this cell, sorted ascending.
+            largeCells.add(cell);
             int n = cell.length;
             int[] ranks = new int[n];
             for (int i = 0; i < n; i++) ranks[i] = order[cell[i]];
             Arrays.sort(ranks);
+            cellRanks.add(ranks);
+        }
 
-            // 2. Sort cell nodes by estimated priority (ascending).
-            sortCellByPriority(cell);
+        if (largeCells.isEmpty()) return;
 
-            // 3. Reassign ranks: i-th contracted node gets i-th smallest rank.
-            //    This preserves the cell's rank band while matching the new order.
+        // Phase 1: Sort cells by priority (parallel if multiple cells and pool available).
+        if (pool != null && largeCells.size() > 1) {
+            List<ForkJoinTask<?>> tasks = new ArrayList<>(largeCells.size());
+            for (int[] cell : largeCells) {
+                tasks.add(pool.submit(() -> {
+                    WitnessContext ctx = tlCtx.get();
+                    sortCellByPriorityCtx(cell, ctx);
+                }));
+            }
+            for (ForkJoinTask<?> t : tasks) t.join();
+        } else {
+            for (int[] cell : largeCells) {
+                sortCellByPriority(cell);
+            }
+        }
+
+        // Phase 2: Reassign ranks (sequential, cheap).
+        for (int k = 0; k < largeCells.size(); k++) {
+            int[] cell = largeCells.get(k);
+            int[] ranks = cellRanks.get(k);
+            int n = cell.length;
             for (int i = 0; i < n; i++) {
                 order[cell[i]] = ranks[i];
             }
@@ -933,7 +1030,7 @@ public class CHBuilder {
         Arrays.sort(ranks);
 
         // 2. Mark cell membership using generation stamp.
-        int cellGen = ++this.cellGeneration;
+        int cellGen = this.cellGeneration.incrementAndGet();
         for (int node : cellNodes) cellMemberGen[node] = cellGen;
 
         // 3. Estimate initial priorities and insert into PQ.
@@ -944,13 +1041,40 @@ public class CHBuilder {
         DAryMinHeap pq = new DAryMinHeap(nodeCount, 4);
         int[] storedPrio = new int[nodeCount];
         boolean[] inPQ = new boolean[nodeCount];
-        for (int node : cellNodes) {
-            int prio = estimatePriority(node);
-            storedPrio[node] = prio;
-            // Shift priority to non-negative range for the heap (edge-diff can be negative).
-            // Add nodeCount to ensure all values are positive.
-            pq.insert(node, prio + nodeCount);
-            inPQ[node] = true;
+
+        // Parallel initial priority estimation when pool is available and cell is large enough.
+        // Each estimation is read-only on the graph structure (no nodes contracted yet in this cell).
+        if (pool != null && n >= 16) {
+            int[] prios = new int[n];
+            int batchSize = Math.max(1, n / (pool.getParallelism() * 4));
+            List<ForkJoinTask<?>> prioTasks = new ArrayList<>();
+            for (int from = 0; from < n; from += batchSize) {
+                final int start = from;
+                final int end = Math.min(from + batchSize, n);
+                prioTasks.add(pool.submit(() -> {
+                    WitnessContext ctx = tlCtx.get();
+                    for (int i = start; i < end; i++) {
+                        prios[i] = estimatePriorityCtx(cellNodes[i], ctx);
+                    }
+                }));
+            }
+            for (ForkJoinTask<?> t : prioTasks) t.join();
+
+            for (int i = 0; i < n; i++) {
+                int node = cellNodes[i];
+                storedPrio[node] = prios[i];
+                pq.insert(node, prios[i] + nodeCount);
+                inPQ[node] = true;
+            }
+        } else {
+            for (int node : cellNodes) {
+                int prio = estimatePriority(node);
+                storedPrio[node] = prio;
+                // Shift priority to non-negative range for the heap (edge-diff can be negative).
+                // Add nodeCount to ensure all values are positive.
+                pq.insert(node, prio + nodeCount);
+                inPQ[node] = true;
+            }
         }
 
         // 4. Iterative contraction with lazy priority update.
@@ -965,7 +1089,14 @@ public class CHBuilder {
             inPQ[node] = false;
 
             // Lazy update: re-estimate and re-queue if priority increased.
-            int newPrio = estimatePriority(node);
+            // Use ctx-based estimation when pool is available (thread-safe for parallel cells).
+            int newPrio;
+            if (pool != null) {
+                WitnessContext ctx = tlCtx.get();
+                newPrio = estimatePriorityCtx(node, ctx);
+            } else {
+                newPrio = estimatePriority(node);
+            }
             if (newPrio > storedPrio[node]) {
                 storedPrio[node] = newPrio;
                 pq.insert(node, newPrio + nodeCount);
@@ -976,9 +1107,13 @@ public class CHBuilder {
             // Defer high-degree nodes to the final PQ phase.
             if (shouldDefer(node)) continue;
 
-            // Contract this node — use intra-node parallelism for high-degree nodes.
+            // Contract this node — use intra-node parallelism for high-degree nodes,
+            // ctx-based batched contraction for medium nodes, shared state only when sequential.
             if (pool != null && countActiveInDeg(node) >= INTRA_PAR_MIN_IN_DEGREE) {
                 contractNodeIntraParallel(node, pool, tlCtx);
+            } else if (pool != null) {
+                WitnessContext ctx = tlCtx.get();
+                contractNodeBatchedCtx(node, ctx);
             } else {
                 contractNodeBatched(node);
             }
@@ -1027,7 +1162,7 @@ public class CHBuilder {
         // use a generation-stamped guard to deduplicate.
         int nbrCount = 0;
         int[] nbrs = new int[64];
-        int gen = ++this.nbrRemovedGeneration;
+        int gen = this.nbrRemovedGeneration.incrementAndGet();
 
         int[] oArr = outEdges[node];
         int oLen = this.outLen[node];
