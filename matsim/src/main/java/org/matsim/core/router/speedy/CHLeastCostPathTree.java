@@ -83,6 +83,9 @@ public class CHLeastCostPathTree implements ShortestPathTree {
 
     private int currentIteration = Integer.MIN_VALUE;
 
+    /** true after {@link #calculate}, false after {@link #calculateBackwards}. */
+    private boolean lastForwardSearch;
+
     private final DAryMinHeap pq;
 
     // Cached CH arrays for hot-path access
@@ -149,6 +152,7 @@ public class CHLeastCostPathTree implements ShortestPathTree {
 
     public void calculate(Link startLink, double startTime, Person person, Vehicle vehicle,
                           LeastCostPathTree.StopCriterion stopCriterion) {
+        lastForwardSearch = true;
         int startNode = baseGraph.getNodeIndex(startLink.getToNode());
         calculateForward(startNode, startTime, stopCriterion);
     }
@@ -304,6 +308,7 @@ public class CHLeastCostPathTree implements ShortestPathTree {
 
     public void calculateBackwards(Link arrivalLink, double arrivalTime, Person person, Vehicle vehicle,
                                    LeastCostPathTree.StopCriterion stopCriterion) {
+        lastForwardSearch = false;
         int arrivalNode = baseGraph.getNodeIndex(arrivalLink.getFromNode());
         calculateBackwardImpl(arrivalNode, arrivalTime, stopCriterion);
     }
@@ -420,6 +425,10 @@ public class CHLeastCostPathTree implements ShortestPathTree {
         return data[nodeIndex * 3];
     }
 
+    public int getNodeIndex(Node node) {
+        return baseGraph.getNodeIndex(node);
+    }
+
     private double getTimeRaw(int nodeIndex) {
         return data[nodeIndex * 3 + 1];
     }
@@ -517,30 +526,40 @@ public class CHLeastCostPathTree implements ShortestPathTree {
 
         CHLinkPathIterator(Node targetNode) {
             int target = baseGraph.getNodeIndex(targetNode);
-            // Collect all CH edges on the path (from target to source)
+            // Collect all CH edges on the path (from given node toward tree root)
             java.util.List<Integer> edgeGIdxList = new java.util.ArrayList<>();
             int curr = target;
             while (curr >= 0 && iterIds[curr] == currentIteration && comingFrom[curr] >= 0) {
                 edgeGIdxList.add(fromEdgeGIdx[curr]);
                 curr = comingFrom[curr];
             }
-            // Unpack all CH edges to base-graph links
+            // Unpack all CH edges to base-graph links.
+            // For forward searches the iterator walks target→source but the
+            // caller will flat-reverse the list, so each shortcut must be
+            // unpacked in REVERSE order (lower2 before lower1) to keep the
+            // within-shortcut link sequence correct after the outer reversal.
+            // For backward searches no reversal is applied by the caller, so
+            // shortcuts are unpacked in natural order (lower1 before lower2).
             java.util.List<Link> linkList = new java.util.ArrayList<>();
             for (int gIdx : edgeGIdxList) {
-                unpackEdge(gIdx, linkList);
+                unpackEdge(gIdx, linkList, lastForwardSearch);
             }
             links = linkList.toArray(new Link[0]);
             pos = 0;
         }
 
-        private void unpackEdge(int gIdx, java.util.List<Link> linkList) {
+        private void unpackEdge(int gIdx, java.util.List<Link> linkList, boolean reverse) {
             if (gIdx < 0) return;
             int orig = chGraph.edgeOrigLink[gIdx];
             if (orig >= 0) {
                 linkList.add(baseGraph.getLink(orig));
+            } else if (reverse) {
+                // Reverse order: unpack second half first, then first half
+                unpackEdge(chGraph.edgeLower2[gIdx], linkList, true);
+                unpackEdge(chGraph.edgeLower1[gIdx], linkList, true);
             } else {
-                unpackEdge(chGraph.edgeLower1[gIdx], linkList);
-                unpackEdge(chGraph.edgeLower2[gIdx], linkList);
+                unpackEdge(chGraph.edgeLower1[gIdx], linkList, false);
+                unpackEdge(chGraph.edgeLower2[gIdx], linkList, false);
             }
         }
 

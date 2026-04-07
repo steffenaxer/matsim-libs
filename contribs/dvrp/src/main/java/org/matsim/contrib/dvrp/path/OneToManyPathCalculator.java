@@ -86,7 +86,7 @@ class OneToManyPathCalculator {
 			return PathData.EMPTY;
 		} else {
 			Node endNode = getEndNode(toLink);
-			double pathTravelTime = getTravelTime(endNode.getId().index());
+			double pathTravelTime = getTravelTime(dijkstraTree.getNodeIndex(endNode));
 			if (pathTravelTime == Double.POSITIVE_INFINITY) {
 				return PathData.INFEASIBLE;
 			}
@@ -101,7 +101,7 @@ class OneToManyPathCalculator {
 			return PathData.EMPTY;
 		} else {
 			Node endNode = getEndNode(toLink);
-			if (dijkstraTree.getTime(endNode.getId().index()).isUndefined()) {
+			if (dijkstraTree.getTime(dijkstraTree.getNodeIndex(endNode)).isUndefined()) {
 				return PathData.INFEASIBLE;
 			}
 			Path path = createPath(endNode);
@@ -111,7 +111,7 @@ class OneToManyPathCalculator {
 
 	@Nullable
 	Path createPath(Node toNode) {
-		int toNodeIndex = toNode.getId().index();
+		int toNodeIndex = dijkstraTree.getNodeIndex(toNode);
 		double travelTime = getTravelTime(toNodeIndex);
 		if (travelTime == Double.POSITIVE_INFINITY) {
 			return null;
