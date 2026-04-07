@@ -22,6 +22,7 @@ package org.matsim.contrib.drt.optimizer.insertion.extensive;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -134,9 +135,9 @@ public class MultiInsertionDetourPathCalculatorTest {
 		// (unless the stop criterion terminates computations earlier)
 		// If fromLink is in toLinks than PathData.EMPTY is mapped for such a link
 		when(pathSearch.calcPathDataMap(eq(pickupLink), eqSingleLinkCollection(pickupLink),
-				eq(request.getEarliestStartTime()), anyBoolean())).thenReturn(Map.of(pickupLink, PathData.EMPTY));
+				eq(request.getEarliestStartTime()), anyBoolean(), anyDouble())).thenReturn(Map.of(pickupLink, PathData.EMPTY));
 		when(pathSearch.calcPathDataMap(eq(dropoffLink), eqSingleLinkCollection(dropoffLink),
-				eq(request.getLatestArrivalTime()), anyBoolean())).thenReturn(Map.of(dropoffLink, PathData.EMPTY));
+				eq(request.getLatestArrivalTime()), anyBoolean(), anyDouble())).thenReturn(Map.of(dropoffLink, PathData.EMPTY));
 
 		var pickup = insertionPoint(waypoint(pickupLink), waypoint(pickupLink));
 		var dropoff = insertionPoint(waypoint(dropoffLink), waypoint(dropoffLink));
@@ -158,7 +159,7 @@ public class MultiInsertionDetourPathCalculatorTest {
 		var path = new Path(List.of(fromNode, toNode), List.of(), pathTravelTime, pathTravelTime + 1000);
 		var pathData = new PathData(path, 99);
 		when(pathSearch.calcPathDataMap(eq(fromLink), eqSingleLinkCollection(toLink), eq(startTimeArg),
-				eq(forward))).thenReturn(Map.of(toLink, pathData));
+				eq(forward), anyDouble())).thenReturn(Map.of(toLink, pathData));
 		return pathData;
 	}
 

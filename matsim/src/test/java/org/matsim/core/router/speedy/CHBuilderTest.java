@@ -1,3 +1,23 @@
+/* *********************************************************************** *
+ * project: org.matsim.*
+ * CHBuilderTest.java
+ *                                                                         *
+ * *********************************************************************** *
+ *                                                                         *
+ * copyright       : (C) 2025 by the members listed in the COPYING,        *
+ *                   LICENSE and WARRANTY file.                            *
+ * email           : info at matsim dot org                                *
+ *                                                                         *
+ * *********************************************************************** *
+ *                                                                         *
+ *   This program is free software; you can redistribute it and/or modify  *
+ *   it under the terms of the GNU General Public License as published by  *
+ *   the Free Software Foundation; either version 2 of the License, or     *
+ *   (at your option) any later version.                                   *
+ *   See also COPYING, LICENSE and WARRANTY file                           *
+ *                                                                         *
+ * *********************************************************************** */
+
 package org.matsim.core.router.speedy;
 
 import org.junit.jupiter.api.Assertions;
@@ -15,16 +35,18 @@ import org.matsim.core.router.costcalculators.FreespeedTravelTimeAndDisutility;
 import org.matsim.core.scenario.ScenarioUtils;
 
 /**
- * Basic sanity tests for {@link SpeedyCHBuilder}.
+ * Basic sanity tests for {@link CHBuilder}.
+ *
+ * @author Steffen Axer
  */
-public class SpeedyCHBuilderTest {
+public class CHBuilderTest {
 
     @Test
     void testBuildLinearNetwork() {
         Network network = buildLinearNetwork(4);
         FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
         SpeedyGraph g = SpeedyGraphBuilder.build(network);
-        SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).build();
+        CHGraph ch = new CHBuilder(g, tc).build();
 
         Assertions.assertEquals(g.nodeCount, ch.nodeCount);
         Assertions.assertTrue(ch.totalEdgeCount >= g.linkCount,
@@ -48,11 +70,11 @@ public class SpeedyCHBuilderTest {
 
         FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
         SpeedyGraph g = SpeedyGraphBuilder.build(network);
-        SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).build();
-        new SpeedyCHTTFCustomizer().customize(ch, tc, tc);
+        CHGraph ch = new CHBuilder(g, tc).build();
+        new CHTTFCustomizer().customize(ch, tc, tc);
 
-        SpeedyCHTimeDep router = new SpeedyCHTimeDep(ch, tc, tc);
-        SpeedyCHTimeDep.Path path = router.calcLeastCostPath(nA, nC, 0, null, null);
+        CHRouterTimeDep router = new CHRouterTimeDep(ch, tc, tc);
+        CHRouterTimeDep.Path path = router.calcLeastCostPath(nA, nC, 0, null, null);
 
         Assertions.assertNotNull(path, "Path should not be null");
         Assertions.assertEquals(2, path.links.size(), "Expected path A→B→C (2 links)");
@@ -68,7 +90,7 @@ public class SpeedyCHBuilderTest {
 
         FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
         SpeedyGraph g = SpeedyGraphBuilder.build(network);
-        SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).build();
+        CHGraph ch = new CHBuilder(g, tc).build();
         Assertions.assertNotNull(ch);
     }
 

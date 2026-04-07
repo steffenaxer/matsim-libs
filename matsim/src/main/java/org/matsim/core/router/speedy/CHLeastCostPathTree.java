@@ -1,3 +1,22 @@
+/* *********************************************************************** *
+ * project: org.matsim.*
+ * CHLeastCostPathTree.java
+ *                                                                         *
+ * *********************************************************************** *
+ *                                                                         *
+ * copyright       : (C) 2025 by the members listed in the COPYING,        *
+ *                   LICENSE and WARRANTY file.                            *
+ * email           : info at matsim dot org                                *
+ *                                                                         *
+ * *********************************************************************** *
+ *                                                                         *
+ *   This program is free software; you can redistribute it and/or modify  *
+ *   it under the terms of the GNU General Public License as published by  *
+ *   the Free Software Foundation; either version 2 of the License, or     *
+ *   (at your option) any later version.                                   *
+ *   See also COPYING, LICENSE and WARRANTY file                           *
+ *                                                                         *
+ * *********************************************************************** */
 package org.matsim.core.router.speedy;
 
 import org.matsim.api.core.v01.network.Link;
@@ -47,11 +66,11 @@ import java.util.NoSuchElementException;
  * All required memory is pre-allocated in the constructor. This makes the
  * implementation NOT thread-safe.
  *
- * @author Implementation for CCH/CATCHUp router
+ * @author Steffen Axer
  */
-public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
+public class CHLeastCostPathTree implements ShortestPathTree {
 
-    private final SpeedyCHGraph chGraph;
+    private final CHGraph chGraph;
     private final SpeedyGraph baseGraph;
     private final TravelTime tt;
     private final TravelDisutility td;
@@ -75,7 +94,14 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
     private final double[] ttf;
     private final int totalEdgeCount;
 
-    public SpeedyCHLeastCostPathTree(SpeedyCHGraph chGraph, TravelTime tt, TravelDisutility td) {
+    // Reverse CSR arrays for push-based Phase 2 sweep
+    private final int[] dnOutOff, dnOutLen, dnOutEdges;
+    private final double[] dnOutWeights;   // colocated minTTF per dnOut slot
+    private final int[] upInOff, upInLen, upInEdges;
+    private final double[] upInWeights;    // colocated minTTF per upIn slot
+    private final int nodeCount;
+
+    public CHLeastCostPathTree(CHGraph chGraph, TravelTime tt, TravelDisutility td) {
         this.chGraph = chGraph;
         this.baseGraph = chGraph.getBaseGraph();
         this.tt = tt;
@@ -99,6 +125,17 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
         this.sweepOrder = chGraph.sweepOrder;
         this.ttf = chGraph.ttf;
         this.totalEdgeCount = chGraph.totalEdgeCount;
+
+        // Reverse CSR for push-based Phase 2
+        this.dnOutOff = chGraph.dnOutOff;
+        this.dnOutLen = chGraph.dnOutLen;
+        this.dnOutEdges = chGraph.dnOutEdges;
+        this.dnOutWeights = chGraph.dnOutWeights;
+        this.upInOff = chGraph.upInOff;
+        this.upInLen = chGraph.upInLen;
+        this.upInEdges = chGraph.upInEdges;
+        this.upInWeights = chGraph.upInWeights;
+        this.nodeCount = n;
     }
 
     // -------------------------------------------------------------------------
@@ -112,7 +149,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
 
     public void calculate(Link startLink, double startTime, Person person, Vehicle vehicle,
                           LeastCostPathTree.StopCriterion stopCriterion) {
-        int startNode = startLink.getToNode().getId().index();
+        int startNode = baseGraph.getNodeIndex(startLink.getToNode());
         calculateForward(startNode, startTime, stopCriterion);
     }
 
@@ -120,21 +157,32 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
                                   LeastCostPathTree.StopCriterion stopCriterion) {
         advanceIteration();
 
-        final int S = SpeedyCHGraph.E_STRIDE;
-        final int NUM_BINS = SpeedyCHTTFCustomizer.NUM_BINS;
-        final double INV_BIN = SpeedyCHTTFCustomizer.INV_BIN_SIZE;
+        final int S = CHGraph.E_STRIDE;
+        final int NUM_BINS = CHTTFCustomizer.NUM_BINS;
+        final double INV_BIN = CHTTFCustomizer.INV_BIN_SIZE;
 
         // Phase 1: Upward Dijkstra from source
         // Uses time-dependent TTF for travel time; cost = travel time (consistent
-        // with SpeedyCHTimeDep which also uses TTF as the cost metric).
+        // with CHRouterTimeDep which also uses TTF as the cost metric).
         setNode(startNode, 0.0, startTime, 0.0, -1, -1);
         pq.clear();
         pq.insert(startNode, 0.0);
+
+        // Track the cost at which Phase 1 terminates.  All unsettled nodes
+        // have cost ≥ this value (Dijkstra monotonicity), so the sweep only
+        // needs to propagate from nodes with cost < earlyTermCost.
+        double earlyTermCost = Double.POSITIVE_INFINITY;
 
         while (!pq.isEmpty()) {
             int v = pq.poll();
             double cost = getCost(v);
             double arr = getTimeRaw(v);
+
+            if (stopCriterion.stop(baseGraph.getNode(v).getId().index(),
+                    arr, cost, getDistance(v), startTime)) {
+                earlyTermCost = cost;
+                break;
+            }
 
             // Compute time bin for TTF lookup
             int bin = ((int) (arr * INV_BIN)) % NUM_BINS;
@@ -147,7 +195,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
             for (int slot = uOff; slot < uEnd; slot++) {
                 int eBase = slot * S;
                 int w = upEdges[eBase];
-                int gIdx = upEdges[eBase + SpeedyCHGraph.E_GIDX];
+                int gIdx = upEdges[eBase + CHGraph.E_GIDX];
 
                 double tTime = ttf[binOff + gIdx];
                 double newCost = cost + tTime;
@@ -165,34 +213,81 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
             }
         }
 
-        // Phase 2: Downward sweep (highest rank first)
-        for (int i = 0; i < sweepOrder.length; i++) {
-            int w = sweepOrder[i];
+        // Phase 2: Downward propagation.
+        // Always use the linear push-based sweep with cost-bounded pruning.
+        // The linear scan of sweepOrder (decreasing rank) with push semantics
+        // is both simpler and faster than the heap-based lazy approach:
+        //   - No heap overhead (O(1) per node instead of O(log n))
+        //   - Cost-bounded pruning skips nodes/edges beyond earlyTermCost
+        //   - Sequential memory access on sweepOrder (cache-friendly)
+        forwardSweepLinear(S, earlyTermCost);
+    }
 
-            int dOff = dnOff[w];
-            int dEnd = dOff + dnLen[w];
+    /**
+     * Cost-bounded linear push sweep: processes all nodes in decreasing rank
+     * order (via sweepOrder), pushing costs from visited nodes to lower-ranked
+     * successors via the reverse CSR (dnOutEdges).
+     *
+     * <p>Key optimizations over the previous heap-based lazy sweep:
+     * <ul>
+     *   <li><b>No heap overhead</b>: O(1) per node (array iteration) instead of
+     *       O(log n) heap insert/poll.  The linear scan of sweepOrder is extremely
+     *       cache-friendly.</li>
+     *   <li><b>Cost-bounded pruning</b>: nodes with cost ≥ maxCost are skipped,
+     *       preventing propagation beyond the query's time bound.  For bounded
+     *       DRT queries (maxTT=120-300s), this prunes the vast majority of the
+     *       sweep, making it proportional to the reachable set.</li>
+     *   <li><b>Uses minTTF</b>: colocated dnOutWeights for cache locality.</li>
+     * </ul>
+     *
+     * @param S       edge stride (CHGraph.E_STRIDE)
+     * @param maxCost upper bound on useful cost (Phase 1 termination cost);
+     *                Double.POSITIVE_INFINITY for unbounded queries
+     */
+    private void forwardSweepLinear(int S, double maxCost) {
+        final int[] order = sweepOrder;
+        final int n = order.length;
+        final int iter = currentIteration;
+
+        for (int i = 0; i < n; i++) {
+            int u = order[i];
+
+            // Skip nodes not visited (neither settled in Phase 1 nor reached by sweep)
+            if (iterIds[u] != iter) continue;
+
+            double uCost = data[u * 3];         // getCost(u) inlined
+            // Cost pruning: if this node's cost ≥ the bound, every path through
+            // it also exceeds the bound → skip propagation.
+            if (uCost >= maxCost) continue;
+
+            double uArr = data[u * 3 + 1];      // getTimeRaw(u) inlined
+
+            // Push costs along u's outgoing downward edges (u→w, rank(w) < rank(u))
+            int dOff = dnOutOff[u];
+            int dEnd = dOff + dnOutLen[u];
             for (int slot = dOff; slot < dEnd; slot++) {
                 int eBase = slot * S;
-                int u = dnEdges[eBase];
-                int gIdx = dnEdges[eBase + SpeedyCHGraph.E_GIDX];
+                int w = dnOutEdges[eBase];
 
-                if (iterIds[u] != currentIteration) continue;
-
-                double uCost = getCost(u);
-                double uArr = getTimeRaw(u);
-
-                int bin = ((int) (uArr * INV_BIN)) % NUM_BINS;
-                if (bin < 0) bin += NUM_BINS;
-                double tTime = ttf[bin * totalEdgeCount + gIdx];
-
+                // Colocated weight (minTTF) — same cache region as edge data
+                double tTime = dnOutWeights[slot];
                 double newCost = uCost + tTime;
-                double newArr = uArr + tTime;
 
-                double wCost = (iterIds[w] == currentIteration)
-                        ? getCost(w) : Double.POSITIVE_INFINITY;
+                // Edge-level pruning: skip if result exceeds bound
+                if (newCost >= maxCost) continue;
+
+                int wBase = w * 3;
+                double wCost = (iterIds[w] == iter)
+                        ? data[wBase] : Double.POSITIVE_INFINITY;
 
                 if (newCost < wCost) {
-                    setNode(w, newCost, newArr, 0.0, u, gIdx);
+                    // setNode inlined for hot-path performance
+                    data[wBase] = newCost;
+                    data[wBase + 1] = uArr + tTime;
+                    data[wBase + 2] = 0.0;
+                    comingFrom[w] = u;
+                    fromEdgeGIdx[w] = dnOutEdges[eBase + CHGraph.E_GIDX];
+                    iterIds[w] = iter;
                 }
             }
         }
@@ -209,33 +304,40 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
 
     public void calculateBackwards(Link arrivalLink, double arrivalTime, Person person, Vehicle vehicle,
                                    LeastCostPathTree.StopCriterion stopCriterion) {
-        int arrivalNode = arrivalLink.getFromNode().getId().index();
+        int arrivalNode = baseGraph.getNodeIndex(arrivalLink.getFromNode());
         calculateBackwardImpl(arrivalNode, arrivalTime, stopCriterion);
     }
 
     private void calculateBackwardImpl(int targetNode, double arrivalTime,
-                                       LeastCostPathTree.StopCriterion stopCriterion) {
+                                        LeastCostPathTree.StopCriterion stopCriterion) {
         advanceIteration();
 
-        final int S = SpeedyCHGraph.E_STRIDE;
+        final int S = CHGraph.E_STRIDE;
 
         // Phase 1: Backward "upward" Dijkstra from target.
-        // Use dnEdges (edges from higher u → lower w) in reverse:
-        // settle higher-ranked predecessors.
         setNode(targetNode, 0.0, arrivalTime, 0.0, -1, -1);
         pq.clear();
         pq.insert(targetNode, 0.0);
 
+        // Track the cost at which Phase 1 terminates (for sweep pruning).
+        double earlyTermCost = Double.POSITIVE_INFINITY;
+
         while (!pq.isEmpty()) {
             int w = pq.poll();
             double cost = getCost(w);
+
+            if (stopCriterion.stop(baseGraph.getNode(w).getId().index(),
+                    arrivalTime, cost, getDistance(w), getTimeRaw(w))) {
+                earlyTermCost = cost;
+                break;
+            }
 
             int dOff = dnOff[w];
             int dEnd = dOff + dnLen[w];
             for (int slot = dOff; slot < dEnd; slot++) {
                 int eBase = slot * S;
                 int u = dnEdges[eBase];
-                int gIdx = dnEdges[eBase + SpeedyCHGraph.E_GIDX];
+                int gIdx = dnEdges[eBase + CHGraph.E_GIDX];
 
                 double edgeCost = chGraph.minTTF[gIdx];
                 double newCost = cost + edgeCost;
@@ -254,33 +356,57 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
             }
         }
 
-        // Phase 2: Downward sweep (highest rank first)
-        // For backward search, propagate from higher-ranked settled nodes
-        // down to lower-ranked nodes via upEdges (reversed direction).
-        for (int i = 0; i < sweepOrder.length; i++) {
-            int w = sweepOrder[i];
+        // Phase 2: Cost-bounded linear push sweep.
+        backwardSweepLinear(S, earlyTermCost);
+    }
 
-            // Check upEdges[w] = edges w→u (where rank(u) > rank(w)).
-            // Going backward: if u is settled, cost[w] = min(cost[w], cost[u] + weight(w→u))
-            int uOff = upOff[w];
-            int uEnd = uOff + upLen[w];
+    /**
+     * Cost-bounded linear push sweep for backward search.
+     * Pushes costs from visited nodes to lower-ranked predecessors via the
+     * reverse CSR (upInEdges).  Uses minTTF colocated weights.
+     *
+     * @param S       edge stride
+     * @param maxCost upper bound on useful cost
+     */
+    private void backwardSweepLinear(int S, double maxCost) {
+        final int[] order = sweepOrder;
+        final int n = order.length;
+        final int iter = currentIteration;
 
-            double wCost = (iterIds[w] == currentIteration) ? getCost(w) : Double.POSITIVE_INFINITY;
+        for (int i = 0; i < n; i++) {
+            int u = order[i];
 
-            for (int slot = uOff; slot < uEnd; slot++) {
+            if (iterIds[u] != iter) continue;
+
+            double uCost = data[u * 3];         // getCost(u) inlined
+            if (uCost >= maxCost) continue;      // cost-bounded pruning
+
+            double uTime = data[u * 3 + 1];     // getTimeRaw(u) inlined
+
+            // Push cost from u back to lower-ranked w via incoming up-edges (w→u)
+            int iOff = upInOff[u];
+            int iEnd = iOff + upInLen[u];
+            for (int slot = iOff; slot < iEnd; slot++) {
                 int eBase = slot * S;
-                int u = upEdges[eBase]; // higher-ranked toNode
-                int gIdx = upEdges[eBase + SpeedyCHGraph.E_GIDX];
+                int w = upInEdges[eBase];       // lower-ranked source
 
-                if (iterIds[u] != currentIteration) continue;
+                double edgeCost = upInWeights[slot];
+                double newCost = uCost + edgeCost;
 
-                double edgeCost = chGraph.minTTF[gIdx];
-                double newCost = getCost(u) + edgeCost;
+                if (newCost >= maxCost) continue; // edge-level pruning
+
+                int wBase = w * 3;
+                double wCost = (iterIds[w] == iter)
+                        ? data[wBase] : Double.POSITIVE_INFINITY;
 
                 if (newCost < wCost) {
-                    wCost = newCost;
-                    double newTime = getTimeRaw(u) - edgeCost;
-                    setNode(w, newCost, newTime, 0.0, u, gIdx);
+                    // setNode inlined
+                    data[wBase] = newCost;
+                    data[wBase + 1] = uTime - edgeCost;
+                    data[wBase + 2] = 0.0;
+                    comingFrom[w] = u;
+                    fromEdgeGIdx[w] = upInEdges[eBase + CHGraph.E_GIDX];
+                    iterIds[w] = iter;
                 }
             }
         }
@@ -363,7 +489,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
         private int current;
 
         CHPathIterator(Node startNode) {
-            current = startNode.getId().index();
+            current = baseGraph.getNodeIndex(startNode);
         }
 
         @Override
@@ -390,7 +516,7 @@ public class SpeedyCHLeastCostPathTree implements ShortestPathTree {
         private int pos;
 
         CHLinkPathIterator(Node targetNode) {
-            int target = targetNode.getId().index();
+            int target = baseGraph.getNodeIndex(targetNode);
             // Collect all CH edges on the path (from target to source)
             java.util.List<Integer> edgeGIdxList = new java.util.ArrayList<>();
             int curr = target;

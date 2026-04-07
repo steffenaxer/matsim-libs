@@ -109,14 +109,24 @@ public class RunScalabilityBenchmark {
 						final DrtBenchmarkConfigGroup finalConfig = config;
 
 						runner.addScenario(scenarioName, () -> {
-							Controler c = SyntheticBenchmarkScenario.builder()
+							var builder = SyntheticBenchmarkScenario.builder()
 								.agents(finalAgents)
 								.vehicles(finalVehicles)
 								.outputDirectory(outputDir)
-								.build();
+								.matrixCellSize(finalConfig.getMatrixCellSize());
+
+							if (finalConfig.hasExternalNetwork()) {
+								builder.networkUrl(finalConfig.getNetworkUrl());
+							}
+
+							Controler c = builder.build();
 
 							var drtCfg = MultiModeDrtConfigGroup.get(c.getConfig())
 								.getModalElements().iterator().next();
+
+							if (finalConfig.isUseCHForInsertionSearch()) {
+								drtCfg.setUseCHForInsertionSearch(true);
+							}
 
 							DrtParallelInserterParams params = new DrtParallelInserterParams();
 							params.setVehiclesPartitioner(finalVp);
@@ -156,10 +166,13 @@ public class RunScalabilityBenchmark {
 		System.out.println("Collection Periods: " + config.getCollectionPeriods());
 		System.out.println("Max Partitions: " + config.getMaxPartitions());
 		System.out.println("Max Iterations: " + config.getMaxIterations());
+		System.out.println("Matrix Cell Size [m]: " + config.getMatrixCellSize());
 		System.out.println("Warmup Runs: " + config.getWarmupRuns());
 		System.out.println("Measured Runs: " + config.getMeasuredRuns());
 		System.out.println("Output Directory: " + config.getOutputDirectory());
 		System.out.println("Use Spatial Filter: " + config.isUseSpatialFilter());
+		System.out.println("Use CH For Insertion Search: " + config.isUseCHForInsertionSearch());
+		System.out.println("Network URL: " + (config.hasExternalNetwork() ? config.getNetworkUrl() : "(synthetic grid)"));
 		System.out.println("====================================");
 
 		int totalScenarios = config.getAgentCounts().size()

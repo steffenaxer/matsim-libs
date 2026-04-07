@@ -13,10 +13,10 @@ import org.matsim.core.router.AStarLandmarksFactory;
 import org.matsim.core.router.DijkstraFactory;
 import org.matsim.core.router.costcalculators.FreespeedTravelTimeAndDisutility;
 import org.matsim.core.router.speedy.SpeedyALTFactory;
-import org.matsim.core.router.speedy.SpeedyCHBuilder;
-import org.matsim.core.router.speedy.SpeedyCHGraph;
-import org.matsim.core.router.speedy.SpeedyCHTTFCustomizer;
-import org.matsim.core.router.speedy.SpeedyCHTimeDep;
+import org.matsim.core.router.speedy.CHBuilder;
+import org.matsim.core.router.speedy.CHGraph;
+import org.matsim.core.router.speedy.CHTTFCustomizer;
+import org.matsim.core.router.speedy.CHRouterTimeDep;
 import org.matsim.core.router.speedy.SpeedyDijkstra;
 import org.matsim.core.router.speedy.SpeedyGraph;
 import org.matsim.core.router.speedy.SpeedyGraphBuilder;
@@ -35,7 +35,7 @@ import java.util.Random;
  *   <li>AStarLandmarks (classic, with landmark preprocessing)</li>
  *   <li>SpeedyDijkstra (optimised, no preprocessing)</li>
  *   <li>SpeedyALT (optimised A*-Landmarks)</li>
- *   <li>SpeedyCHTimeDep (time-dependent CATCHUp CH router)</li>
+ *   <li>CHRouterTimeDep (time-dependent CATCHUp CH router)</li>
  * </ol>
  *
  * <p>The benchmark generates a configurable N×N bidirectional grid network,
@@ -137,15 +137,15 @@ public class RouterBenchmark {
             benchmark("SpeedyALT", router, nodes, srcIdx, dstIdx, numQueries, prepMs);
         }
 
-        // ---- 5. SpeedyCHTimeDep (CATCHUp) ----
+        // ---- 5. CHRouterTimeDep (CATCHUp) ----
         {
             long t0 = System.nanoTime();
             SpeedyGraph g = SpeedyGraphBuilder.build(network);
-            SpeedyCHGraph chGraph = new SpeedyCHBuilder(g, tc).build();
-            new SpeedyCHTTFCustomizer().customize(chGraph, tc, tc);
-            LeastCostPathCalculator router = new SpeedyCHTimeDep(chGraph, tc, tc);
+            CHGraph chGraph = new CHBuilder(g, tc).build();
+            new CHTTFCustomizer().customize(chGraph, tc, tc);
+            LeastCostPathCalculator router = new CHRouterTimeDep(chGraph, tc, tc);
             long prepMs = ns2ms(System.nanoTime() - t0);
-            benchmark("SpeedyCHTimeDep", router, nodes, srcIdx, dstIdx, numQueries, prepMs);
+            benchmark("CHRouterTimeDep", router, nodes, srcIdx, dstIdx, numQueries, prepMs);
         }
 
         System.out.println();
