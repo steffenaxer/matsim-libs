@@ -420,6 +420,10 @@ public class CHLeastCostPathTree implements ShortestPathTree {
         return data[nodeIndex * 3];
     }
 
+    public int getNodeIndex(Node node) {
+        return baseGraph.getNodeIndex(node);
+    }
+
     private double getTimeRaw(int nodeIndex) {
         return data[nodeIndex * 3 + 1];
     }
