@@ -192,6 +192,13 @@ public class CHBuilder {
     private int        cellGeneration = 0;
     private final int[] cellMemberGen;
 
+    // Guard for reestimateCellNeighborsParallel: prevents duplicate pq.remove()
+    // calls for the same node (reachable via both out-edges and in-edges).
+    // nbrRemovedGen[node] == nbrRemovedGeneration means node was already removed
+    // from the PQ during the current reestimate call.
+    private int        nbrRemovedGeneration = 0;
+    private final int[] nbrRemovedGen;
+
     /**
      * Per-thread witness search state, used for parallel contraction.
      * Each thread gets its own context to avoid sharing mutable state.
@@ -306,6 +313,9 @@ public class CHBuilder {
 
         // Cell membership tracking for adaptive contraction
         this.cellMemberGen = new int[nodeCount];
+
+        // Guard against duplicate pq.remove() in reestimateCellNeighborsParallel
+        this.nbrRemovedGen = new int[nodeCount];
     }
 
     /** Runs the full CH build pipeline and returns the ready-to-customize graph. */
@@ -988,14 +998,20 @@ public class CHBuilder {
      * in the caller has accurate previous-priority information.
      */
     private void reestimateCellNeighbors(int node, int cellGen, DAryMinHeap pq, int[] storedPrio) {
+        // A node can appear as both an out-neighbor and an in-neighbor;
+        // we must call pq.remove() at most once per node to avoid heap
+        // corruption (DAryMinHeap.remove does not reset pos[node]).
+        int gen = ++this.nbrRemovedGeneration;
+
         // Check out-neighbors
         int[] oArr = outEdges[node];
         int oLen = this.outLen[node];
         for (int i = 0; i < oLen; i++) {
             int edgeIdx = oArr[i];
             int w = buildEdgeData[edgeIdx * BE_SIZE + BE_TO];
-            if (!contracted[w] && cellMemberGen[w] == cellGen) {
+            if (!contracted[w] && cellMemberGen[w] == cellGen && nbrRemovedGen[w] != gen) {
                 if (pq.remove(w)) {
+                    nbrRemovedGen[w] = gen;
                     int newPrio = estimatePriority(w);
                     storedPrio[w] = newPrio;
                     pq.insert(w, newPrio + nodeCount);
@@ -1009,8 +1025,9 @@ public class CHBuilder {
         for (int j = 0; j < iLen; j++) {
             int edgeIdx = iArr[j];
             int u = buildEdgeData[edgeIdx * BE_SIZE + BE_FROM];
-            if (!contracted[u] && cellMemberGen[u] == cellGen) {
+            if (!contracted[u] && cellMemberGen[u] == cellGen && nbrRemovedGen[u] != gen) {
                 if (pq.remove(u)) {
+                    nbrRemovedGen[u] = gen;
                     int newPrio = estimatePriority(u);
                     storedPrio[u] = newPrio;
                     pq.insert(u, newPrio + nodeCount);
@@ -1037,14 +1054,21 @@ public class CHBuilder {
                                                   ForkJoinPool pool,
                                                   ThreadLocal<WitnessContext> tlCtx) {
         // Collect neighbors in this cell that are still in the PQ.
+        // A node can appear as both an out-neighbor and an in-neighbor;
+        // we must call pq.remove() at most once per node to avoid heap
+        // corruption (DAryMinHeap.remove does not reset pos[node]).
+        // Use a generation-stamped guard to deduplicate.
         int nbrCount = 0;
         int[] nbrs = new int[64];
+        int gen = ++this.nbrRemovedGeneration;
 
         int[] oArr = outEdges[node];
         int oLen = this.outLen[node];
         for (int i = 0; i < oLen; i++) {
             int w = buildEdgeData[oArr[i] * BE_SIZE + BE_TO];
-            if (!contracted[w] && cellMemberGen[w] == cellGen && pq.remove(w)) {
+            if (!contracted[w] && cellMemberGen[w] == cellGen
+                    && nbrRemovedGen[w] != gen && pq.remove(w)) {
+                nbrRemovedGen[w] = gen;
                 if (nbrCount >= nbrs.length) nbrs = Arrays.copyOf(nbrs, nbrs.length * 2);
                 nbrs[nbrCount++] = w;
             }
@@ -1054,7 +1078,9 @@ public class CHBuilder {
         int iLen = this.inLen[node];
         for (int j = 0; j < iLen; j++) {
             int u = buildEdgeData[iArr[j] * BE_SIZE + BE_FROM];
-            if (!contracted[u] && cellMemberGen[u] == cellGen && pq.remove(u)) {
+            if (!contracted[u] && cellMemberGen[u] == cellGen
+                    && nbrRemovedGen[u] != gen && pq.remove(u)) {
+                nbrRemovedGen[u] = gen;
                 if (nbrCount >= nbrs.length) nbrs = Arrays.copyOf(nbrs, nbrs.length * 2);
                 nbrs[nbrCount++] = u;
             }
