@@ -11,6 +11,7 @@ import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.contrib.common.zones.systems.grid.square.SquareGridZoneSystemParams;
 import org.matsim.contrib.drt.extension.DrtWithExtensionsConfigGroup;
+import org.matsim.contrib.drt.optimizer.insertion.DrtInsertionSearchParams;
 import org.matsim.contrib.drt.optimizer.insertion.selective.SelectiveInsertionSearchParams;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.run.DrtControlerCreator;
@@ -81,6 +82,8 @@ public class SyntheticBenchmarkScenario {
 		private String networkUrl = null;
 		/** Cell size [m] for DVRP travel-time matrix square-grid zones. */
 		private double matrixCellSize = 200.0;
+		/** Insertion search params (default: SelectiveInsertionSearchParams). */
+		private DrtInsertionSearchParams insertionSearchParams = new SelectiveInsertionSearchParams();
 
 		public Builder agents(int n) { this.agents = n; return this; }
 		public Builder vehicles(int n) { this.vehicles = n; return this; }
@@ -92,6 +95,8 @@ public class SyntheticBenchmarkScenario {
 		/** Load an external network from a file path or HTTP/HTTPS URL instead of generating a grid. */
 		public Builder networkUrl(String url) { this.networkUrl = url; return this; }
 		public Builder matrixCellSize(double size) { this.matrixCellSize = size; return this; }
+		/** Set the insertion search params (e.g., ExtensiveInsertionSearchParams). Default: SelectiveInsertionSearchParams. */
+		public Builder insertionSearchParams(DrtInsertionSearchParams params) { this.insertionSearchParams = params; return this; }
 
 		public Controler build() {
 			Path outputPath = Path.of(outputDirectory).toAbsolutePath();
@@ -210,7 +215,7 @@ public class SyntheticBenchmarkScenario {
 			constraints.setMaxTravelTimeBeta(900);
 			constraints.setRejectRequestIfMaxWaitOrTravelTimeViolated(false);
 
-			drtConfig.addParameterSet(new SelectiveInsertionSearchParams());
+			drtConfig.addParameterSet(insertionSearchParams);
 			multiModeDrtConfig.addParameterSet(drtConfig);
 
 			Config config = ConfigUtils.createConfig(multiModeDrtConfig, dvrpConfig);
