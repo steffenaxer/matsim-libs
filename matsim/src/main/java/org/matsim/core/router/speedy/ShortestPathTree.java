@@ -62,6 +62,13 @@ public interface ShortestPathTree {
     void calculateBackwards(Link arrivalLink, double arrivalTime, Person person, Vehicle vehicle,
                             LeastCostPathTree.StopCriterion stopCriterion);
 
+    /**
+     * Returns the internal node index used by this tree for the given MATSim node.
+     * Use this instead of {@code node.getId().index()} when querying tree results via
+     * {@link #getTime(int)}, {@link #getCost(int)}, or {@link #getDistance(int)}.
+     */
+    int getNodeIndex(Node node);
+
     /** Cost to reach the given node from the source (forward) or target (backward). */
     double getCost(int nodeIndex);
 
