@@ -938,10 +938,6 @@ public class CHBuilder {
 
         // 3. Estimate initial priorities and insert into PQ.
         //    Track stored priorities for lazy update comparison.
-        //    We also maintain a boolean[] inPQ to track PQ membership
-        //    explicitly, avoiding DAryMinHeap.remove() which does not
-        //    reset pos[node] after removal and can corrupt the heap
-        //    when called on nodes not actually in the PQ.
         DAryMinHeap pq = new DAryMinHeap(nodeCount, 4);
         int[] storedPrio = new int[nodeCount];
         boolean[] inPQ = new boolean[nodeCount];
@@ -990,8 +986,6 @@ public class CHBuilder {
 
             // Re-estimate priorities of uncontracted neighbors in this cell.
             // The shortcuts just created may change their edge-difference.
-            // Uses decreaseKey + lazy update instead of remove + insert to
-            // avoid DAryMinHeap.remove() which is not safe for this use case.
             reestimateCellNeighborsParallel(node, cellGen, pq, storedPrio, inPQ, pool, tlCtx);
         }
     }
@@ -1002,14 +996,7 @@ public class CHBuilder {
      * <p>Collects all uncontracted cell neighbors that are still in the PQ
      * (tracked by the {@code inPQ} array), re-estimates their priorities
      * (in parallel when a pool is available and there are enough neighbors),
-     * and applies updates using {@code decreaseKey} for decreased priorities.
-     * Increased priorities are handled by updating {@code storedPrio} only —
-     * the lazy update in the caller's poll loop will detect the stale
-     * position and re-insert the node at the correct priority.
-     *
-     * <p>This approach avoids {@code DAryMinHeap.remove()} entirely, which
-     * does not reset {@code pos[node]} after removal and can corrupt the
-     * heap when called on nodes that are no longer in the PQ.
+     * and applies updates using {@code remove + insert} to update the PQ.
      *
      * <p>Parallel re-estimation is critical for late ND depths where separator
      * cells contain hundreds of high-degree hub nodes: each re-estimation
@@ -1072,29 +1059,18 @@ public class CHBuilder {
             for (int i = 0; i < nbrCount; i++) {
                 int w = nbrs[i];
                 int newPrio = newPrios[i];
-                if (newPrio <= storedPrio[w]) {
-                    // Priority decreased or unchanged — use decreaseKey to update in-place.
-                    storedPrio[w] = newPrio;
-                    pq.decreaseKey(w, newPrio + nodeCount);
-                } else {
-                    // Priority increased — just update storedPrio.
-                    // The lazy update in the main loop will detect the stale
-                    // PQ position (node is polled with old lower key) and
-                    // re-insert with the correct higher priority.
-                    storedPrio[w] = newPrio;
-                }
+                storedPrio[w] = newPrio;
+                pq.remove(w);
+                pq.insert(w, newPrio + nodeCount);
             }
         } else {
             // Sequential fallback
             for (int i = 0; i < nbrCount; i++) {
                 int nbr = nbrs[i];
                 int newPrio = estimatePriority(nbr);
-                if (newPrio <= storedPrio[nbr]) {
-                    storedPrio[nbr] = newPrio;
-                    pq.decreaseKey(nbr, newPrio + nodeCount);
-                } else {
-                    storedPrio[nbr] = newPrio;
-                }
+                storedPrio[nbr] = newPrio;
+                pq.remove(nbr);
+                pq.insert(nbr, newPrio + nodeCount);
             }
         }
     }
