@@ -19,9 +19,16 @@
  * *********************************************************************** */
 package org.matsim.core.router.speedy;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
 
 /**
  * Time-dependent customization of a {@link CHGraph} using
@@ -36,9 +43,19 @@ import org.matsim.core.router.util.TravelTime;
  * {@code globalIdx}.  This layout gives sequential memory access when
  * iterating a node's edges in the query (constant bin, contiguous globalIdx).
  *
+ * <h3>Parallelism</h3>
+ * <p>Real edges (original network links) have no inter-edge dependencies and
+ * are processed in parallel using a {@link ForkJoinPool}.  Shortcut edges
+ * depend on their lower edges and are processed sequentially in topological
+ * order.  This two-phase approach parallelizes the most expensive part
+ * (96 {@code getLinkTravelTime} calls per real edge) while maintaining
+ * correctness for shortcuts.
+ *
  * @author Steffen Axer
  */
 public class CHTTFCustomizer {
+
+    private static final Logger LOG = LogManager.getLogger(CHTTFCustomizer.class);
 
     /** Number of time bins covering a full 24-hour day.
      *  Aligned with the MATSim default {@code travelTimeBinSize} of 900 s (15 min)
@@ -57,6 +74,9 @@ public class CHTTFCustomizer {
     /** Time bins sampled per edge in the fingerprint (midnight, 8 AM, 4 PM). */
     private static final int[] FINGERPRINT_BINS = {0, 32, 64};
 
+    /** Minimum number of real edges to trigger parallel processing. */
+    private static final int PARALLEL_REAL_EDGE_THRESHOLD = 200;
+
     public void customize(CHGraph chGraph, TravelTime tt, TravelDisutility td) {
         // Quick-check: sample a few original edges to detect if travel times
         // changed since the last customization.  This avoids the expensive full
@@ -67,6 +87,7 @@ public class CHTTFCustomizer {
             return;
         }
 
+        long customizeStart = System.nanoTime();
         SpeedyGraph baseGraph = chGraph.getBaseGraph();
         int    edgeCount  = chGraph.totalEdgeCount;
         int[]  origLink   = chGraph.edgeOrigLink;
@@ -79,13 +100,53 @@ public class CHTTFCustomizer {
         int[]  order      = chGraph.customizeOrder;
         boolean[] dirty   = new boolean[edgeCount];
 
-        for (int i = 0; i < edgeCount; i++) {
-            int e = order[i];
-            double min = Double.POSITIVE_INFINITY;
+        // Find boundary between real edges and shortcuts in topological order.
+        // Real edges are imported first (by initEdges), so they precede all shortcuts.
+        int realEdgeEnd = 0;
+        while (realEdgeEnd < edgeCount && origLink[order[realEdgeEnd]] >= 0) {
+            realEdgeEnd++;
+        }
 
-            if (origLink[e] >= 0) {
-                // Real edge: sample TravelTime at each bin start
+        // Phase 1: Process real edges — no inter-edge dependencies, fully parallel.
+        // Each real edge reads from TravelTime (thread-safe) and writes to its own
+        // ttf[k * edgeCount + e], dirty[e], ttfHash[e], minTTF[e], weights[e] slots.
+        if (realEdgeEnd >= PARALLEL_REAL_EDGE_THRESHOLD) {
+            int nThreads = Runtime.getRuntime().availableProcessors();
+            int batchSize = Math.max(1, realEdgeEnd / (nThreads * 4));
+            ForkJoinPool pool = ForkJoinPool.commonPool();
+            List<ForkJoinTask<?>> tasks = new ArrayList<>();
+
+            for (int from = 0; from < realEdgeEnd; from += batchSize) {
+                final int start = from;
+                final int end = Math.min(from + batchSize, realEdgeEnd);
+                tasks.add(pool.submit(() -> {
+                    for (int i = start; i < end; i++) {
+                        int e = order[i];
+                        Link link = baseGraph.getLink(origLink[e]);
+                        double min = Double.POSITIVE_INFINITY;
+                        double sum = 0;
+                        for (int k = 0; k < NUM_BINS; k++) {
+                            double t = tt.getLinkTravelTime(link, k * BIN_SIZE, null, null);
+                            ttf[k * edgeCount + e] = t;
+                            sum += t;
+                            if (t < min) min = t;
+                        }
+                        if (sum != ttfHash[e]) {
+                            dirty[e] = true;
+                            ttfHash[e] = sum;
+                        }
+                        minTTF[e] = min;
+                        weights[e] = min;
+                    }
+                }));
+            }
+            for (ForkJoinTask<?> t : tasks) t.join();
+        } else {
+            // Sequential fallback for small graphs
+            for (int i = 0; i < realEdgeEnd; i++) {
+                int e = order[i];
                 Link link = baseGraph.getLink(origLink[e]);
+                double min = Double.POSITIVE_INFINITY;
                 double sum = 0;
                 for (int k = 0; k < NUM_BINS; k++) {
                     double t = tt.getLinkTravelTime(link, k * BIN_SIZE, null, null);
@@ -93,33 +154,40 @@ public class CHTTFCustomizer {
                     sum += t;
                     if (t < min) min = t;
                 }
-                // Check if TTF changed since last customization
                 if (sum != ttfHash[e]) {
                     dirty[e] = true;
                     ttfHash[e] = sum;
                 }
-            } else {
-                // Shortcut: skip recomposition if both lower edges are unchanged
-                int l1 = lower1[e];
-                int l2 = lower2[e];
-                if (!dirty[l1] && !dirty[l2]) {
-                    // TTF unchanged — reuse cached values
-                    continue;
-                }
-                dirty[e] = true;
-                double sum = 0;
-                for (int k = 0; k < NUM_BINS; k++) {
-                    double t1         = ttf[k * edgeCount + l1];
-                    double arrivalSec = k * BIN_SIZE + t1;
-                    int    arrBin     = timeToBin(arrivalSec);
-                    double t2         = ttf[arrBin * edgeCount + l2];
-                    double composed   = t1 + t2;
-                    ttf[k * edgeCount + e] = composed;
-                    sum += composed;
-                    if (composed < min) min = composed;
-                }
-                ttfHash[e] = sum;
+                minTTF[e] = min;
+                weights[e] = min;
             }
+        }
+
+        // Phase 2: Process shortcuts — sequential in topological order (dependencies).
+        for (int i = realEdgeEnd; i < edgeCount; i++) {
+            int e = order[i];
+            double min = Double.POSITIVE_INFINITY;
+
+            // Shortcut: skip recomposition if both lower edges are unchanged
+            int l1 = lower1[e];
+            int l2 = lower2[e];
+            if (!dirty[l1] && !dirty[l2]) {
+                // TTF unchanged — reuse cached values
+                continue;
+            }
+            dirty[e] = true;
+            double sum = 0;
+            for (int k = 0; k < NUM_BINS; k++) {
+                double t1         = ttf[k * edgeCount + l1];
+                double arrivalSec = k * BIN_SIZE + t1;
+                int    arrBin     = timeToBin(arrivalSec);
+                double t2         = ttf[arrBin * edgeCount + l2];
+                double composed   = t1 + t2;
+                ttf[k * edgeCount + e] = composed;
+                sum += composed;
+                if (composed < min) min = composed;
+            }
+            ttfHash[e] = sum;
 
             minTTF[e]  = min;
             weights[e] = min;
@@ -130,6 +198,10 @@ public class CHTTFCustomizer {
 
         // Update the fingerprint so subsequent calls can skip if nothing changed.
         chGraph.customizationFingerprint = computeFingerprint(chGraph, tt);
+
+        LOG.info("[CH] TTF customization: {}s ({} edges, {} bins)",
+                String.format(java.util.Locale.US, "%.1f", (System.nanoTime() - customizeStart) / 1_000_000_000.0),
+                chGraph.totalEdgeCount, NUM_BINS);
     }
 
     /**
@@ -184,31 +256,42 @@ public class CHTTFCustomizer {
      * Copies global edgeWeights into the colocated upWeights/dnWeights arrays
      * so that the query hot-path reads weight from the same cache region as
      * the target-node index.
+     *
+     * <p>The four CSR weight arrays are independent and processed in parallel.
      */
     static void propagateWeightsToCSR(CHGraph chGraph) {
         int S = CHGraph.E_STRIDE;
-        // Upward edges
-        int upTotal = chGraph.upEdgeCount;
-        for (int slot = 0; slot < upTotal; slot++) {
-            int gIdx = chGraph.upEdges[slot * S + CHGraph.E_GIDX];
-            chGraph.upWeights[slot] = chGraph.edgeWeights[gIdx];
-        }
-        // Downward edges
-        int dnTotal = chGraph.dnEdgeCount;
-        for (int slot = 0; slot < dnTotal; slot++) {
-            int gIdx = chGraph.dnEdges[slot * S + CHGraph.E_GIDX];
-            chGraph.dnWeights[slot] = chGraph.edgeWeights[gIdx];
-        }
-        // Reverse CSR: outgoing downward edges
-        for (int slot = 0; slot < chGraph.dnOutWeights.length; slot++) {
-            int gIdx = chGraph.dnOutEdges[slot * S + CHGraph.E_GIDX];
-            chGraph.dnOutWeights[slot] = chGraph.edgeWeights[gIdx];
-        }
-        // Reverse CSR: incoming upward edges
+        double[] ew = chGraph.edgeWeights;
+
+        // Process all four CSR directions in parallel
+        ForkJoinTask<?> upTask = ForkJoinPool.commonPool().submit(() -> {
+            int upTotal = chGraph.upEdgeCount;
+            for (int slot = 0; slot < upTotal; slot++) {
+                int gIdx = chGraph.upEdges[slot * S + CHGraph.E_GIDX];
+                chGraph.upWeights[slot] = ew[gIdx];
+            }
+        });
+        ForkJoinTask<?> dnTask = ForkJoinPool.commonPool().submit(() -> {
+            int dnTotal = chGraph.dnEdgeCount;
+            for (int slot = 0; slot < dnTotal; slot++) {
+                int gIdx = chGraph.dnEdges[slot * S + CHGraph.E_GIDX];
+                chGraph.dnWeights[slot] = ew[gIdx];
+            }
+        });
+        ForkJoinTask<?> dnOutTask = ForkJoinPool.commonPool().submit(() -> {
+            for (int slot = 0; slot < chGraph.dnOutWeights.length; slot++) {
+                int gIdx = chGraph.dnOutEdges[slot * S + CHGraph.E_GIDX];
+                chGraph.dnOutWeights[slot] = ew[gIdx];
+            }
+        });
+        // Process upIn on current thread while others run
         for (int slot = 0; slot < chGraph.upInWeights.length; slot++) {
             int gIdx = chGraph.upInEdges[slot * S + CHGraph.E_GIDX];
-            chGraph.upInWeights[slot] = chGraph.edgeWeights[gIdx];
+            chGraph.upInWeights[slot] = ew[gIdx];
         }
+        upTask.join();
+        dnTask.join();
+        dnOutTask.join();
     }
 
     /**

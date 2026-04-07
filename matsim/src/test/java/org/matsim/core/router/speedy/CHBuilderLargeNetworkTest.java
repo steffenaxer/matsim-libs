@@ -36,47 +36,28 @@ import org.matsim.core.router.costcalculators.FreespeedTravelTimeAndDisutility;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.scenario.ScenarioUtils;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.PrintWriter;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
 /**
- * Large-scale tests and benchmarks for nested-dissection-ordered CH contraction
+ * Large-scale tests for nested-dissection-ordered CH contraction
  * ({@link InertialFlowCutter} + {@link CHBuilder#buildWithOrder}).
  *
- * <p>Benchmarks use <b>SpeedyALT</b> (A* with Landmarks) as the query baseline,
- * since it is the standard production router in MATSim.
- *
- * <p>Tests on real and large synthetic networks to evaluate performance and correctness
+ * <p>Tests on real and large synthetic networks to evaluate correctness
  * at realistic scales:
  * <ul>
  *   <li><b>Real networks</b>: Berlin (11.5k nodes)</li>
  *   <li><b>Synthetic large grids</b>: up to 22,500 nodes with perturbed coordinates</li>
- *   <li><b>Berlin v7.0</b>: ~88k nodes, loaded from URL when accessible</li>
+ *   <li><b>Synthetic hub networks</b>: grids with high-degree PT hub nodes</li>
  * </ul>
- *
- * <p>Results are written to {@code target/ch-benchmark-results.tsv} for post-processing.
  *
  * @author Steffen Axer
  */
 public class CHBuilderLargeNetworkTest {
 
     private static final int    NUM_QUERIES    = 500;
-    private static final int    BENCHMARK_QUERIES = 200;
-    private static final int    ALT_LANDMARKS  = 16;
     private static final double COST_TOLERANCE = 1e-6;
-    private static final String RESULTS_FILE   = "target/ch-benchmark-results.tsv";
 
     // -----------------------------------------------------------------------
     // Correctness tests on real natural road networks
@@ -225,208 +206,6 @@ public class CHBuilderLargeNetworkTest {
     }
 
     // -----------------------------------------------------------------------
-    // Multi-network benchmark (baseline: SpeedyALT)
-    // -----------------------------------------------------------------------
-
-    /**
-     * Comprehensive benchmark comparing ND-ordered CH vs SpeedyALT (production baseline).
-     *
-     * <p>Reports CH build time, edge overhead, and query speedup vs SpeedyALT.
-     * Results are dumped to {@value RESULTS_FILE} as a tab-separated file.
-     */
-    @Test
-    void benchmarkAllNetworks() {
-        List<BenchmarkResult> results = new ArrayList<>();
-
-        results.add(benchmarkNetwork("Berlin-11k",
-                loadNetwork("test/scenarios/berlin/network.xml.gz")));
-        results.add(benchmarkNetwork("Grid-50x50",  buildPerturbedGrid(50, 42)));
-        results.add(benchmarkNetwork("Grid-100x100", buildPerturbedGrid(100, 42)));
-        results.add(benchmarkNetwork("Grid-150x150", buildPerturbedGrid(150, 42)));
-
-        // ---- Console summary ----
-        System.out.println();
-        System.out.println("=== CH Benchmark Results (baseline: SpeedyALT) ===");
-        System.out.printf("%-16s %7s %7s | %8s %8s %8s | %7s | %8s %8s %10s %8s %10s%n",
-                "Network", "Nodes", "Links",
-                "Wit(ms)", "ND(ms)", "Ord(ms)",
-                "EdgeOvh",
-                "ALT(µs)", "CHtd(µs)", "Spd(td)", "CHst(µs)", "Spd(st)");
-        System.out.println("-".repeat(130));
-
-        for (BenchmarkResult r : results) {
-            System.out.printf("%-16s %7d %7d | %8d %8d %8d | %+6.1f%% | %8.0f %8.0f %9.1fx %8.0f %9.1fx%n",
-                    r.name, r.nodes, r.links,
-                    r.witnessBuildMs, r.ndTotalMs, r.ndOrdMs,
-                    r.edgeOverheadPct,
-                    r.altQueryUs, r.chTimeDepQueryUs, r.speedupTimeDepVsALT,
-                    r.chStaticQueryUs, r.speedupStaticVsALT);
-        }
-        System.out.println();
-
-        // ---- Write TSV file ----
-        writeResultsFile(results);
-    }
-
-    // -----------------------------------------------------------------------
-    // Berlin v7.0 download test (when accessible)
-    // -----------------------------------------------------------------------
-
-    /**
-     * Tests the Berlin v7.0 network (~88k nodes) downloaded from the TU Berlin SVN server.
-     *
-     * <p>This test downloads the network from:
-     * {@code https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/berlin/berlin-v7.0/input/berlin-v7.0-network.xml.gz}
-     *
-     * <p>It is skipped if the file cannot be downloaded (e.g. network restrictions).
-     */
-    @Test
-    void testNDCorrectnessBerlinV70Network() {
-        String url = "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/berlin/berlin-v7.0/input/berlin-v7.0-network.xml.gz";
-        java.nio.file.Path localPath = Paths.get("/tmp/berlin-v7.0-network.xml.gz");
-
-        // Download with native Java HTTP client if not already cached
-        if (!Files.exists(localPath) || fileSize(localPath) < 1000) {
-            try {
-                HttpClient client = HttpClient.newBuilder()
-                        .connectTimeout(Duration.ofSeconds(10))
-                        .followRedirects(HttpClient.Redirect.NORMAL)
-                        .build();
-                HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(url))
-                        .timeout(Duration.ofSeconds(60))
-                        .GET()
-                        .build();
-                HttpResponse<InputStream> response = client.send(request,
-                        HttpResponse.BodyHandlers.ofInputStream());
-                if (response.statusCode() != 200) {
-                    System.out.println("SKIPPED: Berlin v7.0 network not accessible (HTTP " + response.statusCode() + ").");
-                    return;
-                }
-                try (InputStream in = response.body()) {
-                    Files.copy(in, localPath, StandardCopyOption.REPLACE_EXISTING);
-                }
-                if (fileSize(localPath) < 1000) {
-                    System.out.println("SKIPPED: Berlin v7.0 network download too small.");
-                    return;
-                }
-            } catch (Exception e) {
-                System.out.println("SKIPPED: Berlin v7.0 network not accessible: " + e.getMessage());
-                return;
-            }
-        }
-
-        // Load and test
-        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
-        try {
-            new MatsimNetworkReader(scenario.getNetwork()).readFile(localPath.toString());
-        } catch (Exception e) {
-            System.out.println("SKIPPED: Berlin v7.0 network could not be parsed: " + e.getMessage());
-            return;
-        }
-
-        Network network = scenario.getNetwork();
-        System.out.printf("Berlin v7.0 network: %,d nodes, %,d links%n",
-                network.getNodes().size(), network.getLinks().size());
-
-        try {
-            // Benchmark + print single-row table
-            BenchmarkResult r = benchmarkNetwork("Berlin-v7.0", network);
-            System.out.printf("  Build: witness=%dms  ND=%dms (ord=%dms)  EdgeOverhead=%+.1f%%%n",
-                    r.witnessBuildMs, r.ndTotalMs, r.ndOrdMs, r.edgeOverheadPct);
-            System.out.printf("  Query: ALT=%.0fµs  CHtd=%.0fµs  CHst=%.0fµs  SpeedupTD=%.1fx  SpeedupST=%.1fx%n",
-                    r.altQueryUs, r.chTimeDepQueryUs, r.chStaticQueryUs,
-                    r.speedupTimeDepVsALT, r.speedupStaticVsALT);
-
-            // Correctness test
-            runCorrectnessTest(network);
-        } catch (OutOfMemoryError e) {
-            System.out.println("SKIPPED: Berlin v7.0 benchmark/correctness test: insufficient heap (" + e.getMessage() + ").");
-        }
-    }
-
-    /**
-     * Düsseldorf v1.2 network (replaces former Metropole Ruhr v2024 stress test).
-     *
-     * <p>This is the stress test for the adaptive contraction feature:
-     * large separator cells with high-degree hub nodes that stressed the
-     * edge explosion prevention mechanism.
-     * Correctness is verified with 500 random OD pairs against Dijkstra.
-     *
-     * <p>Skipped if the download fails or heap is insufficient.
-     */
-    @Test
-    void testNDCorrectnessDuesseldorfNetwork() {
-        String url = "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/duesseldorf/"
-                + "duesseldorf-v1.0/input/duesseldorf-v1.2-network.xml.gz";
-        java.nio.file.Path localPath = Paths.get("/tmp/duesseldorf-v1.2-network.xml.gz");
-
-        // Download with native Java HTTP client if not already cached
-        if (!Files.exists(localPath) || fileSize(localPath) < 1000) {
-            try {
-                HttpClient client = HttpClient.newBuilder()
-                        .connectTimeout(Duration.ofSeconds(10))
-                        .followRedirects(HttpClient.Redirect.NORMAL)
-                        .build();
-                HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(url))
-                        .timeout(Duration.ofSeconds(300))
-                        .GET()
-                        .build();
-                HttpResponse<InputStream> response = client.send(request,
-                        HttpResponse.BodyHandlers.ofInputStream());
-                if (response.statusCode() != 200) {
-                    System.out.println("SKIPPED: Düsseldorf network not accessible (HTTP " + response.statusCode() + ").");
-                    return;
-                }
-                try (InputStream in = response.body()) {
-                    Files.copy(in, localPath, StandardCopyOption.REPLACE_EXISTING);
-                }
-                if (fileSize(localPath) < 1000) {
-                    System.out.println("SKIPPED: Düsseldorf network download too small.");
-                    return;
-                }
-            } catch (Exception e) {
-                System.out.println("SKIPPED: Düsseldorf network not accessible: " + e.getMessage());
-                return;
-            }
-        }
-
-        // Load and test
-        Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
-        try {
-            new MatsimNetworkReader(scenario.getNetwork()).readFile(localPath.toString());
-        } catch (Exception e) {
-            System.out.println("SKIPPED: Düsseldorf network could not be parsed: " + e.getMessage());
-            return;
-        }
-
-        Network network = scenario.getNetwork();
-        System.out.printf("Düsseldorf v1.2 network: %,d nodes, %,d links%n",
-                network.getNodes().size(), network.getLinks().size());
-
-        try {
-            // Correctness test (skip benchmark to save time — focus on verifying
-            // that the CH builds without edge explosion and produces correct routes)
-            runCorrectnessTest(network);
-        } catch (OutOfMemoryError e) {
-            System.out.println("SKIPPED: Düsseldorf correctness test: insufficient heap (" + e.getMessage() + ").");
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Benchmark result record
-    // -----------------------------------------------------------------------
-
-    private record BenchmarkResult(
-            String name, int nodes, int links,
-            long witnessBuildMs, long ndTotalMs, long ndOrdMs, long ndConMs,
-            int witnessEdges, int ndEdges, double edgeOverheadPct,
-            double altQueryUs, double chTimeDepQueryUs, double chStaticQueryUs,
-            double speedupTimeDepVsALT, double speedupStaticVsALT) {
-    }
-
-    // -----------------------------------------------------------------------
     // Helper: run correctness test (compare ND-CH against Dijkstra)
     // -----------------------------------------------------------------------
 
@@ -475,123 +254,6 @@ public class CHBuilderLargeNetworkTest {
 
         Assertions.assertEquals(0, mismatches,
                 mismatches + " cost mismatches out of " + NUM_QUERIES + " queries.");
-    }
-
-    // -----------------------------------------------------------------------
-    // Helper: benchmark a single network (returns structured result)
-    // -----------------------------------------------------------------------
-
-    private BenchmarkResult benchmarkNetwork(String name, Network network) {
-        FreespeedTravelTimeAndDisutility tc =
-                new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
-        int nodeCount = network.getNodes().size();
-        int linkCount = network.getLinks().size();
-
-        // ---- Witness-based CH build ----
-        SpeedyGraph gW = SpeedyGraphBuilder.build(network);
-        new CHBuilder(gW, tc).build(); // warm-up
-        gW = SpeedyGraphBuilder.build(network);
-        long witnessStart = System.nanoTime();
-        CHGraph chW = new CHBuilder(gW, tc).build();
-        long witnessMs = (System.nanoTime() - witnessStart) / 1_000_000;
-
-        // ---- ND-ordered CH build ----
-        SpeedyGraph gN = SpeedyGraphBuilder.build(network);
-        { // warm-up
-            int[] warmOrder = new InertialFlowCutter(gN).computeOrder();
-            new CHBuilder(gN, tc).buildWithOrder(warmOrder);
-        }
-        gN = SpeedyGraphBuilder.build(network);
-        long ndStart = System.nanoTime();
-        int[] order = new InertialFlowCutter(gN).computeOrder();
-        long ndOrdMs = (System.nanoTime() - ndStart) / 1_000_000;
-        long ndConStart = System.nanoTime();
-        CHGraph chN = new CHBuilder(gN, tc).buildWithOrder(order);
-        long ndConMs = (System.nanoTime() - ndConStart) / 1_000_000;
-        long ndTotalMs = (System.nanoTime() - ndStart) / 1_000_000;
-
-        double edgeOverhead = ((double) chN.totalEdgeCount / Math.max(1, chW.totalEdgeCount) - 1) * 100;
-
-        // ---- Setup query routers: ND-CH (time-dep + static) and SpeedyALT ----
-        new CHTTFCustomizer().customize(chN, tc, tc);
-        CHRouterTimeDep ndTimeDep = new CHRouterTimeDep(chN, tc, tc);
-        CHRouter ndStatic = new CHRouter(chN, tc, tc);
-        SpeedyALTData altData = new SpeedyALTData(gN, Math.min(ALT_LANDMARKS, gN.nodeCount), tc, 1);
-        SpeedyALT altRouter = new SpeedyALT(altData, tc, tc);
-
-        // ---- Query benchmark: ND-CH (time-dep + static) vs SpeedyALT ----
-        List<Node> nodeList = new ArrayList<>(network.getNodes().values());
-        int n = nodeList.size();
-        Random rng = new Random(42);
-
-        // Warm up all routers
-        for (int i = 0; i < 20; i++) {
-            Node s = nodeList.get(rng.nextInt(n));
-            Node d = nodeList.get(rng.nextInt(n));
-            ndTimeDep.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            ndStatic.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            altRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-        }
-
-        rng = new Random(123); // fresh seed for timed queries
-        long altTimeNs = 0;
-        long chTimeDepNs = 0;
-        long chStaticNs = 0;
-        for (int i = 0; i < BENCHMARK_QUERIES; i++) {
-            Node s = nodeList.get(rng.nextInt(n));
-            Node d = nodeList.get(rng.nextInt(n));
-
-            long t0 = System.nanoTime();
-            altRouter.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            altTimeNs += System.nanoTime() - t0;
-
-            t0 = System.nanoTime();
-            ndTimeDep.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            chTimeDepNs += System.nanoTime() - t0;
-
-            t0 = System.nanoTime();
-            ndStatic.calcLeastCostPath(s, d, 8.0 * 3600, null, null);
-            chStaticNs += System.nanoTime() - t0;
-        }
-
-        double altQueryUs     = altTimeNs     / (BENCHMARK_QUERIES * 1000.0);
-        double chTimeDepUs    = chTimeDepNs   / (BENCHMARK_QUERIES * 1000.0);
-        double chStaticUs     = chStaticNs    / (BENCHMARK_QUERIES * 1000.0);
-        double speedupTimeDep = (double) altTimeNs / Math.max(1, chTimeDepNs);
-        double speedupStatic  = (double) altTimeNs / Math.max(1, chStaticNs);
-
-        return new BenchmarkResult(name, nodeCount, linkCount,
-                witnessMs, ndTotalMs, ndOrdMs, ndConMs,
-                chW.totalEdgeCount, chN.totalEdgeCount, edgeOverhead,
-                altQueryUs, chTimeDepUs, chStaticUs, speedupTimeDep, speedupStatic);
-    }
-
-    // -----------------------------------------------------------------------
-    // Helper: write results to TSV file
-    // -----------------------------------------------------------------------
-
-    private static void writeResultsFile(List<BenchmarkResult> results) {
-        try {
-            Files.createDirectories(Paths.get("target"));
-            try (PrintWriter pw = new PrintWriter(RESULTS_FILE)) {
-                pw.println("network\tnodes\tlinks\t"
-                        + "witness_build_ms\tnd_total_ms\tnd_ord_ms\tnd_con_ms\t"
-                        + "witness_edges\tnd_edges\tedge_overhead_pct\t"
-                        + "alt_query_us\tch_timedep_query_us\tch_static_query_us\t"
-                        + "speedup_timedep_vs_alt\tspeedup_static_vs_alt");
-                for (BenchmarkResult r : results) {
-                    pw.printf("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.1f\t%.1f\t%.1f\t%.1f\t%.2f\t%.2f%n",
-                            r.name, r.nodes, r.links,
-                            r.witnessBuildMs, r.ndTotalMs, r.ndOrdMs, r.ndConMs,
-                            r.witnessEdges, r.ndEdges, r.edgeOverheadPct,
-                            r.altQueryUs, r.chTimeDepQueryUs, r.chStaticQueryUs,
-                            r.speedupTimeDepVsALT, r.speedupStaticVsALT);
-                }
-            }
-            System.out.println("Results written to " + RESULTS_FILE);
-        } catch (IOException e) {
-            System.err.println("Failed to write results file: " + e.getMessage());
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -673,13 +335,6 @@ public class CHBuilderLargeNetworkTest {
         network.addLink(link);
     }
 
-    private static long fileSize(java.nio.file.Path path) {
-        try {
-            return Files.size(path);
-        } catch (IOException e) {
-            return 0;
-        }
-    }
 
     /**
      * Builds an n×n perturbed grid with additional high-degree hub nodes
