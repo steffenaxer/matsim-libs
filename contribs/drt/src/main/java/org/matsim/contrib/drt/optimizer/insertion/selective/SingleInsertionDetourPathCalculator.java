@@ -39,6 +39,7 @@ import org.matsim.contrib.dvrp.path.VrpPaths;
 import org.matsim.core.mobsim.framework.events.MobsimBeforeCleanupEvent;
 import org.matsim.core.mobsim.framework.listeners.MobsimBeforeCleanupListener;
 import org.matsim.core.router.speedy.SpeedyALTFactory;
+import org.matsim.core.router.speedy.CHRouterFactory;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.router.util.LeastCostPathCalculatorFactory;
@@ -55,6 +56,19 @@ public class SingleInsertionDetourPathCalculator implements MobsimBeforeCleanupL
 
 	public static final int MAX_THREADS = 4;
 
+	/**
+	 * Holder classes for lazy, thread-safe singleton initialization.
+	 * The JVM guarantees that class initialization is atomic — no volatile
+	 * or synchronization needed.
+	 */
+	private static final class CHFactoryHolder {
+		static final CHRouterFactory INSTANCE = new CHRouterFactory();
+	}
+
+	private static final class ALTFactoryHolder {
+		static final SpeedyALTFactory INSTANCE = new SpeedyALTFactory();
+	}
+
 	private final TravelTime travelTime;
 
 	private final LeastCostPathCalculator toPickupPathSearch;
@@ -66,7 +80,8 @@ public class SingleInsertionDetourPathCalculator implements MobsimBeforeCleanupL
 
 	public SingleInsertionDetourPathCalculator(Network network, TravelTime travelTime,
 											   TravelDisutility travelDisutility, DrtConfigGroup drtCfg) {
-		this(network, travelTime, travelDisutility, drtCfg.getNumberOfThreads(), new SpeedyALTFactory());
+		this(network, travelTime, travelDisutility, drtCfg.getNumberOfThreads(),
+				drtCfg.isUseCHForInsertionSearch() ? CHFactoryHolder.INSTANCE : ALTFactoryHolder.INSTANCE);
 	}
 
 	@VisibleForTesting

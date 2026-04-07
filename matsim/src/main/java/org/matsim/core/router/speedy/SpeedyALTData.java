@@ -145,7 +145,7 @@ class SpeedyALTData {
 		Future<double[]>[] trees = new Future[this.landmarksCount * 2];
 		ExecutorService executor = Executors.newFixedThreadPool(threads);
 
-		int firstLandmarkIndex = firstNode.getId().index();
+		int firstLandmarkIndex = graph.getNodeIndex(firstNode);
 		this.landmarksNodeIndices[0] = firstLandmarkIndex;
 		trees[0] = executor.submit(() -> calculateTreeForward(firstLandmarkIndex));
 		trees[1] = executor.submit(() -> calculateTreeBackward(firstLandmarkIndex));
@@ -200,9 +200,9 @@ class SpeedyALTData {
 			data[this.landmarksNodeIndices[i]] = 0;
 		}
 
-		NodeMinHeap pq = new NodeMinHeap(this.graph.nodeCount, i -> data[i], (i, c) -> data[i] = c);
+		DAryMinHeap pq = new DAryMinHeap(this.graph.nodeCount, 6);
 		for (int i = 0; i < existingCount; i++) {
-			pq.insert(this.landmarksNodeIndices[i]);
+			pq.insert(this.landmarksNodeIndices[i], 0);
 		}
 
 		int lastNodeIdx = -1;
@@ -220,11 +220,12 @@ class SpeedyALTData {
 				double oldCost = data[toNode];
 				if (Double.isFinite(oldCost)) {
 					if (newCost < oldCost) {
+						data[toNode] = newCost;
 						pq.decreaseKey(toNode, newCost);
 					}
 				} else {
 					data[toNode] = newCost;
-					pq.insert(toNode);
+					pq.insert(toNode, newCost);
 				}
 			}
 		}
@@ -238,8 +239,8 @@ class SpeedyALTData {
 
 		data[node] = 0;
 
-		NodeMinHeap pq = new NodeMinHeap(this.graph.nodeCount, i -> data[i], (i, c) -> data[i] = c);
-		pq.insert(node);
+		DAryMinHeap pq = new DAryMinHeap(this.graph.nodeCount, 6);
+		pq.insert(node, 0);
 
 		while (!pq.isEmpty()) {
 			final int nodeIdx = pq.poll();
@@ -254,11 +255,12 @@ class SpeedyALTData {
 				double oldCost = data[toNode];
 				if (Double.isFinite(oldCost)) {
 					if (newCost < oldCost) {
+						data[toNode] = newCost;
 						pq.decreaseKey(toNode, newCost);
 					}
 				} else {
 					data[toNode] = newCost;
-					pq.insert(toNode);
+					pq.insert(toNode, newCost);
 				}
 			}
 		}
@@ -277,8 +279,8 @@ class SpeedyALTData {
 
 		data[node] = 0;
 
-		NodeMinHeap pq = new NodeMinHeap(this.graph.nodeCount, i -> data[i], (i, c) -> data[i] = c);
-		pq.insert(node);
+		DAryMinHeap pq = new DAryMinHeap(this.graph.nodeCount, 6);
+		pq.insert(node, 0);
 
 		while (!pq.isEmpty()) {
 			final int nodeIdx = pq.poll();
@@ -293,11 +295,12 @@ class SpeedyALTData {
 				double oldCost = data[fromNode];
 				if (Double.isFinite(oldCost)) {
 					if (newCost < oldCost) {
+						data[fromNode] = newCost;
 						pq.decreaseKey(fromNode, newCost);
 					}
 				} else {
 					data[fromNode] = newCost;
-					pq.insert(fromNode);
+					pq.insert(fromNode, newCost);
 				}
 			}
 		}
@@ -316,8 +319,8 @@ class SpeedyALTData {
 			if (uncoloredNode != null) {
 
 				// the index points to a node with a different index -> colored copy
-				if (uncoloredNode.getId().index() != i) {
-					int uncoloredIndex = uncoloredNode.getId().index();
+				if (graph.getNodeIndex(uncoloredNode) != i) {
+					int uncoloredIndex = graph.getNodeIndex(uncoloredNode);
 					double uncoloredCost = data[uncoloredIndex];
 					double coloredCost = data[i];
 

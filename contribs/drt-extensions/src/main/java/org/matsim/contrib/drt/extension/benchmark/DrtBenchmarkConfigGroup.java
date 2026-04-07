@@ -175,6 +175,7 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 	private static final String MAX_PARTITIONS = "maxPartitions";
 	private static final String MAX_ITERATIONS = "maxIterations";
 	private static final String LOG_PERFORMANCE_STATS = "logPerformanceStats";
+	private static final String MATRIX_CELL_SIZE = "matrixCellSize";
 
 	@Comment("Comma-separated list of collection periods in seconds to test (e.g., '60,90,120')")
 	private String collectionPeriods = "90";
@@ -189,6 +190,11 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 
 	@Comment("Log detailed performance statistics for each partition")
 	private boolean logPerformanceStats = true;
+
+	@Comment("Cell size [m] for the DVRP travel-time matrix square-grid zone system. " +
+		"Larger values reduce matrix zones/memory/time; smaller values increase precision.")
+	@Positive
+	private double matrixCellSize = 200.0;
 
 	@StringGetter(COLLECTION_PERIODS)
 	public String getCollectionPeriodsString() {
@@ -238,6 +244,16 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 		this.logPerformanceStats = logPerformanceStats;
 	}
 
+	@StringGetter(MATRIX_CELL_SIZE)
+	public double getMatrixCellSize() {
+		return matrixCellSize;
+	}
+
+	@StringSetter(MATRIX_CELL_SIZE)
+	public void setMatrixCellSize(double matrixCellSize) {
+		this.matrixCellSize = matrixCellSize;
+	}
+
 	// =========================================================================
 	// Benchmark Settings
 	// =========================================================================
@@ -279,6 +295,8 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 
 	private static final String OUTPUT_DIRECTORY = "outputDirectory";
 	private static final String USE_SPATIAL_FILTER = "useSpatialFilter";
+	private static final String USE_CH_FOR_INSERTION_SEARCH = "useCHForInsertionSearch";
+	private static final String NETWORK_URL = "networkUrl";
 
 	@Comment("Output directory for benchmark results (timestamp subfolder will be created)")
 	@NotBlank
@@ -286,6 +304,14 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 
 	@Comment("Enable spatial request-fleet filter (reduces search space)")
 	private boolean useSpatialFilter = true;
+
+	@Comment("Use CH (Contraction Hierarchies) instead of SpeedyALT for DRT insertion search routing")
+	private boolean useCHForInsertionSearch = false;
+
+	@Comment("URL or file path to a MATSim network file (xml or xml.gz). " +
+		"If empty, a synthetic grid network is generated. " +
+		"Example: https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/berlin/berlin-v7.0/input/berlin-v7.0-network.xml.gz")
+	private String networkUrl = "";
 
 	@StringGetter(OUTPUT_DIRECTORY)
 	public String getOutputDirectory() {
@@ -305,6 +331,30 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter(USE_SPATIAL_FILTER)
 	public void setUseSpatialFilter(boolean useSpatialFilter) {
 		this.useSpatialFilter = useSpatialFilter;
+	}
+
+	@StringGetter(USE_CH_FOR_INSERTION_SEARCH)
+	public boolean isUseCHForInsertionSearch() {
+		return useCHForInsertionSearch;
+	}
+
+	@StringSetter(USE_CH_FOR_INSERTION_SEARCH)
+	public void setUseCHForInsertionSearch(boolean useCHForInsertionSearch) {
+		this.useCHForInsertionSearch = useCHForInsertionSearch;
+	}
+
+	@StringGetter(NETWORK_URL)
+	public String getNetworkUrl() {
+		return networkUrl;
+	}
+
+	@StringSetter(NETWORK_URL)
+	public void setNetworkUrl(String networkUrl) {
+		this.networkUrl = networkUrl;
+	}
+
+	public boolean hasExternalNetwork() {
+		return networkUrl != null && !networkUrl.isBlank();
 	}
 
 	// =========================================================================
@@ -363,10 +413,13 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 		comments.put(COLLECTION_PERIODS, "Collection periods in seconds (comma-separated)");
 		comments.put(MAX_PARTITIONS, "Number of parallel partitions");
 		comments.put(MAX_ITERATIONS, "Max iterations for parallel inserter");
+		comments.put(MATRIX_CELL_SIZE, "Cell size [m] for DVRP TT matrix zones (larger = fewer zones)");
 		comments.put(WARMUP_RUNS, "Number of warmup runs");
 		comments.put(MEASURED_RUNS, "Number of measured runs");
 		comments.put(OUTPUT_DIRECTORY, "Output directory for results");
 		comments.put(USE_SPATIAL_FILTER, "Enable spatial filter");
+		comments.put(USE_CH_FOR_INSERTION_SEARCH, "Use CH (Contraction Hierarchies) instead of SpeedyALT for DRT insertion search routing");
+		comments.put(NETWORK_URL, "URL or file path to a MATSim network (empty = synthetic grid)");
 		return comments;
 	}
 }

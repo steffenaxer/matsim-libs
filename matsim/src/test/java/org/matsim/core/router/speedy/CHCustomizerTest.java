@@ -1,3 +1,23 @@
+/* *********************************************************************** *
+ * project: org.matsim.*
+ * CHCustomizerTest.java
+ *                                                                         *
+ * *********************************************************************** *
+ *                                                                         *
+ * copyright       : (C) 2025 by the members listed in the COPYING,        *
+ *                   LICENSE and WARRANTY file.                            *
+ * email           : info at matsim dot org                                *
+ *                                                                         *
+ * *********************************************************************** *
+ *                                                                         *
+ *   This program is free software; you can redistribute it and/or modify  *
+ *   it under the terms of the GNU General Public License as published by  *
+ *   the Free Software Foundation; either version 2 of the License, or     *
+ *   (at your option) any later version.                                   *
+ *   See also COPYING, LICENSE and WARRANTY file                           *
+ *                                                                         *
+ * *********************************************************************** */
+
 package org.matsim.core.router.speedy;
 
 import org.junit.jupiter.api.Assertions;
@@ -15,9 +35,11 @@ import org.matsim.core.router.costcalculators.FreespeedTravelTimeAndDisutility;
 import org.matsim.core.scenario.ScenarioUtils;
 
 /**
- * Basic sanity tests for {@link SpeedyCHTTFCustomizer}.
+ * Basic sanity tests for {@link CHTTFCustomizer}.
+ *
+ * @author Steffen Axer
  */
-public class SpeedyCHCustomizerTest {
+public class CHCustomizerTest {
 
     @Test
     void testRealEdgeTTFValues() {
@@ -35,14 +57,14 @@ public class SpeedyCHCustomizerTest {
 
         FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
         SpeedyGraph g = SpeedyGraphBuilder.build(network);
-        SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).build();
-        new SpeedyCHTTFCustomizer().customize(ch, tc, tc);
+        CHGraph ch = new CHBuilder(g, tc).build();
+        new CHTTFCustomizer().customize(ch, tc, tc);
 
         Assertions.assertNotNull(ch.ttf,    "ttf array must be populated");
         Assertions.assertNotNull(ch.minTTF, "minTTF array must be populated");
 
         // For freespeed travel time the TTF is constant across all bins.
-        int numBins = SpeedyCHTTFCustomizer.NUM_BINS;
+        int numBins = CHTTFCustomizer.NUM_BINS;
         int edgeCount = ch.totalEdgeCount;
         for (int e = 0; e < edgeCount; e++) {
             int origLink = ch.edgeOrigLink[e];
@@ -79,10 +101,10 @@ public class SpeedyCHCustomizerTest {
 
         FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
         SpeedyGraph g = SpeedyGraphBuilder.build(network);
-        SpeedyCHGraph ch = new SpeedyCHBuilder(g, tc).build();
-        new SpeedyCHTTFCustomizer().customize(ch, tc, tc);
+        CHGraph ch = new CHBuilder(g, tc).build();
+        new CHTTFCustomizer().customize(ch, tc, tc);
 
-        int numBins = SpeedyCHTTFCustomizer.NUM_BINS;
+        int numBins = CHTTFCustomizer.NUM_BINS;
         int edgeCount = ch.totalEdgeCount;
         for (int e = 0; e < edgeCount; e++) {
             int orig   = ch.edgeOrigLink[e];
@@ -91,7 +113,7 @@ public class SpeedyCHCustomizerTest {
             if (orig < 0 && lower1 >= 0 && lower2 >= 0) {
                 for (int k = 0; k < numBins; k++) {
                     double t1       = ch.ttf[k * edgeCount + lower1];
-                    int    arrBin   = SpeedyCHTTFCustomizer.timeToBin(k * SpeedyCHTTFCustomizer.BIN_SIZE + t1);
+                    int    arrBin   = CHTTFCustomizer.timeToBin(k * CHTTFCustomizer.BIN_SIZE + t1);
                     double t2       = ch.ttf[arrBin * edgeCount + lower2];
                     double expected = t1 + t2;
                     Assertions.assertEquals(expected, ch.ttf[k * edgeCount + e], 1e-9,
