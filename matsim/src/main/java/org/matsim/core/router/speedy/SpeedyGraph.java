@@ -100,6 +100,23 @@ public class SpeedyGraph {
         return node.getId().index();
     }
 
+    /**
+     * Returns the internal (spatially ordered) node index for a raw external index
+     * (e.g. from a {@link org.matsim.core.network.turnRestrictions.TurnRestrictionsContext.ColoredNode}).
+     *
+     * @param externalIdx an external node index (as returned by {@code Id.index()} or {@code ColoredNode.index()})
+     * @return the internal node index, or -1 if unmapped
+     */
+    public int getInternalIndex(int externalIdx) {
+        if (nodeReorder != null) {
+            if (externalIdx < 0 || externalIdx >= nodeReorder.length) {
+                return -1;
+            }
+            return nodeReorder[externalIdx];
+        }
+        return externalIdx;
+    }
+
     public LinkIterator getOutLinkIterator() {
         return new OutLinkIterator(this);
     }
