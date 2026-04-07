@@ -257,9 +257,11 @@ public class SpeedyGraphBuilder {
 		if (rangeY < 1e-9) rangeY = 1.0;
 
 		// Step 2: Compute Morton index for each node
-		// Pack (mortonIndex, originalArrayPosition) into a long for sorting.
+		// Pack (mortonIndex, externalIndex) into a long for sorting.
 		// XOR with 0x80000000 converts unsigned→signed order so that
 		// Arrays.sort (signed long) produces correct unsigned morton ordering.
+		// Using the external index (not array position) as tie-breaker ensures
+		// deterministic ordering regardless of HashMap iteration order.
 		long[] mortonKeys = new long[n];
 		for (int i = 0; i < n; i++) {
 			Coord c = coords[i];
@@ -268,18 +270,18 @@ public class SpeedyGraphBuilder {
 			nx = Math.max(0, Math.min(MORTON_COORD_MAX, nx));
 			ny = Math.max(0, Math.min(MORTON_COORD_MAX, ny));
 			int morton = mortonEncode(nx, ny);
-			mortonKeys[i] = ((long) (morton ^ 0x80000000) << 32) | (i & 0xFFFFFFFFL);
+			mortonKeys[i] = ((long) (morton ^ 0x80000000) << 32) | (externalIndices[i] & 0xFFFFFFFFL);
 		}
 
-		// Step 3: Sort by Morton index
+		// Step 3: Sort by Morton index (ties broken by external index)
 		Arrays.sort(mortonKeys);
 
 		// Step 4: Build mapping: externalIdx → dense sorted rank
 		int[] reorder = new int[reorderSize];
 		Arrays.fill(reorder, -1);
 		for (int rank = 0; rank < n; rank++) {
-			int origPos = (int) (mortonKeys[rank] & 0xFFFFFFFFL);
-			reorder[externalIndices[origPos]] = rank;
+			int extIdx = (int) (mortonKeys[rank] & 0xFFFFFFFFL);
+			reorder[extIdx] = rank;
 		}
 
 		return reorder;

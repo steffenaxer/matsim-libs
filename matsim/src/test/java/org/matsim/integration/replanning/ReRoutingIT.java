@@ -130,12 +130,7 @@ public class ReRoutingIT {
 		controler.getConfig().controller().setCreateGraphs(false);
 		controler.getConfig().controller().setDumpDataAtEnd(false);
 		controler.run();
-		// CH router produces valid but non-deterministic routes because
-		// the contraction hierarchy construction is sensitive to node
-		// ordering (spatial Z-order).  Different tie-breaking in the CH
-		// changes initial routes which cascades through the iterative
-		// simulation.  We therefore only verify the simulation completes
-		// without errors rather than comparing against a golden reference.
+		this.evaluate("plans_CH.xml.gz");
 	}
 
 	private void evaluate() throws MalformedURLException {
