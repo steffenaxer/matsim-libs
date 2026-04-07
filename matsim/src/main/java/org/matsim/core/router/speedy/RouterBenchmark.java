@@ -77,9 +77,8 @@ public class RouterBenchmark {
                     + "berlin-v7.0/input/berlin-v7.0-network.xml.gz";
 
     private static final String RUHR_NETWORK_URL =
-            "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/metropole-ruhr/"
-                    + "metropole-ruhr-v2024/metropole-ruhr-v2024.0/input/"
-                    + "metropole-ruhr-v2024.1-network_resolutionHigh-with-pt.xml.gz";
+            "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/duesseldorf/"
+                    + "duesseldorf-v1.0/input/duesseldorf-v1.2-network.xml.gz";
 
     private static int warmupQueries    = 200;
     private static int benchmarkQueries = 2_000;
@@ -311,7 +310,7 @@ public class RouterBenchmark {
         }
         if ("ruhr".equalsIgnoreCase(networkPath)) {
             return downloadAndLoadNetwork(RUHR_NETWORK_URL,
-                    "metropole-ruhr-v2024.1-network_resolutionHigh-with-pt.xml.gz", "Metropole Ruhr v2024");
+                    "duesseldorf-v1.2-network.xml.gz", "Düsseldorf v1.2");
         }
         System.out.println("Loading network from " + networkPath + " ...");
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());

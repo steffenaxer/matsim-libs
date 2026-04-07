@@ -346,21 +346,20 @@ public class CHBuilderLargeNetworkTest {
     }
 
     /**
-     * Metropole Ruhr v2024 high-res with PT (~532k nodes, ~1.16M links).
+     * Düsseldorf v1.2 network (replaces former Metropole Ruhr v2024 stress test).
      *
      * <p>This is the stress test for the adaptive contraction feature:
-     * the large separator cells with high-degree PT hub nodes caused cascading
-     * edge explosion (1.2M → 4M edges in one round) before the fix.
+     * large separator cells with high-degree hub nodes that stressed the
+     * edge explosion prevention mechanism.
      * Correctness is verified with 500 random OD pairs against Dijkstra.
      *
      * <p>Skipped if the download fails or heap is insufficient.
      */
     @Test
-    void testNDCorrectnessRuhrNetwork() {
-        String url = "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/metropole-ruhr/"
-                + "metropole-ruhr-v2024/metropole-ruhr-v2024.0/input/"
-                + "metropole-ruhr-v2024.1-network_resolutionHigh-with-pt.xml.gz";
-        java.nio.file.Path localPath = Paths.get("/tmp/ruhr-v2024-network.xml.gz");
+    void testNDCorrectnessDuesseldorfNetwork() {
+        String url = "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/duesseldorf/"
+                + "duesseldorf-v1.0/input/duesseldorf-v1.2-network.xml.gz";
+        java.nio.file.Path localPath = Paths.get("/tmp/duesseldorf-v1.2-network.xml.gz");
 
         // Download with native Java HTTP client if not already cached
         if (!Files.exists(localPath) || fileSize(localPath) < 1000) {
@@ -377,18 +376,18 @@ public class CHBuilderLargeNetworkTest {
                 HttpResponse<InputStream> response = client.send(request,
                         HttpResponse.BodyHandlers.ofInputStream());
                 if (response.statusCode() != 200) {
-                    System.out.println("SKIPPED: Ruhr network not accessible (HTTP " + response.statusCode() + ").");
+                    System.out.println("SKIPPED: Düsseldorf network not accessible (HTTP " + response.statusCode() + ").");
                     return;
                 }
                 try (InputStream in = response.body()) {
                     Files.copy(in, localPath, StandardCopyOption.REPLACE_EXISTING);
                 }
                 if (fileSize(localPath) < 1000) {
-                    System.out.println("SKIPPED: Ruhr network download too small.");
+                    System.out.println("SKIPPED: Düsseldorf network download too small.");
                     return;
                 }
             } catch (Exception e) {
-                System.out.println("SKIPPED: Ruhr network not accessible: " + e.getMessage());
+                System.out.println("SKIPPED: Düsseldorf network not accessible: " + e.getMessage());
                 return;
             }
         }
@@ -398,12 +397,12 @@ public class CHBuilderLargeNetworkTest {
         try {
             new MatsimNetworkReader(scenario.getNetwork()).readFile(localPath.toString());
         } catch (Exception e) {
-            System.out.println("SKIPPED: Ruhr network could not be parsed: " + e.getMessage());
+            System.out.println("SKIPPED: Düsseldorf network could not be parsed: " + e.getMessage());
             return;
         }
 
         Network network = scenario.getNetwork();
-        System.out.printf("Ruhr v2024 network: %,d nodes, %,d links%n",
+        System.out.printf("Düsseldorf v1.2 network: %,d nodes, %,d links%n",
                 network.getNodes().size(), network.getLinks().size());
 
         try {
@@ -411,7 +410,7 @@ public class CHBuilderLargeNetworkTest {
             // that the CH builds without edge explosion and produces correct routes)
             runCorrectnessTest(network);
         } catch (OutOfMemoryError e) {
-            System.out.println("SKIPPED: Ruhr correctness test: insufficient heap (" + e.getMessage() + ").");
+            System.out.println("SKIPPED: Düsseldorf correctness test: insufficient heap (" + e.getMessage() + ").");
         }
     }
 

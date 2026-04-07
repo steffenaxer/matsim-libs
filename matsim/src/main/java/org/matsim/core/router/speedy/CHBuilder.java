@@ -139,6 +139,12 @@ public class CHBuilder {
      *  Capping this limits memory usage (each thread holds a ~2.5 MB WitnessContext). */
     private static final int MAX_PARALLEL_THREADS = 8;
 
+    /** Number of lock stripes for adjacency-list synchronization.
+     *  Must be a power of two for fast modulo via bitmask.  4096 stripes provide
+     *  low contention with 8 threads while saving ~8 MB vs per-node locks
+     *  on 500k+ node networks. */
+    private static final int ADJ_LOCK_STRIPES = 4096;
+
     private final SpeedyGraph graph;
     private final TravelDisutility td;
     private final int nodeCount;
@@ -155,7 +161,7 @@ public class CHBuilder {
     private int[]   outLen;
     private int[][] inEdges;
     private int[]   inLen;
-    private Object[] adjLocks;  // per-node locks for adjacency list mutation
+    private final Object[] adjLocks;  // striped locks for adjacency list mutation
 
     // CH state
     private final int[]     nodeLevel;
@@ -265,9 +271,9 @@ public class CHBuilder {
         this.contracted               = new boolean[nodeCount];
         this.contractedNeighborCount  = new int[nodeCount];
 
-        // Pre-size generously to avoid reallocation during contraction.
-        // ND ordering can produce 5-8× the original edges; use 8× to be safe.
-        int edgeCap = Math.max(graph.linkCount * 8, 16);
+        // Pre-size to avoid reallocation during contraction.
+        // ND ordering with deferred hubs typically produces 2.5-3.5× the original edges.
+        int edgeCap = Math.max(graph.linkCount * 4, 16);
         this.buildEdgeData    = new int[edgeCap * BE_SIZE];
         this.buildEdgeWeights = new double[edgeCap];
 
@@ -277,11 +283,13 @@ public class CHBuilder {
         this.outLen   = new int[nodeCount];
         this.inEdges  = new int[nodeCount][];
         this.inLen    = new int[nodeCount];
-        this.adjLocks = new Object[nodeCount];
+        this.adjLocks = new Object[ADJ_LOCK_STRIPES];
+        for (int i = 0; i < ADJ_LOCK_STRIPES; i++) {
+            adjLocks[i] = new Object();
+        }
         for (int i = 0; i < nodeCount; i++) {
             outEdges[i] = new int[perNode];
             inEdges[i]  = new int[perNode];
-            adjLocks[i] = new Object();
         }
 
         this.witnessIterIds = new int[nodeCount];
@@ -366,7 +374,7 @@ public class CHBuilder {
     // ---- per-node adjacency helpers ----
 
     private void adjOutAdd(int node, int edgeIdx) {
-        synchronized (adjLocks[node]) {
+        synchronized (adjLocks[node & (ADJ_LOCK_STRIPES - 1)]) {
             int len = outLen[node];
             int[] arr = outEdges[node];
             if (len >= arr.length) {
@@ -377,7 +385,7 @@ public class CHBuilder {
         }
     }
     private void adjInAdd(int node, int edgeIdx) {
-        synchronized (adjLocks[node]) {
+        synchronized (adjLocks[node & (ADJ_LOCK_STRIPES - 1)]) {
             int len = inLen[node];
             int[] arr = inEdges[node];
             if (len >= arr.length) {
@@ -536,11 +544,11 @@ public class CHBuilder {
                 }
             }
 
-            // Contract large cells adaptively (sequential, with iterative priority updates).
-            // These cells are the ones that cause edge explosion; the sequential cost
-            // is offset by drastically fewer shortcuts.
+            // Contract large cells adaptively with iterative priority updates.
+            // These cells cause edge explosion; adaptive PQ contraction offsets that
+            // risk while intra-node parallelism keeps it fast.
             for (int[] cell : adaptiveCells) {
-                contractCellAdaptive(cell, order);
+                contractCellAdaptive(cell, order, pool, tlCtx);
             }
 
             // Reorder nodes within each standard ND cell by estimated edge-
@@ -583,13 +591,11 @@ public class CHBuilder {
                     r + 1, rounds.size(), buildEdgeCounter.get());
         }
 
-        if (pool != null) {
-            pool.shutdown();
-        }
-
         // Contract deferred high-degree nodes using priority-queue ordering.
         // These are nodes whose active degree product exceeded DEFER_DEGREE_PRODUCT
         // during ND rounds and were skipped to prevent edge explosion.
+        // NOTE: pool is still alive — deferred contraction benefits from intra-node
+        // parallelism for the expensive high-degree hub witness searches.
         int deferredCount = 0;
         for (int n = 0; n < nodeCount; n++) {
             if (!contracted[n]) deferredCount++;
@@ -597,7 +603,11 @@ public class CHBuilder {
         if (deferredCount > 0) {
             LOG.info("CH contraction (parallel): contracting {} deferred high-degree nodes with PQ…",
                     deferredCount);
-            contractDeferredNodesPQ(deferredCount);
+            contractDeferredNodesPQ(deferredCount, pool, tlCtx);
+        }
+
+        if (pool != null) {
+            pool.shutdown();
         }
     }
 
@@ -615,8 +625,12 @@ public class CHBuilder {
      * above all ND-assigned levels (which are in {@code [0, nodeCount-1]}).
      *
      * @param deferredCount number of uncontracted nodes (for logging).
+     * @param pool          thread pool for intra-node parallelism (may be null).
+     * @param tlCtx         thread-local witness contexts (may be null when pool is null).
      */
-    private void contractDeferredNodesPQ(int deferredCount) {
+    private void contractDeferredNodesPQ(int deferredCount,
+                                          ForkJoinPool pool,
+                                          ThreadLocal<WitnessContext> tlCtx) {
         // Initialize contractedNeighborCount for deferred nodes — needed for
         // accurate priority estimation in the PQ.
         for (int node = 0; node < nodeCount; node++) {
@@ -663,7 +677,12 @@ public class CHBuilder {
                 continue;
             }
 
-            contractNodeBatched(node);
+            // Use intra-node parallelism for high-degree nodes.
+            if (pool != null && countActiveInDeg(node) >= INTRA_PAR_MIN_IN_DEGREE) {
+                contractNodeIntraParallel(node, pool, tlCtx);
+            } else {
+                contractNodeBatched(node);
+            }
             contracted[node] = true;
             nodeLevel[node]  = levelCounter++;
             contractedCount++;
@@ -884,9 +903,18 @@ public class CHBuilder {
      * the witness search for high-degree neighbors can discover, avoiding unnecessary
      * additional shortcuts.
      *
-     * <p>Uses the builder's own (single-threaded) witness search state.
+     * <p>Uses intra-node parallelism for the witness searches when a pool is
+     * available, and parallel re-estimation of cell neighbors after each
+     * contraction.  The PQ ordering remains sequential (node selection),
+     * but the expensive witness searches within each contraction are
+     * distributed across threads.
+     *
+     * @param pool  thread pool for intra-node parallelism (may be null).
+     * @param tlCtx thread-local witness contexts (may be null when pool is null).
      */
-    private void contractCellAdaptive(int[] cellNodes, int[] order) {
+    private void contractCellAdaptive(int[] cellNodes, int[] order,
+                                       ForkJoinPool pool,
+                                       ThreadLocal<WitnessContext> tlCtx) {
         int n = cellNodes.length;
 
         // 1. Collect and sort the rank band for this cell.
@@ -931,8 +959,12 @@ public class CHBuilder {
             // Defer high-degree nodes to the final PQ phase.
             if (shouldDefer(node)) continue;
 
-            // Contract this node (full witness search, creates shortcuts).
-            contractNodeBatched(node);
+            // Contract this node — use intra-node parallelism for high-degree nodes.
+            if (pool != null && countActiveInDeg(node) >= INTRA_PAR_MIN_IN_DEGREE) {
+                contractNodeIntraParallel(node, pool, tlCtx);
+            } else {
+                contractNodeBatched(node);
+            }
             contracted[node] = true;
             nodeLevel[node]  = ranks[contractionIdx];
             order[node]      = ranks[contractionIdx];
@@ -940,7 +972,8 @@ public class CHBuilder {
 
             // Re-estimate priorities of uncontracted neighbors in this cell.
             // The shortcuts just created may change their edge-difference.
-            reestimateCellNeighbors(node, cellGen, pq, storedPrio);
+            // Use parallel re-estimation when a pool is available.
+            reestimateCellNeighborsParallel(node, cellGen, pq, storedPrio, pool, tlCtx);
         }
     }
 
@@ -984,6 +1017,91 @@ public class CHBuilder {
                 }
             }
         }
+    }
+
+    /**
+     * Re-estimates cell-neighbor priorities with optional parallelism.
+     *
+     * <p>Collects all uncontracted cell neighbors, removes them from the PQ,
+     * re-estimates their priorities (in parallel when a pool is available and
+     * there are enough neighbors to justify the overhead), and re-inserts
+     * them with updated priorities.
+     *
+     * <p>Parallel re-estimation is critical for late ND depths where separator
+     * cells contain hundreds of high-degree hub nodes: each re-estimation
+     * involves a witness search that can settle thousands of nodes, and there
+     * may be 10-50 neighbors to re-estimate after each contraction.
+     */
+    private void reestimateCellNeighborsParallel(int node, int cellGen, DAryMinHeap pq,
+                                                  int[] storedPrio,
+                                                  ForkJoinPool pool,
+                                                  ThreadLocal<WitnessContext> tlCtx) {
+        // Collect neighbors in this cell that are still in the PQ.
+        int nbrCount = 0;
+        int[] nbrs = new int[64];
+
+        int[] oArr = outEdges[node];
+        int oLen = this.outLen[node];
+        for (int i = 0; i < oLen; i++) {
+            int w = buildEdgeData[oArr[i] * BE_SIZE + BE_TO];
+            if (!contracted[w] && cellMemberGen[w] == cellGen && pq.remove(w)) {
+                if (nbrCount >= nbrs.length) nbrs = Arrays.copyOf(nbrs, nbrs.length * 2);
+                nbrs[nbrCount++] = w;
+            }
+        }
+
+        int[] iArr = inEdges[node];
+        int iLen = this.inLen[node];
+        for (int j = 0; j < iLen; j++) {
+            int u = buildEdgeData[iArr[j] * BE_SIZE + BE_FROM];
+            if (!contracted[u] && cellMemberGen[u] == cellGen && pq.remove(u)) {
+                if (nbrCount >= nbrs.length) nbrs = Arrays.copyOf(nbrs, nbrs.length * 2);
+                nbrs[nbrCount++] = u;
+            }
+        }
+
+        if (nbrCount == 0) return;
+
+        if (pool != null && nbrCount >= 4) {
+            // Parallel re-estimation: each neighbor's estimatePriorityCtx is
+            // independent (reads graph state, no writes), so they can run concurrently.
+            int[] newPrios = new int[nbrCount];
+            @SuppressWarnings("unchecked")
+            ForkJoinTask<?>[] tasks = new ForkJoinTask[nbrCount];
+            for (int i = 0; i < nbrCount; i++) {
+                final int idx = i;
+                final int nbr = nbrs[idx];
+                tasks[i] = pool.submit(() -> {
+                    WitnessContext ctx = tlCtx.get();
+                    newPrios[idx] = estimatePriorityCtx(nbr, ctx);
+                });
+            }
+            for (int i = 0; i < nbrCount; i++) tasks[i].join();
+            for (int i = 0; i < nbrCount; i++) {
+                storedPrio[nbrs[i]] = newPrios[i];
+                pq.insert(nbrs[i], newPrios[i] + nodeCount);
+            }
+        } else {
+            // Sequential fallback
+            for (int i = 0; i < nbrCount; i++) {
+                int nbr = nbrs[i];
+                int newPrio = estimatePriority(nbr);
+                storedPrio[nbr] = newPrio;
+                pq.insert(nbr, newPrio + nodeCount);
+            }
+        }
+    }
+
+    /** Counts active (uncontracted, non-self) in-neighbours of a node. */
+    private int countActiveInDeg(int node) {
+        int[] iArr = inEdges[node];
+        int iLen = this.inLen[node];
+        int deg = 0;
+        for (int j = 0; j < iLen; j++) {
+            int u = buildEdgeData[iArr[j] * BE_SIZE + BE_FROM];
+            if (!contracted[u] && u != node) deg++;
+        }
+        return deg;
     }
 
     /**
