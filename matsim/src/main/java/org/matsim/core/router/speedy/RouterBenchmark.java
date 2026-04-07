@@ -76,7 +76,7 @@ public class RouterBenchmark {
             "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/berlin/"
                     + "berlin-v7.0/input/berlin-v7.0-network.xml.gz";
 
-    private static final String RUHR_NETWORK_URL =
+    private static final String DUESSELDORF_NETWORK_URL =
             "https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/duesseldorf/"
                     + "duesseldorf-v1.0/input/duesseldorf-v1.2-network.xml.gz";
 
@@ -302,14 +302,14 @@ public class RouterBenchmark {
      * Loads a MATSim network from a local file, a named built-in network,
      * or downloads Berlin v7.0 if {@code networkPath} is {@code null}.
      *
-     * <p>Recognized built-in names: {@code "berlin"}, {@code "ruhr"}.
+     * <p>Recognized built-in names: {@code "berlin"}, {@code "duesseldorf"}.
      */
     private static Network loadNetwork(String networkPath) {
         if (networkPath == null || "berlin".equalsIgnoreCase(networkPath)) {
             return downloadAndLoadNetwork(BERLIN_NETWORK_URL, "berlin-v7.0-network.xml.gz", "Berlin v7.0");
         }
-        if ("ruhr".equalsIgnoreCase(networkPath)) {
-            return downloadAndLoadNetwork(RUHR_NETWORK_URL,
+        if ("duesseldorf".equalsIgnoreCase(networkPath) || "ruhr".equalsIgnoreCase(networkPath)) {
+            return downloadAndLoadNetwork(DUESSELDORF_NETWORK_URL,
                     "duesseldorf-v1.2-network.xml.gz", "Düsseldorf v1.2");
         }
         System.out.println("Loading network from " + networkPath + " ...");
