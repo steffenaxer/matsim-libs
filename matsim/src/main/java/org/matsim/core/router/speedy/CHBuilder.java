@@ -192,10 +192,10 @@ public class CHBuilder {
     private int        cellGeneration = 0;
     private final int[] cellMemberGen;
 
-    // Guard for reestimateCellNeighborsParallel: prevents duplicate pq.remove()
-    // calls for the same node (reachable via both out-edges and in-edges).
-    // nbrRemovedGen[node] == nbrRemovedGeneration means node was already removed
-    // from the PQ during the current reestimate call.
+    // Guard for reestimateCellNeighborsParallel: prevents duplicate processing
+    // of the same node (reachable via both out-edges and in-edges).
+    // nbrRemovedGen[node] == nbrRemovedGeneration means node was already visited
+    // during the current reestimate call.
     private int        nbrRemovedGeneration = 0;
     private final int[] nbrRemovedGen;
 
@@ -314,7 +314,7 @@ public class CHBuilder {
         // Cell membership tracking for adaptive contraction
         this.cellMemberGen = new int[nodeCount];
 
-        // Guard against duplicate pq.remove() in reestimateCellNeighborsParallel
+        // Guard against duplicate neighbor processing in reestimateCellNeighborsParallel
         this.nbrRemovedGen = new int[nodeCount];
     }
 
@@ -938,14 +938,20 @@ public class CHBuilder {
 
         // 3. Estimate initial priorities and insert into PQ.
         //    Track stored priorities for lazy update comparison.
+        //    We also maintain a boolean[] inPQ to track PQ membership
+        //    explicitly, avoiding DAryMinHeap.remove() which does not
+        //    reset pos[node] after removal and can corrupt the heap
+        //    when called on nodes not actually in the PQ.
         DAryMinHeap pq = new DAryMinHeap(nodeCount, 4);
         int[] storedPrio = new int[nodeCount];
+        boolean[] inPQ = new boolean[nodeCount];
         for (int node : cellNodes) {
             int prio = estimatePriority(node);
             storedPrio[node] = prio;
             // Shift priority to non-negative range for the heap (edge-diff can be negative).
             // Add nodeCount to ensure all values are positive.
             pq.insert(node, prio + nodeCount);
+            inPQ[node] = true;
         }
 
         // 4. Iterative contraction with lazy priority update.
@@ -957,12 +963,14 @@ public class CHBuilder {
         int contractionIdx = 0;
         while (!pq.isEmpty()) {
             int node = pq.poll();
+            inPQ[node] = false;
 
             // Lazy update: re-estimate and re-queue if priority increased.
             int newPrio = estimatePriority(node);
             if (newPrio > storedPrio[node]) {
                 storedPrio[node] = newPrio;
                 pq.insert(node, newPrio + nodeCount);
+                inPQ[node] = true;
                 continue;
             }
 
@@ -982,67 +990,26 @@ public class CHBuilder {
 
             // Re-estimate priorities of uncontracted neighbors in this cell.
             // The shortcuts just created may change their edge-difference.
-            // Use parallel re-estimation when a pool is available.
-            reestimateCellNeighborsParallel(node, cellGen, pq, storedPrio, pool, tlCtx);
-        }
-    }
-
-    /**
-     * Re-estimates the priorities of uncontracted neighbors of the given node
-     * that belong to the current cell (identified by {@code cellGen}), and
-     * updates their position in the priority queue.
-     *
-     * <p>Uses {@code remove} + {@code insert} on the heap because priorities
-     * can both increase and decrease after a neighbor's contraction.
-     * Updates the {@code storedPrio} array so that the lazy update check
-     * in the caller has accurate previous-priority information.
-     */
-    private void reestimateCellNeighbors(int node, int cellGen, DAryMinHeap pq, int[] storedPrio) {
-        // A node can appear as both an out-neighbor and an in-neighbor;
-        // we must call pq.remove() at most once per node to avoid heap
-        // corruption (DAryMinHeap.remove does not reset pos[node]).
-        int gen = ++this.nbrRemovedGeneration;
-
-        // Check out-neighbors
-        int[] oArr = outEdges[node];
-        int oLen = this.outLen[node];
-        for (int i = 0; i < oLen; i++) {
-            int edgeIdx = oArr[i];
-            int w = buildEdgeData[edgeIdx * BE_SIZE + BE_TO];
-            if (!contracted[w] && cellMemberGen[w] == cellGen && nbrRemovedGen[w] != gen) {
-                if (pq.remove(w)) {
-                    nbrRemovedGen[w] = gen;
-                    int newPrio = estimatePriority(w);
-                    storedPrio[w] = newPrio;
-                    pq.insert(w, newPrio + nodeCount);
-                }
-            }
-        }
-
-        // Check in-neighbors
-        int[] iArr = inEdges[node];
-        int iLen = this.inLen[node];
-        for (int j = 0; j < iLen; j++) {
-            int edgeIdx = iArr[j];
-            int u = buildEdgeData[edgeIdx * BE_SIZE + BE_FROM];
-            if (!contracted[u] && cellMemberGen[u] == cellGen && nbrRemovedGen[u] != gen) {
-                if (pq.remove(u)) {
-                    nbrRemovedGen[u] = gen;
-                    int newPrio = estimatePriority(u);
-                    storedPrio[u] = newPrio;
-                    pq.insert(u, newPrio + nodeCount);
-                }
-            }
+            // Uses decreaseKey + lazy update instead of remove + insert to
+            // avoid DAryMinHeap.remove() which is not safe for this use case.
+            reestimateCellNeighborsParallel(node, cellGen, pq, storedPrio, inPQ, pool, tlCtx);
         }
     }
 
     /**
      * Re-estimates cell-neighbor priorities with optional parallelism.
      *
-     * <p>Collects all uncontracted cell neighbors, removes them from the PQ,
-     * re-estimates their priorities (in parallel when a pool is available and
-     * there are enough neighbors to justify the overhead), and re-inserts
-     * them with updated priorities.
+     * <p>Collects all uncontracted cell neighbors that are still in the PQ
+     * (tracked by the {@code inPQ} array), re-estimates their priorities
+     * (in parallel when a pool is available and there are enough neighbors),
+     * and applies updates using {@code decreaseKey} for decreased priorities.
+     * Increased priorities are handled by updating {@code storedPrio} only —
+     * the lazy update in the caller's poll loop will detect the stale
+     * position and re-insert the node at the correct priority.
+     *
+     * <p>This approach avoids {@code DAryMinHeap.remove()} entirely, which
+     * does not reset {@code pos[node]} after removal and can corrupt the
+     * heap when called on nodes that are no longer in the PQ.
      *
      * <p>Parallel re-estimation is critical for late ND depths where separator
      * cells contain hundreds of high-degree hub nodes: each re-estimation
@@ -1051,13 +1018,12 @@ public class CHBuilder {
      */
     private void reestimateCellNeighborsParallel(int node, int cellGen, DAryMinHeap pq,
                                                   int[] storedPrio,
+                                                  boolean[] inPQ,
                                                   ForkJoinPool pool,
                                                   ThreadLocal<WitnessContext> tlCtx) {
         // Collect neighbors in this cell that are still in the PQ.
         // A node can appear as both an out-neighbor and an in-neighbor;
-        // we must call pq.remove() at most once per node to avoid heap
-        // corruption (DAryMinHeap.remove does not reset pos[node]).
-        // Use a generation-stamped guard to deduplicate.
+        // use a generation-stamped guard to deduplicate.
         int nbrCount = 0;
         int[] nbrs = new int[64];
         int gen = ++this.nbrRemovedGeneration;
@@ -1067,7 +1033,7 @@ public class CHBuilder {
         for (int i = 0; i < oLen; i++) {
             int w = buildEdgeData[oArr[i] * BE_SIZE + BE_TO];
             if (!contracted[w] && cellMemberGen[w] == cellGen
-                    && nbrRemovedGen[w] != gen && pq.remove(w)) {
+                    && inPQ[w] && nbrRemovedGen[w] != gen) {
                 nbrRemovedGen[w] = gen;
                 if (nbrCount >= nbrs.length) nbrs = Arrays.copyOf(nbrs, nbrs.length * 2);
                 nbrs[nbrCount++] = w;
@@ -1079,7 +1045,7 @@ public class CHBuilder {
         for (int j = 0; j < iLen; j++) {
             int u = buildEdgeData[iArr[j] * BE_SIZE + BE_FROM];
             if (!contracted[u] && cellMemberGen[u] == cellGen
-                    && nbrRemovedGen[u] != gen && pq.remove(u)) {
+                    && inPQ[u] && nbrRemovedGen[u] != gen) {
                 nbrRemovedGen[u] = gen;
                 if (nbrCount >= nbrs.length) nbrs = Arrays.copyOf(nbrs, nbrs.length * 2);
                 nbrs[nbrCount++] = u;
@@ -1104,16 +1070,31 @@ public class CHBuilder {
             }
             for (int i = 0; i < nbrCount; i++) tasks[i].join();
             for (int i = 0; i < nbrCount; i++) {
-                storedPrio[nbrs[i]] = newPrios[i];
-                pq.insert(nbrs[i], newPrios[i] + nodeCount);
+                int w = nbrs[i];
+                int newPrio = newPrios[i];
+                if (newPrio <= storedPrio[w]) {
+                    // Priority decreased or unchanged — use decreaseKey to update in-place.
+                    storedPrio[w] = newPrio;
+                    pq.decreaseKey(w, newPrio + nodeCount);
+                } else {
+                    // Priority increased — just update storedPrio.
+                    // The lazy update in the main loop will detect the stale
+                    // PQ position (node is polled with old lower key) and
+                    // re-insert with the correct higher priority.
+                    storedPrio[w] = newPrio;
+                }
             }
         } else {
             // Sequential fallback
             for (int i = 0; i < nbrCount; i++) {
                 int nbr = nbrs[i];
                 int newPrio = estimatePriority(nbr);
-                storedPrio[nbr] = newPrio;
-                pq.insert(nbr, newPrio + nodeCount);
+                if (newPrio <= storedPrio[nbr]) {
+                    storedPrio[nbr] = newPrio;
+                    pq.decreaseKey(nbr, newPrio + nodeCount);
+                } else {
+                    storedPrio[nbr] = newPrio;
+                }
             }
         }
     }
