@@ -938,6 +938,9 @@ public class CHBuilder {
 
         // 3. Estimate initial priorities and insert into PQ.
         //    Track stored priorities for lazy update comparison.
+        //    We maintain a boolean[] inPQ to track PQ membership
+        //    explicitly, because DAryMinHeap.remove() does not
+        //    reset pos[node] after removal (unlike poll()).
         DAryMinHeap pq = new DAryMinHeap(nodeCount, 4);
         int[] storedPrio = new int[nodeCount];
         boolean[] inPQ = new boolean[nodeCount];
@@ -986,6 +989,9 @@ public class CHBuilder {
 
             // Re-estimate priorities of uncontracted neighbors in this cell.
             // The shortcuts just created may change their edge-difference.
+            // Uses remove + insert (not decreaseKey) because priorities can
+            // increase; the remove+insert pattern is safe despite DAryMinHeap.remove()
+            // not resetting pos[node], because insert() always overwrites pos[node].
             reestimateCellNeighborsParallel(node, cellGen, pq, storedPrio, inPQ, pool, tlCtx);
         }
     }
@@ -997,6 +1003,14 @@ public class CHBuilder {
      * (tracked by the {@code inPQ} array), re-estimates their priorities
      * (in parallel when a pool is available and there are enough neighbors),
      * and applies updates using {@code remove + insert} to update the PQ.
+     * This approach handles both increased and decreased priorities correctly.
+     *
+     * <p><b>Note:</b> {@code DAryMinHeap.remove()} does not reset
+     * {@code pos[node]} to -1 after removal (unlike {@code poll()}).
+     * The {@code remove + insert} pattern is safe because {@code insert()}
+     * always starts from {@code this.size} and overwrites {@code pos[node]}
+     * with the final heap position. The {@code inPQ} array provides an
+     * additional guard against operating on nodes that were already polled.
      *
      * <p>Parallel re-estimation is critical for late ND depths where separator
      * cells contain hundreds of high-degree hub nodes: each re-estimation

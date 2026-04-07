@@ -116,7 +116,6 @@ class DAryMinHeap {
 			return false;
 		}
 
-		this.pos[node] = -1;
 		this.fixWhole(i);
 		return true;
 	}
