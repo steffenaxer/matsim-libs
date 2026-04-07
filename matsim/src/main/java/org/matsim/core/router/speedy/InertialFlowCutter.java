@@ -24,9 +24,12 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Computes a nested-dissection node ordering for a {@link SpeedyGraph} using
@@ -105,21 +108,40 @@ public class InertialFlowCutter {
     /** BFS depth from boundary for max-flow cuttable region. */
     private static final int MAXFLOW_BORDER_DEPTH = 8;
 
+    /** Minimum combined subgraph size to fork recursive sub-tasks in parallel.
+     *  Below this threshold the overhead of task scheduling exceeds the benefit. */
+    private static final int PARALLEL_MIN_SIZE = 2000;
+
+    /** Maximum number of threads for parallel recursive dissection. */
+    private static final int MAX_ND_THREADS = 8;
+
+    /** Subgraph size threshold below which fewer projection directions are used. */
+    private static final int REDUCED_DIRECTIONS_THRESHOLD = 500;
+
+    /** Subgraph size threshold below which fewer split ratios are tried. */
+    private static final int REDUCED_RATIOS_THRESHOLD = 1000;
+
     private final SpeedyGraph graph;
 
-    // Node coordinates (extracted once)
+    // Node coordinates (extracted once, read-only)
     private final double[] nodeX;
     private final double[] nodeY;
 
-    // Reusable scratch arrays (sized to nodeCount)
+    // Reusable scratch arrays (sized to nodeCount, indexed by node ID).
+    // Thread-safe for concurrent use on DISJOINT node sets because each
+    // recursive sub-task only accesses entries for its own partition nodes.
     private final int[] scratchSide;
     private final int[] scratchBoundary;  // generation-stamped boundary markers
-    private int scratchBoundaryGen = 0;
+    private final AtomicInteger scratchBoundaryGen = new AtomicInteger(0);
 
-    // Shared subgraph membership (set/cleared within findSeparator)
-    private final boolean[] inSubGraph;
+    // Subgraph membership: generation-stamped for thread-safe parallel recursion.
+    // inSubGraphGen[node] == currentSubGraphGen.get() means node is in the subgraph.
+    // Stale generation values are automatically ignored (no cleanup needed).
+    private final int[] inSubGraphGen;
+    private final AtomicInteger subGraphGenCounter = new AtomicInteger(0);
+    private final ThreadLocal<Integer> currentSubGraphGen = ThreadLocal.withInitial(() -> 0);
 
-    // Pre-allocated scratch arrays for FM refinement
+    // Pre-allocated scratch arrays for FM refinement (indexed by node ID, disjoint access)
     private final int[] fmGain;
     private final int[] fmNext;
     private final int[] fmPrev;
@@ -140,10 +162,29 @@ public class InertialFlowCutter {
 
         this.scratchSide = new int[n];
         this.scratchBoundary = new int[n];
-        this.inSubGraph = new boolean[n];
+        this.inSubGraphGen = new int[n];
         this.fmGain = new int[n];
         this.fmNext = new int[n];
         this.fmPrev = new int[n];
+    }
+
+    // ---- Thread-safe subgraph membership helpers ----
+
+    /** Marks all nodes as belonging to the current subgraph (thread-local generation). */
+    private void markSubGraph(int[] subNodes) {
+        int gen = subGraphGenCounter.incrementAndGet();
+        currentSubGraphGen.set(gen);
+        for (int node : subNodes) inSubGraphGen[node] = gen;
+    }
+
+    /** Checks if a node belongs to the current thread's subgraph. */
+    private boolean isInSubGraph(int node) {
+        return inSubGraphGen[node] == currentSubGraphGen.get();
+    }
+
+    /** Gets a unique boundary generation value (thread-safe). */
+    private int nextBoundaryGen() {
+        return scratchBoundaryGen.incrementAndGet();
     }
 
     /**
@@ -210,14 +251,20 @@ public class InertialFlowCutter {
 
         int[][] adj = buildSymmetricAdjacency();
 
-        Map<Integer, List<int[]>> cellsByDepth = new HashMap<>();
-        int[] levelCounter = new int[]{0};
-        recursiveDissectWithBatches(nodes, adj, order, levelCounter, cellsByDepth, 0);
+        // Use parallel recursion with ForkJoinPool for large graphs.
+        int nThreads = Math.min(Runtime.getRuntime().availableProcessors(), MAX_ND_THREADS);
+        ForkJoinPool pool = (count >= PARALLEL_MIN_SIZE && nThreads > 1) ? new ForkJoinPool(nThreads) : null;
+
+        Map<Integer, List<int[]>> cellsByDepth = new ConcurrentHashMap<>();
+        AtomicInteger levelCounter = new AtomicInteger(0);
+        recursiveDissectWithBatches(nodes, adj, order, levelCounter, cellsByDepth, 0, pool);
+
+        if (pool != null) pool.shutdown();
 
         // Fill any unassigned nodes
         for (int i = 0; i < n; i++) {
             if (order[i] < 0) {
-                order[i] = levelCounter[0]++;
+                order[i] = levelCounter.getAndIncrement();
             }
         }
 
@@ -240,24 +287,29 @@ public class InertialFlowCutter {
 
     /**
      * Recursive dissection that also tracks partition cells by depth.
+     * Supports parallel recursion via ForkJoinPool when subgraphs are large enough.
+     *
+     * <p>Thread-safety for parallel mode: all scratch arrays are indexed by node ID,
+     * and concurrent recursive calls operate on disjoint node sets (partitions).
+     * Subgraph membership uses generation stamps (no cleanup needed), and boundary
+     * generation uses an AtomicInteger counter.
      */
     private void recursiveDissectWithBatches(int[] subNodes, int[][] adj, int[] order,
-                                              int[] levelCounter,
+                                              AtomicInteger levelCounter,
                                               Map<Integer, List<int[]>> cellsByDepth,
-                                              int depth) {
+                                              int depth, ForkJoinPool pool) {
         if (subNodes.length <= MIN_PARTITION_SIZE) {
             // Base case: this is a leaf cell
             int ci = 0;
             int[] cellOrdered = new int[subNodes.length];
             for (int node : subNodes) {
                 if (order[node] < 0) {
-                    order[node] = levelCounter[0]++;
+                    order[node] = levelCounter.getAndIncrement();
                     cellOrdered[ci++] = node;
                 }
             }
             if (ci > 0) {
-                cellsByDepth.computeIfAbsent(depth, k -> new ArrayList<>())
-                        .add(Arrays.copyOf(cellOrdered, ci));
+                addCell(cellsByDepth, depth, Arrays.copyOf(cellOrdered, ci));
             }
             return;
         }
@@ -267,23 +319,37 @@ public class InertialFlowCutter {
         int[] separator = result[1];
         int[] partB     = result[2];
 
-        // Recurse into partitions (children go to deeper levels)
-        recursiveDissectWithBatches(partA, adj, order, levelCounter, cellsByDepth, depth + 1);
-        recursiveDissectWithBatches(partB, adj, order, levelCounter, cellsByDepth, depth + 1);
+        // Recurse into partitions — fork when subgraph is large enough
+        if (pool != null && (partA.length + partB.length) >= PARALLEL_MIN_SIZE) {
+            // Fork one sub-task, run the other in-line
+            ForkJoinTask<?> taskA = pool.submit(() ->
+                    recursiveDissectWithBatches(partA, adj, order, levelCounter, cellsByDepth, depth + 1, pool));
+            recursiveDissectWithBatches(partB, adj, order, levelCounter, cellsByDepth, depth + 1, pool);
+            taskA.join();
+        } else {
+            recursiveDissectWithBatches(partA, adj, order, levelCounter, cellsByDepth, depth + 1, pool);
+            recursiveDissectWithBatches(partB, adj, order, levelCounter, cellsByDepth, depth + 1, pool);
+        }
 
-        // Separator nodes form a cell at this depth
+        // Separator nodes form a cell at this depth (must be assigned AFTER both
+        // partitions to ensure separator levels are higher than descendant levels).
         int[] sepOrdered = new int[separator.length];
         int si = 0;
         for (int node : separator) {
             if (order[node] < 0) {
-                order[node] = levelCounter[0]++;
+                order[node] = levelCounter.getAndIncrement();
                 sepOrdered[si++] = node;
             }
         }
         if (si > 0) {
-            cellsByDepth.computeIfAbsent(depth, k -> new ArrayList<>())
-                    .add(Arrays.copyOf(sepOrdered, si));
+            addCell(cellsByDepth, depth, Arrays.copyOf(sepOrdered, si));
         }
+    }
+
+    /** Thread-safe cell addition to the depth map. */
+    private static void addCell(Map<Integer, List<int[]>> cellsByDepth, int depth, int[] cell) {
+        cellsByDepth.computeIfAbsent(depth, k -> java.util.Collections.synchronizedList(new ArrayList<>()))
+                .add(cell);
     }
 
     /**
@@ -323,18 +389,30 @@ public class InertialFlowCutter {
      * Find a separator for the given sub-graph using inertial flow with
      * graph-based refinement (FM + max-flow).
      * Returns [partitionA, separator, partitionB].
+     *
+     * <p>Thread-safe: uses generation-stamped subgraph membership so concurrent
+     * calls on disjoint node sets do not interfere.
+     *
+     * <p>Uses adaptive direction/ratio counts: fewer directions and split ratios
+     * for small subgraphs where the geometric information is less valuable and the
+     * recursion overhead dominates.
      */
     private int[][] findSeparator(int[] subNodes, int[][] adj) {
-        // Try 16 projection directions covering a range of angles.
-        double[][] directions = {
+        int n = subNodes.length;
+
+        // Adaptive directions: fewer for small subgraphs
+        double[][] allDirections = {
             {1, 0}, {0, 1}, {1, 1}, {1, -1},        // 0°, 90°, 45°, 135°
             {2, 1}, {1, 2}, {2, -1}, {1, -2},        // ~27°, ~63°, ~153°, ~117°
             {3, 1}, {1, 3}, {3, -1}, {1, -3},        // ~18.4°, ~71.6°, ~161.6°, ~108.4°
             {4, 1}, {1, 4}, {4, -1}, {1, -4}         // ~14.0°, ~76.0°, ~166.0°, ~104.0°
         };
+        double[][] directions = (n < REDUCED_DIRECTIONS_THRESHOLD)
+                ? Arrays.copyOf(allDirections, 4)  // cardinal + diagonal only
+                : allDirections;
 
-        // Build membership set once, shared across all directions and refinements
-        for (int node : subNodes) inSubGraph[node] = true;
+        // Mark subgraph membership using generation stamp (thread-safe, no cleanup needed)
+        markSubGraph(subNodes);
 
         int[][] bestResult = null;
         long bestScore = Long.MAX_VALUE;
@@ -352,7 +430,6 @@ public class InertialFlowCutter {
         }
 
         if (bestResult == null) {
-            for (int node : subNodes) inSubGraph[node] = false;
             return trivialSplit(subNodes);
         }
 
@@ -362,14 +439,14 @@ public class InertialFlowCutter {
                 Math.abs(bestResult[0].length - bestResult[2].length), adj);
 
         // --- FM refinement: try BOTH bipartition orientations ---
-        if (subNodes.length >= FM_MIN_SIZE) {
+        if (n >= FM_MIN_SIZE) {
             bestResult = tryFMBothOrientations(bestResult, adj, subNodes, refScore);
             refScore = scoreSeparator(bestResult[1],
                     Math.abs(bestResult[0].length - bestResult[2].length), adj);
         }
 
         // --- Max-flow refinement with wider cuttable region ---
-        if (subNodes.length >= MAXFLOW_MIN_SIZE) {
+        if (n >= MAXFLOW_MIN_SIZE) {
             int[][] mfResult = maxFlowRefineWideDepth(bestResult, adj, MAXFLOW_BORDER_DEPTH);
             if (mfResult != null && isValidSeparator(mfResult, adj)) {
                 int mfBal = Math.abs(mfResult[0].length - mfResult[2].length);
@@ -381,9 +458,7 @@ public class InertialFlowCutter {
             }
         }
 
-        // Cleanup membership set
-        for (int node : subNodes) inSubGraph[node] = false;
-
+        // No cleanup needed — stale generation values are ignored
         return bestResult;
     }
 
@@ -435,7 +510,7 @@ public class InertialFlowCutter {
         for (int s : separator) {
             int subDeg = 0;
             for (int w : adj[s]) {
-                if (inSubGraph[w]) subDeg++;
+                if (isInSubGraph(w)) subDeg++;
             }
             cost += 256L + (long) subDeg * subDeg;
         }
@@ -449,7 +524,7 @@ public class InertialFlowCutter {
 
     /**
      * Check that the separator is valid: no edge connects partA directly to partB.
-     * Uses the shared {@link #inSubGraph} membership set.
+     * Uses generation-stamped subgraph membership (thread-safe).
      */
     private boolean isValidSeparator(int[][] result, int[][] adj) {
         int[] partA = result[0];
@@ -458,8 +533,8 @@ public class InertialFlowCutter {
         if (partA.length == 0 || partB.length == 0 || sep.length == 0) return false;
 
         // Mark separator and partB with generation stamps
-        int genSep = ++scratchBoundaryGen;
-        int genB   = ++scratchBoundaryGen;
+        int genSep = nextBoundaryGen();
+        int genB   = nextBoundaryGen();
         int[] mark = scratchBoundary;
         for (int s : sep) mark[s] = genSep;
         for (int b : partB) mark[b] = genB;
@@ -467,7 +542,7 @@ public class InertialFlowCutter {
         // Check: no partA node has a partB neighbour (within subgraph)
         for (int a : partA) {
             for (int w : adj[a]) {
-                if (inSubGraph[w] && mark[w] == genB) {
+                if (isInSubGraph(w) && mark[w] == genB) {
                     return false; // direct A→B edge → invalid separator
                 }
             }
@@ -531,7 +606,7 @@ public class InertialFlowCutter {
             int v = allNodes[i];
             int ext = 0, internal = 0;
             for (int w : adj[v]) {
-                if (!inSubGraph[w]) continue;
+                if (!isInSubGraph(w)) continue;
                 if (side[w] != side[v]) ext++;
                 else internal++;
             }
@@ -561,7 +636,7 @@ public class InertialFlowCutter {
                     int v = allNodes[i];
                     int ext = 0, internal = 0;
                     for (int w : adj[v]) {
-                        if (!inSubGraph[w]) continue;
+                        if (!isInSubGraph(w)) continue;
                         if (side[w] != side[v]) ext++;
                         else internal++;
                     }
@@ -595,7 +670,7 @@ public class InertialFlowCutter {
             }
 
             // Lock via generation stamp
-            int lockGen = ++scratchBoundaryGen;
+            int lockGen = nextBoundaryGen();
             int[] locked = scratchBoundary;
 
             // Track moves for rollback
@@ -658,7 +733,7 @@ public class InertialFlowCutter {
 
                 // Update neighbours' gains
                 for (int w : adj[bestNode]) {
-                    if (!inSubGraph[w] || locked[w] == lockGen) continue;
+                    if (!isInSubGraph(w) || locked[w] == lockGen) continue;
 
                     int oldGain = gain[w];
                     int oldB = oldGain + bucketOffset;
@@ -757,7 +832,7 @@ public class InertialFlowCutter {
     private int[][] extractSeparatorFromBipartition(int[] allNodes, int totalN,
                                                      int[][] adj, int[] side) {
         // Find boundary nodes on each side
-        int genB = ++scratchBoundaryGen;
+        int genB = nextBoundaryGen();
         int[] boundaryMark = scratchBoundary;
         int boundaryACount = 0, boundaryBCount = 0;
 
@@ -765,7 +840,7 @@ public class InertialFlowCutter {
             int node = allNodes[i];
             int mySide = side[node];
             for (int w : adj[node]) {
-                if (!inSubGraph[w]) continue;
+                if (!isInSubGraph(w)) continue;
                 if (side[w] != 0 && side[w] != mySide) {
                     if (boundaryMark[node] != genB) {
                         boundaryMark[node] = genB;
@@ -860,7 +935,7 @@ public class InertialFlowCutter {
 
         // --- Mark which nodes are "cuttable" (capacity 1) ---
         // Start from separator nodes, BFS outward MAXFLOW_BORDER_DEPTH hops
-        int genCuttable = ++scratchBoundaryGen;
+        int genCuttable = nextBoundaryGen();
         int[] cuttableMark = scratchBoundary;
         for (int s : sep) cuttableMark[s] = genCuttable;
 
@@ -877,7 +952,7 @@ public class InertialFlowCutter {
             int d = bfsDist[u];
             if (d > depth) continue;
             for (int w : adj[u]) {
-                if (!inSubGraph[w] || bfsDist[w] != 0) continue;
+                if (!isInSubGraph(w) || bfsDist[w] != 0) continue;
                 bfsDist[w] = d + 1;
                 cuttableMark[w] = genCuttable;
                 if (qTail < bfsQueue.length) bfsQueue[qTail++] = w;
@@ -1255,13 +1330,15 @@ public class InertialFlowCutter {
      * median.  Trying multiple split points finds "natural boundaries" (highways,
      * rivers, etc.) with far fewer boundary edges, dramatically reducing separator
      * size and thus shortcut count.
-     *
-     * <p>23 ratios × 16 directions = 368 candidates per recursion level.
-     * The extra cost is negligible compared to contraction time.
      */
     private static final double[] SPLIT_RATIOS = {
         0.25, 0.28, 0.30, 0.33, 0.36, 0.38, 0.40, 0.42, 0.44, 0.46, 0.48,
         0.50, 0.52, 0.54, 0.56, 0.58, 0.60, 0.62, 0.64, 0.67, 0.70, 0.72, 0.75
+    };
+
+    /** Reduced split ratios for small subgraphs where precision matters less. */
+    private static final double[] REDUCED_SPLIT_RATIOS = {
+        0.30, 0.37, 0.43, 0.50, 0.57, 0.63, 0.70
     };
 
     /**
@@ -1272,8 +1349,8 @@ public class InertialFlowCutter {
      * vertex separator is extracted from the smaller boundary side.
      * The split with the best (lowest) score is returned.
      *
-     * <p>Uses the shared {@link #inSubGraph} membership set (must be populated
-     * by caller).
+     * <p>Uses adaptive split ratios: fewer ratios for small subgraphs to reduce
+     * overhead at deep recursion levels.
      */
     private int[][] tryDirection(int[] subNodes, int[][] adj, double dx, double dy) {
         int n = subNodes.length;
@@ -1289,8 +1366,11 @@ public class InertialFlowCutter {
         int[][] bestResult = null;
         long bestScore = Long.MAX_VALUE;
 
+        // Adaptive ratio selection: fewer ratios for small subgraphs
+        double[] ratios = (n < REDUCED_RATIOS_THRESHOLD) ? REDUCED_SPLIT_RATIOS : SPLIT_RATIOS;
+
         // Try each split ratio
-        for (double ratio : SPLIT_RATIOS) {
+        for (double ratio : ratios) {
             int splitAt = Math.max(1, Math.min(n - 1, (int) (n * ratio)));
             int[][] result = trySplitAt(subNodes, adj, sortedIdx, n, splitAt);
             if (result != null) {
@@ -1310,7 +1390,7 @@ public class InertialFlowCutter {
      * Try splitting the sorted projection at a specific index, extracting a
      * one-sided vertex separator from the smaller boundary side.
      *
-     * <p>Uses the shared {@link #inSubGraph} membership set.
+     * <p>Uses generation-stamped subgraph membership (thread-safe).
      *
      * @param subNodes  nodes in the sub-graph
      * @param adj       symmetric adjacency lists
@@ -1339,13 +1419,13 @@ public class InertialFlowCutter {
         // We need to track which nodes are boundary. Reuse a generation-stamped approach
         // to avoid allocating boolean arrays.
         int[] boundaryMark = scratchBoundary;
-        int gen = ++scratchBoundaryGen;
+        int gen = nextBoundaryGen();
 
         for (int idx = 0; idx < n; idx++) {
             int node = subNodes[idx];
             int mySide = side[node];
             for (int w : adj[node]) {
-                if (!inSubGraph[w]) continue;
+                if (!isInSubGraph(w)) continue;
                 if (side[w] != 0 && side[w] != mySide) {
                     if (boundaryMark[node] != gen) {
                         boundaryMark[node] = gen;
@@ -1432,7 +1512,7 @@ public class InertialFlowCutter {
         while (changed && separator.length > 1) {
             changed = false;
 
-            int genP1 = ++scratchBoundaryGen;
+            int genP1 = nextBoundaryGen();
             int[] mark = scratchBoundary;
 
             for (int n : partA) mark[n] = genP1;
