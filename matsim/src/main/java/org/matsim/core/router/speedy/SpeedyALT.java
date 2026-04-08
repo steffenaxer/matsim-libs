@@ -105,7 +105,7 @@ public class SpeedyALT implements LeastCostPathCalculator {
 		if(graph.getTurnRestrictions().isPresent()) {
 			Map<Id<Link>, TurnRestrictionsContext.ColoredLink> replacedLinks = graph.getTurnRestrictions().get().replacedLinks;
 			if(replacedLinks.containsKey(fromLink.getId())) {
-				startNodeIndex = replacedLinks.get(fromLink.getId()).toColoredNode.index();
+				startNodeIndex = graph.getInternalIndex(replacedLinks.get(fromLink.getId()).toColoredNode.index());
 			}
 		}
 

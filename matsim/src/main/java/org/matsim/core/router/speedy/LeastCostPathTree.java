@@ -78,7 +78,7 @@ public class LeastCostPathTree implements ShortestPathTree {
         if(graph.getTurnRestrictions().isPresent()) {
             TurnRestrictionsContext context = graph.getTurnRestrictions().get();
             if(context.replacedLinks.containsKey(startLink.getId())) {
-                startNode = context.replacedLinks.get(startLink.getId()).toColoredNode.index();
+                startNode = graph.getInternalIndex(context.replacedLinks.get(startLink.getId()).toColoredNode.index());
             }
         }
         calculateImpl(startNode, startTime, person, vehicle, stopCriterion);
@@ -174,7 +174,7 @@ public class LeastCostPathTree implements ShortestPathTree {
                 TurnRestrictionsContext.ColoredLink replacedLink = turnRestrictionsContext.replacedLinks
                         .get(inLink.getId());
                 if (replacedLink != null && replacedLink.toColoredNode != null) {
-                    int coloredArrivalNode = replacedLink.toColoredNode.index();
+                    int coloredArrivalNode = graph.getInternalIndex(replacedLink.toColoredNode.index());
                     setData(coloredArrivalNode, 0, arrivalTime, 0);
                     this.pq.insert(coloredArrivalNode, 0);
                 }
@@ -182,7 +182,7 @@ public class LeastCostPathTree implements ShortestPathTree {
                 if (coloredLinks != null) {
                     for (TurnRestrictionsContext.ColoredLink coloredLink : coloredLinks) {
                         if (coloredLink.toColoredNode != null) {
-                            int coloredArrivalNode = coloredLink.toColoredNode.index();
+                            int coloredArrivalNode = graph.getInternalIndex(coloredLink.toColoredNode.index());
                             setData(coloredArrivalNode, 0, arrivalTime, 0);
                             this.pq.insert(coloredArrivalNode, 0);
                         }

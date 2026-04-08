@@ -140,7 +140,7 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
         if (turnRestrictions != null) {
             Map<Id<Link>, TurnRestrictionsContext.ColoredLink> replaced = turnRestrictions.replacedLinks;
             if (replaced.containsKey(fromLink.getId())) {
-                startIdx = replaced.get(fromLink.getId()).toColoredNode.index();
+                startIdx = baseGraph.getInternalIndex(replaced.get(fromLink.getId()).toColoredNode.index());
             }
         }
 
