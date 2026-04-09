@@ -19,6 +19,8 @@
  * *********************************************************************** */
 package org.matsim.core.router.speedy;
 
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.core.config.Configurator;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.network.Node;
@@ -55,8 +57,9 @@ import java.util.Random;
  *
  * <p>Routers benchmarked:
  * <ol>
- *   <li>SpeedyALT (with Z-order and identity ordering)</li>
- *   <li>CH Time-Dependent (with Z-order and identity ordering)</li>
+ *   <li>SpeedyALT (Z-order)</li>
+ *   <li>CH Time-Dependent (Z-order)</li>
+ *   <li>CH Static (Z-order)</li>
  * </ol>
  *
  * <p>Run with sufficient heap, e.g.:
@@ -87,6 +90,13 @@ public class RouterBenchmark {
     record RouterEntry(String name, LeastCostPathCalculator router) {}
 
     public static void main(String[] args) {
+        // Enable DEBUG logging for CH preprocessing classes so we can see progress
+        Configurator.setLevel(CHBuilder.class.getName(), Level.DEBUG);
+        Configurator.setLevel(InertialFlowCutter.class.getName(), Level.DEBUG);
+        Configurator.setLevel(SpeedyGraphBuilder.class.getName(), Level.DEBUG);
+        Configurator.setLevel(NetworkAnalyzer.class.getName(), Level.DEBUG);
+        Configurator.setLevel(RoutingParameterTuner.class.getName(), Level.DEBUG);
+
         // ---- 0. Parse CLI arguments ----
         String networkPath = null;
         for (int i = 0; i < args.length; i++) {
@@ -120,62 +130,53 @@ public class RouterBenchmark {
         FreespeedTravelTimeAndDisutility tc =
                 new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 
-        // ---- 2a. Build graph WITH Morton Z-order spatial reordering ----
+        // ---- 2. Build graph with Morton Z-order spatial reordering ----
         System.out.println();
         System.out.println("Building SpeedyGraph (Morton Z-order) ...");
-        SpeedyGraph graphZ = SpeedyGraphBuilder.build(network);
+        SpeedyGraph graph = SpeedyGraphBuilder.build(network);
 
-        // ---- 2b. Build graph WITHOUT spatial reordering (identity ordering) ----
-        System.out.println("Building SpeedyGraph (identity ordering) ...");
-        SpeedyGraph graphId = SpeedyGraphBuilder.buildWithIdentityOrdering(network);
-
-        // ---- 3. Compute ND order (once per graph, reuse for CH) ----
+        // ---- 2b. Analyse network structure and auto-tune parameters ----
         System.out.println();
-        System.out.println("Computing InertialFlowCutter ND order (Z-order graph) ...");
+        System.out.println("Analysing network structure ...");
+        NetworkProfile profile = NetworkAnalyzer.analyze(graph);
+        System.out.println("  " + profile.toSummaryString());
+
+        CHBuilderParams chParams = RoutingParameterTuner.tuneCHParams(profile);
+        IFCParams ifcParams = RoutingParameterTuner.tuneIFCParams(profile);
+        int autoLandmarks = RoutingParameterTuner.tuneLandmarkCount(profile, 0);
+        int effectiveLandmarks = altLandmarks > 0 ? altLandmarks : autoLandmarks;
+
+        System.out.printf("  Auto-tuned CH params:  %s%n", chParams);
+        System.out.printf("  Auto-tuned IFC params: %s%n", ifcParams);
+        System.out.printf("  Landmarks: %d (auto=%d, cli=%d)%n", effectiveLandmarks, autoLandmarks, altLandmarks);
+
+        // ---- 3. Compute ND order ----
+        System.out.println();
+        System.out.println("Computing InertialFlowCutter ND order (auto-tuned) ...");
         long t0 = System.nanoTime();
-        InertialFlowCutter.NDOrderResult orderZ = new InertialFlowCutter(graphZ).computeOrderWithBatches();
-        long orderZMs = (System.nanoTime() - t0) / 1_000_000;
-        System.out.printf("  ND Order (Z):   %,6d ms%n", orderZMs);
+        InertialFlowCutter.NDOrderResult order = new InertialFlowCutter(graph, ifcParams).computeOrderWithBatches();
+        long orderMs = (System.nanoTime() - t0) / 1_000_000;
+        System.out.printf("  ND Order:  %,6d ms%n", orderMs);
 
-        System.out.println("Computing InertialFlowCutter ND order (identity graph) ...");
-        long t0b = System.nanoTime();
-        InertialFlowCutter.NDOrderResult orderId = new InertialFlowCutter(graphId).computeOrderWithBatches();
-        long orderIdMs = (System.nanoTime() - t0b) / 1_000_000;
-        System.out.printf("  ND Order (id):  %,6d ms%n", orderIdMs);
-
-        // ---- 4. Build CH for both graphs ----
+        // ---- 4. Build CH ----
         System.out.println();
-        System.out.println("Building CH (Z-order graph) ...");
+        System.out.println("Building CH (auto-tuned) ...");
         long t1 = System.nanoTime();
-        CHGraph chGraphZ = new CHBuilder(graphZ, tc).buildWithOrderParallel(orderZ);
-        long contrZMs = (System.nanoTime() - t1) / 1_000_000;
-        new CHTTFCustomizer().customize(chGraphZ, tc, tc);
-        long totalBuildZMs = orderZMs + (System.nanoTime() - t1) / 1_000_000;
-        System.out.printf("  CH build (Z):   %,6d ms  (%,d edges)%n", totalBuildZMs, chGraphZ.totalEdgeCount);
+        CHGraph chGraph = new CHBuilder(graph, tc, chParams).buildWithOrderParallel(order);
+        new CHTTFCustomizer().customize(chGraph, tc, tc);
+        long totalBuildMs = orderMs + (System.nanoTime() - t1) / 1_000_000;
+        System.out.printf("  CH build:  %,6d ms  (%,d edges)%n", totalBuildMs, chGraph.totalEdgeCount);
 
-        System.out.println("Building CH (identity graph) ...");
-        long t2 = System.nanoTime();
-        CHGraph chGraphId = new CHBuilder(graphId, tc).buildWithOrderParallel(orderId);
-        long contrIdMs = (System.nanoTime() - t2) / 1_000_000;
-        new CHTTFCustomizer().customize(chGraphId, tc, tc);
-        long totalBuildIdMs = orderIdMs + (System.nanoTime() - t2) / 1_000_000;
-        System.out.printf("  CH build (id):  %,6d ms  (%,d edges)%n", totalBuildIdMs, chGraphId.totalEdgeCount);
-
-        // ---- 5. Build ALT data for both graphs ----
+        // ---- 5. Build ALT landmarks ----
         System.out.println();
         System.out.println("Building SpeedyALT landmarks ...");
-        long altZStart = System.nanoTime();
-        SpeedyALTData altDataZ = new SpeedyALTData(graphZ, Math.min(altLandmarks, graphZ.nodeCount), tc, 1);
-        long altZMs = (System.nanoTime() - altZStart) / 1_000_000;
-        System.out.printf("  ALT build (Z):  %,6d ms  (%d landmarks)%n", altZMs, altLandmarks);
-
-        long altIdStart = System.nanoTime();
-        SpeedyALTData altDataId = new SpeedyALTData(graphId, Math.min(altLandmarks, graphId.nodeCount), tc, 1);
-        long altIdMs = (System.nanoTime() - altIdStart) / 1_000_000;
-        System.out.printf("  ALT build (id): %,6d ms  (%d landmarks)%n", altIdMs, altLandmarks);
+        long altStart = System.nanoTime();
+        SpeedyALTData altData = new SpeedyALTData(graph, Math.min(effectiveLandmarks, graph.nodeCount), tc, 1);
+        long altMs = (System.nanoTime() - altStart) / 1_000_000;
+        System.out.printf("  ALT build: %,6d ms  (%d landmarks)%n", altMs, effectiveLandmarks);
 
         // ---- 6. Create routers ----
-        List<RouterEntry> routers = buildRouters(graphZ, graphId, altDataZ, altDataId, chGraphZ, chGraphId, tc);
+        List<RouterEntry> routers = buildRouters(graph, altData, chGraph, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
         int n = nodeList.size();
@@ -237,22 +238,29 @@ public class RouterBenchmark {
         }
 
         // ---- 9. Results ----
-        double edgeOverhead = ((double) chGraphZ.totalEdgeCount / network.getLinks().size() - 1) * 100;
+        double edgeOverhead = ((double) chGraph.totalEdgeCount / network.getLinks().size() - 1) * 100;
 
         // Build query performance rows dynamically
+        int nodeCount = network.getNodes().size();
+        String paramMode = "auto-tuned";
         List<String[]> resultRows = new ArrayList<>();
         resultRows.add(new String[]{ "Network" });
-        resultRows.add(new String[]{ "  Nodes",           String.format("%,d", network.getNodes().size()) });
+        resultRows.add(new String[]{ "  Nodes",           String.format("%,d", nodeCount) });
         resultRows.add(new String[]{ "  Links",           String.format("%,d", network.getLinks().size()) });
-        resultRows.add(new String[]{ "  CH edges",        String.format("%,d  (%+.1f%% overhead)", chGraphZ.totalEdgeCount, edgeOverhead) });
+        resultRows.add(new String[]{ "  CH edges",        String.format("%,d  (%+.1f%% overhead)", chGraph.totalEdgeCount, edgeOverhead) });
+        resultRows.add(new String[]{ "  Param mode",      paramMode });
+        resultRows.add(new String[]{ "  Avg out-degree",  String.format("%.2f", profile.avgOutDegree()) });
+        resultRows.add(new String[]{ "  P95 out-degree",  String.valueOf(profile.p95OutDegree()) });
+        resultRows.add(new String[]{ "  Max out-degree",  String.valueOf(profile.maxOutDegree()) });
+        resultRows.add(new String[]{ "  Hub fraction",    String.format("%.4f (deg>=6)", profile.highDegreeNodeFraction()) });
+        resultRows.add(new String[]{ "  Deg skewness",    String.format("%.2f", profile.degreeSkewness()) });
+        resultRows.add(new String[]{ "  Est. diameter",   String.valueOf(profile.estimatedDiameter()) });
+        resultRows.add(new String[]{ "  Components",      String.valueOf(profile.connectedComponents()) });
         resultRows.add(null); // separator
         resultRows.add(new String[]{ "Preprocessing" });
-        resultRows.add(new String[]{ "  ND Order (Z)",    String.format("%,d ms", orderZMs) });
-        resultRows.add(new String[]{ "  ND Order (id)",   String.format("%,d ms", orderIdMs) });
-        resultRows.add(new String[]{ "  CH build (Z)",    String.format("%,d ms  (incl. order)", totalBuildZMs) });
-        resultRows.add(new String[]{ "  CH build (id)",   String.format("%,d ms  (incl. order)", totalBuildIdMs) });
-        resultRows.add(new String[]{ "  ALT build (Z)",   String.format("%,d ms  (%d landmarks)", altZMs, altLandmarks) });
-        resultRows.add(new String[]{ "  ALT build (id)",  String.format("%,d ms  (%d landmarks)", altIdMs, altLandmarks) });
+        resultRows.add(new String[]{ "  ND Order",        String.format("%,d ms", orderMs) });
+        resultRows.add(new String[]{ "  CH build",        String.format("%,d ms  (incl. order)", totalBuildMs) });
+        resultRows.add(new String[]{ "  ALT build",       String.format("%,d ms  (%d landmarks)", altMs, effectiveLandmarks) });
         resultRows.add(null);
         resultRows.add(new String[]{ "Query Performance", String.format("(%,d queries, %d warmup)", benchmarkQueries, warmupQueries) });
         for (int r = 0; r < routers.size(); r++) {
@@ -265,7 +273,7 @@ public class RouterBenchmark {
         resultRows.add(new String[]{ "  Mismatches",      String.format("%d  (threshold: 1e-3)", mismatches) });
 
         System.out.println();
-        printBox("Routing Benchmark  —  Z-Order vs Identity Comparison", resultRows.toArray(String[][]::new));
+        printBox("Routing Benchmark  —  ALT vs CH Comparison", resultRows.toArray(String[][]::new));
     }
 
     /**
@@ -327,16 +335,14 @@ public class RouterBenchmark {
      * append another {@code RouterEntry} to the returned list.
      */
     private static List<RouterEntry> buildRouters(
-            SpeedyGraph graphZ, SpeedyGraph graphId,
-            SpeedyALTData altDataZ, SpeedyALTData altDataId,
-            CHGraph chGraphZ, CHGraph chGraphId,
+            SpeedyGraph graph,
+            SpeedyALTData altData,
+            CHGraph chGraph,
             FreespeedTravelTimeAndDisutility tc) {
 
         List<RouterEntry> routers = new ArrayList<>();
-        routers.add(new RouterEntry("ALT (identity)", new SpeedyALT(altDataId, tc, tc)));
-        routers.add(new RouterEntry("ALT (Z-order)",  new SpeedyALT(altDataZ, tc, tc)));
-        routers.add(new RouterEntry("CH  (identity)", new CHRouterTimeDep(chGraphId, tc, tc)));
-        routers.add(new RouterEntry("CH  (Z-order)",  new CHRouterTimeDep(chGraphZ, tc, tc)));
+        routers.add(new RouterEntry("SpeedyALT",      new SpeedyALT(altData, tc, tc)));
+        routers.add(new RouterEntry("CH (time-dep)",   new CHRouterTimeDep(chGraph, tc, tc)));
         return routers;
     }
 

@@ -66,6 +66,9 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
 
     private final Map<Network, SpeedyGraph> baseGraphs = new ConcurrentHashMap<>();
 
+    /** Cached network profiles per graph (cheap to compute, but no reason to repeat). */
+    private final Map<SpeedyGraph, NetworkProfile> profileCache = new ConcurrentHashMap<>();
+
     /**
      * Cache keyed by SpeedyGraph → contracted CH graph.
      * The contraction topology depends on the node ordering (from InertialFlowCutter,
@@ -89,17 +92,24 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
         // Look up or build the contracted CH graph (expensive; cached per network).
         CHGraph chGraph = chGraphCache.computeIfAbsent(baseGraph, key -> {
             int nThreads = Runtime.getRuntime().availableProcessors();
-            LOG.info("[CH] Preparing contraction hierarchy for {} nodes, {} links ({} threads)…",
+
+            // ---- Auto-tune parameters from network structure ----
+            NetworkProfile profile = profileCache.computeIfAbsent(key, NetworkAnalyzer::analyze);
+            CHBuilderParams chParams = RoutingParameterTuner.tuneCHParams(profile);
+            IFCParams ifcParams = RoutingParameterTuner.tuneIFCParams(profile);
+
+            LOG.info("[CH] Preparing contraction hierarchy for {} nodes, {} links ({} threads)",
                     fmt(baseGraph.nodeCount), fmt(baseGraph.linkCount), nThreads);
+            LOG.info("[CH]   Network profile: {}", profile.toSummaryString());
 
             long totalStart = System.nanoTime();
 
             InertialFlowCutter.NDOrderResult ndOrder =
-                    new InertialFlowCutter(baseGraph).computeOrderWithBatches();
+                    new InertialFlowCutter(baseGraph, ifcParams).computeOrderWithBatches();
             LOG.info("[CH]   Nested dissection ordering: {}s ({} rounds)",
                     secs(ndOrder.elapsedNanos), ndOrder.rounds.size());
 
-            CHBuilder builder = new CHBuilder(baseGraph, travelCosts);
+            CHBuilder builder = new CHBuilder(baseGraph, travelCosts, chParams);
             CHGraph result = builder.buildWithOrderParallel(ndOrder);
             CHBuilder.BuildStats stats = builder.getLastBuildStats();
 
