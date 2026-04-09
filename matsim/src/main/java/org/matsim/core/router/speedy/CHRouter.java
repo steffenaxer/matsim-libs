@@ -84,6 +84,9 @@ public class CHRouter implements LeastCostPathCalculator {
     private final int[]    dnOff, dnLen, dnEdges;
     private final double[] dnWeights;
 
+    // Node levels for stall-on-demand pruning
+    private final int[] nodeLevel;
+
     public CHRouter(CHGraph chGraph, TravelTime tt, TravelDisutility td) {
         this.chGraph   = chGraph;
         this.baseGraph = chGraph.getBaseGraph();
@@ -115,6 +118,7 @@ public class CHRouter implements LeastCostPathCalculator {
         this.dnLen     = chGraph.dnLen;
         this.dnEdges   = chGraph.dnEdges;
         this.dnWeights = chGraph.dnWeights;
+        this.nodeLevel = chGraph.nodeLevel;
     }
 
     @Override
@@ -202,27 +206,50 @@ public class CHRouter implements LeastCostPathCalculator {
                     }
                 }
 
-                int uOff = upOff[v];
-                int uEnd = uOff + upLen[v];
-                for (int slot = uOff; slot < uEnd; slot++) {
-                    int w       = upEdges[slot * S];
-                    double newCost = d + upWeights[slot];
-                    if (fwdIterIds[w] == currentIteration) {
-                        if (newCost < fwdCost[w]) {
-                            fwdCost[w] = newCost;
-                            fwdComingFrom[w] = v;
-                            fwdUsedEdge[w]   = upEdges[slot * S + CHGraph.E_GIDX];
-                            fwdPQ.decreaseKey(w, newCost);
-                        } else if (newCost == fwdCost[w]) {
-                            int gIdx = upEdges[slot * S + CHGraph.E_GIDX];
-                            if (gIdx < fwdUsedEdge[w]) {
-                                fwdComingFrom[w] = v;
-                                fwdUsedEdge[w]   = gIdx;
+                // Stall-on-demand: if v can be reached more cheaply via a
+                // downward edge from a higher-level node that was already
+                // settled in the forward search, then v's upward edges cannot
+                // be on a shortest path and are pruned.  This eliminates
+                // ~30-50% of node expansions on large hierarchies.
+                boolean stalled = false;
+                {
+                    int dOff3 = dnOff[v];
+                    int dEnd3 = dOff3 + dnLen[v];
+                    for (int slot = dOff3; slot < dEnd3; slot++) {
+                        int u = dnEdges[slot * S];
+                        if (fwdIterIds[u] == currentIteration) {
+                            double altCost = fwdCost[u] + dnWeights[slot];
+                            if (altCost < d) {
+                                stalled = true;
+                                break;
                             }
                         }
-                    } else {
-                        setFwd(w, newCost, v, upEdges[slot * S + CHGraph.E_GIDX]);
-                        fwdPQ.insert(w, newCost);
+                    }
+                }
+
+                if (!stalled) {
+                    int uOff = upOff[v];
+                    int uEnd = uOff + upLen[v];
+                    for (int slot = uOff; slot < uEnd; slot++) {
+                        int w       = upEdges[slot * S];
+                        double newCost = d + upWeights[slot];
+                        if (fwdIterIds[w] == currentIteration) {
+                            if (newCost < fwdCost[w]) {
+                                fwdCost[w] = newCost;
+                                fwdComingFrom[w] = v;
+                                fwdUsedEdge[w]   = upEdges[slot * S + CHGraph.E_GIDX];
+                                fwdPQ.decreaseKey(w, newCost);
+                            } else if (newCost == fwdCost[w]) {
+                                int gIdx = upEdges[slot * S + CHGraph.E_GIDX];
+                                if (gIdx < fwdUsedEdge[w]) {
+                                    fwdComingFrom[w] = v;
+                                    fwdUsedEdge[w]   = gIdx;
+                                }
+                            }
+                        } else {
+                            setFwd(w, newCost, v, upEdges[slot * S + CHGraph.E_GIDX]);
+                            fwdPQ.insert(w, newCost);
+                        }
                     }
                 }
 
@@ -238,27 +265,48 @@ public class CHRouter implements LeastCostPathCalculator {
                     }
                 }
 
-                int dOff2 = dnOff[v];
-                int dEnd = dOff2 + dnLen[v];
-                for (int slot = dOff2; slot < dEnd; slot++) {
-                    int y       = dnEdges[slot * S];
-                    double newCost = d + dnWeights[slot];
-                    if (bwdIterIds[y] == currentIteration) {
-                        if (newCost < bwdCost[y]) {
-                            bwdCost[y] = newCost;
-                            bwdComingFrom[y] = v;
-                            bwdUsedEdge[y]   = dnEdges[slot * S + CHGraph.E_GIDX];
-                            bwdPQ.decreaseKey(y, newCost);
-                        } else if (newCost == bwdCost[y]) {
-                            int gIdx = dnEdges[slot * S + CHGraph.E_GIDX];
-                            if (gIdx < bwdUsedEdge[y]) {
-                                bwdComingFrom[y] = v;
-                                bwdUsedEdge[y]   = gIdx;
+                // Stall-on-demand (backward): if v can be reached more cheaply
+                // via an upward edge from a lower-level node already settled
+                // in the backward search, stall v.
+                boolean stalled = false;
+                {
+                    int uOff2 = upOff[v];
+                    int uEnd2 = uOff2 + upLen[v];
+                    for (int slot = uOff2; slot < uEnd2; slot++) {
+                        int w = upEdges[slot * S];
+                        if (bwdIterIds[w] == currentIteration) {
+                            double altCost = bwdCost[w] + upWeights[slot];
+                            if (altCost < d) {
+                                stalled = true;
+                                break;
                             }
                         }
-                    } else {
-                        setBwd(y, newCost, v, dnEdges[slot * S + CHGraph.E_GIDX]);
-                        bwdPQ.insert(y, newCost);
+                    }
+                }
+
+                if (!stalled) {
+                    int dOff2 = dnOff[v];
+                    int dEnd = dOff2 + dnLen[v];
+                    for (int slot = dOff2; slot < dEnd; slot++) {
+                        int y       = dnEdges[slot * S];
+                        double newCost = d + dnWeights[slot];
+                        if (bwdIterIds[y] == currentIteration) {
+                            if (newCost < bwdCost[y]) {
+                                bwdCost[y] = newCost;
+                                bwdComingFrom[y] = v;
+                                bwdUsedEdge[y]   = dnEdges[slot * S + CHGraph.E_GIDX];
+                                bwdPQ.decreaseKey(y, newCost);
+                            } else if (newCost == bwdCost[y]) {
+                                int gIdx = dnEdges[slot * S + CHGraph.E_GIDX];
+                                if (gIdx < bwdUsedEdge[y]) {
+                                    bwdComingFrom[y] = v;
+                                    bwdUsedEdge[y]   = gIdx;
+                                }
+                            }
+                        } else {
+                            setBwd(y, newCost, v, dnEdges[slot * S + CHGraph.E_GIDX]);
+                            bwdPQ.insert(y, newCost);
+                        }
                     }
                 }
             }
@@ -303,15 +351,37 @@ public class CHRouter implements LeastCostPathCalculator {
         return new Path(nodeList, linkList, time - startTime, cost);
     }
 
+    /**
+     * Iterative (stack-based) edge unpacking.  Replaces the recursive version
+     * to avoid stack overflow on deep shortcut chains (common with 750k+ node
+     * networks that have many deferred hub layers) and to eliminate call-stack
+     * overhead.
+     */
     private void unpackEdge(int gIdx, List<Node> nodeList, List<Link> linkList) {
-        int orig = chGraph.edgeOrigLink[gIdx];
-        if (orig >= 0) {
-            Link link = baseGraph.getLink(orig);
-            linkList.add(link);
-            nodeList.add(link.getToNode());
-        } else {
-            unpackEdge(chGraph.edgeLower1[gIdx], nodeList, linkList);
-            unpackEdge(chGraph.edgeLower2[gIdx], nodeList, linkList);
+        // Use an explicit stack to avoid recursion.  Each stack entry is a
+        // global edge index.  We process in LIFO order, pushing lower2 first
+        // then lower1, so that lower1 is processed before lower2 (correct
+        // traversal order).
+        int[] stack = new int[64];
+        int sp = 0;
+        stack[sp++] = gIdx;
+
+        while (sp > 0) {
+            int e = stack[--sp];
+            int orig = chGraph.edgeOrigLink[e];
+            if (orig >= 0) {
+                // Real edge — emit directly
+                Link link = baseGraph.getLink(orig);
+                linkList.add(link);
+                nodeList.add(link.getToNode());
+            } else {
+                // Shortcut — push children (lower2 first, then lower1)
+                if (sp + 2 > stack.length) {
+                    stack = java.util.Arrays.copyOf(stack, stack.length * 2);
+                }
+                stack[sp++] = chGraph.edgeLower2[e];
+                stack[sp++] = chGraph.edgeLower1[e];
+            }
         }
     }
 

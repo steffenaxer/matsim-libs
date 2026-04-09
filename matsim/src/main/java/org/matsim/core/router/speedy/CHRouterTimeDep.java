@@ -217,37 +217,60 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
                     }
                 }
 
-                // Compute time bin once for this node
-                int bin = ((int) (arr * INV_BIN)) % NUM_BINS;
-                if (bin < 0) bin += NUM_BINS;
-                int binOff = bin * totalEdgeCount; // bin-major TTF offset
-
-                // Iterate upward out-edges (CSR: contiguous in memory)
-                int uOff = upOff[v];
-                int uEnd = uOff + upLen[v];
-                for (int slot = uOff; slot < uEnd; slot++) {
-                    int eBase      = slot * S;
-                    int w          = upEdges[eBase]; // toNode
-                    int gIdx       = upEdges[eBase + CHGraph.E_GIDX];
-                    double tTime   = ttf[binOff + gIdx];
-                    double newArr  = arr + tTime;
-                    double newCost = cost + tTime;
-
-                    if (fwdIterIds[w] == currentIteration) {
-                        if (newCost < fwdCost[w]) {
-                            fwdArrival[w]    = newArr;
-                            fwdCost[w]       = newCost;
-                            fwdComingFrom[w] = v;
-                            fwdUsedEdge[w]   = gIdx;
-                            fwdPQ.decreaseKey(w, newCost);
-                        } else if (newCost == fwdCost[w] && gIdx < fwdUsedEdge[w]) {
-                            fwdArrival[w]    = newArr;
-                            fwdComingFrom[w] = v;
-                            fwdUsedEdge[w]   = gIdx;
+                // Stall-on-demand (forward): if v can be reached more cheaply
+                // via a downward edge from a higher-level node already settled
+                // in the forward search, stall v's upward expansion.
+                // Uses minTTF as lower bound on the dn-edge travel time.
+                boolean fwdStalled = false;
+                {
+                    int dOff2 = dnOff[v];
+                    int dEnd2 = dOff2 + dnLen[v];
+                    for (int slot = dOff2; slot < dEnd2; slot++) {
+                        int u = dnEdges[slot * S];
+                        if (fwdIterIds[u] == currentIteration) {
+                            int gIdx2 = dnEdges[slot * S + CHGraph.E_GIDX];
+                            double altCost = fwdCost[u] + minTTF[gIdx2];
+                            if (altCost < cost) {
+                                fwdStalled = true;
+                                break;
+                            }
                         }
-                    } else {
-                        setFwd(w, newArr, newCost, v, gIdx);
-                        fwdPQ.insert(w, newCost);
+                    }
+                }
+
+                if (!fwdStalled) {
+                    // Compute time bin once for this node
+                    int bin = ((int) (arr * INV_BIN)) % NUM_BINS;
+                    if (bin < 0) bin += NUM_BINS;
+                    int binOff = bin * totalEdgeCount; // bin-major TTF offset
+
+                    // Iterate upward out-edges (CSR: contiguous in memory)
+                    int uOff = upOff[v];
+                    int uEnd = uOff + upLen[v];
+                    for (int slot = uOff; slot < uEnd; slot++) {
+                        int eBase      = slot * S;
+                        int w          = upEdges[eBase]; // toNode
+                        int gIdx       = upEdges[eBase + CHGraph.E_GIDX];
+                        double tTime   = ttf[binOff + gIdx];
+                        double newArr  = arr + tTime;
+                        double newCost = cost + tTime;
+
+                        if (fwdIterIds[w] == currentIteration) {
+                            if (newCost < fwdCost[w]) {
+                                fwdArrival[w]    = newArr;
+                                fwdCost[w]       = newCost;
+                                fwdComingFrom[w] = v;
+                                fwdUsedEdge[w]   = gIdx;
+                                fwdPQ.decreaseKey(w, newCost);
+                            } else if (newCost == fwdCost[w] && gIdx < fwdUsedEdge[w]) {
+                                fwdArrival[w]    = newArr;
+                                fwdComingFrom[w] = v;
+                                fwdUsedEdge[w]   = gIdx;
+                            }
+                        } else {
+                            setFwd(w, newArr, newCost, v, gIdx);
+                            fwdPQ.insert(w, newCost);
+                        }
                     }
                 }
 
@@ -263,28 +286,50 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
                     }
                 }
 
-                // Iterate downward in-edges (CSR)
-                int dOff = dnOff[v];
-                int dEnd = dOff + dnLen[v];
-                for (int slot = dOff; slot < dEnd; slot++) {
-                    int eBase = slot * S;
-                    int y     = dnEdges[eBase]; // fromNode (higher-level)
-                    int gIdx  = dnEdges[eBase + CHGraph.E_GIDX];
-                    double newLB = lb + minTTF[gIdx];
-
-                    if (bwdIterIds[y] == currentIteration) {
-                        if (newLB < bwdLB[y]) {
-                            bwdLB[y]         = newLB;
-                            bwdComingFrom[y] = v;
-                            bwdUsedEdge[y]   = gIdx;
-                            bwdPQ.decreaseKey(y, newLB);
-                        } else if (newLB == bwdLB[y] && gIdx < bwdUsedEdge[y]) {
-                            bwdComingFrom[y] = v;
-                            bwdUsedEdge[y]   = gIdx;
+                // Stall-on-demand (backward): if v can be reached more cheaply
+                // via an upward edge from a lower-level node already settled
+                // in the backward search, stall v's downward expansion.
+                boolean bwdStalled = false;
+                {
+                    int uOff2 = upOff[v];
+                    int uEnd2 = uOff2 + upLen[v];
+                    for (int slot = uOff2; slot < uEnd2; slot++) {
+                        int w = upEdges[slot * S];
+                        if (bwdIterIds[w] == currentIteration) {
+                            int gIdx2 = upEdges[slot * S + CHGraph.E_GIDX];
+                            double altCost = bwdLB[w] + minTTF[gIdx2];
+                            if (altCost < lb) {
+                                bwdStalled = true;
+                                break;
+                            }
                         }
-                    } else {
-                        setBwd(y, newLB, v, gIdx);
-                        bwdPQ.insert(y, newLB);
+                    }
+                }
+
+                if (!bwdStalled) {
+                    // Iterate downward in-edges (CSR)
+                    int dOff = dnOff[v];
+                    int dEnd = dOff + dnLen[v];
+                    for (int slot = dOff; slot < dEnd; slot++) {
+                        int eBase = slot * S;
+                        int y     = dnEdges[eBase]; // fromNode (higher-level)
+                        int gIdx  = dnEdges[eBase + CHGraph.E_GIDX];
+                        double newLB = lb + minTTF[gIdx];
+
+                        if (bwdIterIds[y] == currentIteration) {
+                            if (newLB < bwdLB[y]) {
+                                bwdLB[y]         = newLB;
+                                bwdComingFrom[y] = v;
+                                bwdUsedEdge[y]   = gIdx;
+                                bwdPQ.decreaseKey(y, newLB);
+                            } else if (newLB == bwdLB[y] && gIdx < bwdUsedEdge[y]) {
+                                bwdComingFrom[y] = v;
+                                bwdUsedEdge[y]   = gIdx;
+                            }
+                        } else {
+                            setBwd(y, newLB, v, gIdx);
+                            bwdPQ.insert(y, newLB);
+                        }
                     }
                 }
             }
@@ -336,16 +381,29 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
         return new Path(nodeList, linkList, time - startTime, cost);
     }
 
+    /**
+     * Iterative (stack-based) edge unpacking.  Replaces the recursive version
+     * to avoid stack overflow on deep shortcut chains (common with 750k+ node
+     * networks) and to eliminate call-stack overhead.
+     */
     private void unpackEdge(int gIdx, List<Node> nodeList, List<Link> linkList) {
-        int orig = chGraph.edgeOrigLink[gIdx];
-        if (orig >= 0) {
-            linkList.add(baseGraph.getLink(orig));
-            // We need to find the toNode. For global edges, we don't store from/to directly.
-            // But the link itself carries the toNode.
-            nodeList.add(baseGraph.getLink(orig).getToNode());
-        } else {
-            unpackEdge(chGraph.edgeLower1[gIdx], nodeList, linkList);
-            unpackEdge(chGraph.edgeLower2[gIdx], nodeList, linkList);
+        int[] stack = new int[64];
+        int sp = 0;
+        stack[sp++] = gIdx;
+
+        while (sp > 0) {
+            int e = stack[--sp];
+            int orig = chGraph.edgeOrigLink[e];
+            if (orig >= 0) {
+                linkList.add(baseGraph.getLink(orig));
+                nodeList.add(baseGraph.getLink(orig).getToNode());
+            } else {
+                if (sp + 2 > stack.length) {
+                    stack = java.util.Arrays.copyOf(stack, stack.length * 2);
+                }
+                stack[sp++] = chGraph.edgeLower2[e];
+                stack[sp++] = chGraph.edgeLower1[e];
+            }
         }
     }
 
