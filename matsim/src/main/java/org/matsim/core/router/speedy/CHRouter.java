@@ -185,7 +185,7 @@ public class CHRouter implements LeastCostPathCalculator {
         while (!fwdPQ.isEmpty() || !bwdPQ.isEmpty()) {
             double fMin = fwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : fwdCost[fwdPQ.peek()];
             double bMin = bwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : bwdCost[bwdPQ.peek()];
-            if (fMin + bMin >= bestCost) break;
+            if (fMin >= bestCost && bMin >= bestCost) break;
 
             boolean expandForward = !fwdPQ.isEmpty()
                     && (bwdPQ.isEmpty() || fMin <= bMin);
