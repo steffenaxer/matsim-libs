@@ -30,10 +30,6 @@ import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.scenario.ScenarioUtils;
 
-import org.apache.logging.log4j.Level;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.config.Configurator;
-
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -59,8 +55,8 @@ import java.util.Random;
  *
  * <p>Routers benchmarked:
  * <ol>
- *   <li>SpeedyALT (Z-order)</li>
- *   <li>CH Time-Dependent (Z-order)</li>
+ *   <li>SpeedyALT (with Z-order and identity ordering)</li>
+ *   <li>CH Time-Dependent (with Z-order and identity ordering)</li>
  * </ol>
  *
  * <p>Run with sufficient heap, e.g.:
@@ -93,30 +89,19 @@ public class RouterBenchmark {
     public static void main(String[] args) {
         // ---- 0. Parse CLI arguments ----
         String networkPath = null;
-        boolean verbose = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--network"   -> networkPath       = args[++i];
                 case "--queries"   -> benchmarkQueries   = Integer.parseInt(args[++i]);
                 case "--warmup"    -> warmupQueries       = Integer.parseInt(args[++i]);
                 case "--landmarks" -> altLandmarks        = Integer.parseInt(args[++i]);
-                case "--verbose", "-v" -> verbose = true;
                 default -> {
                     System.err.println("Unknown argument: " + args[i]);
                     System.err.println("Usage: java ... RouterBenchmark "
-                            + "[--network <path|berlin|duesseldorf>] [--queries <n>] [--warmup <n>] [--landmarks <n>] [--verbose]");
+                            + "[--network <path|berlin|duesseldorf>] [--queries <n>] [--warmup <n>] [--landmarks <n>]");
                     System.exit(1);
                 }
             }
-        }
-
-        // Enable DEBUG logging for CH/routing preprocessing when --verbose is set
-        if (verbose) {
-            Configurator.setLevel(LogManager.getLogger(CHBuilder.class), Level.DEBUG);
-            Configurator.setLevel(LogManager.getLogger(InertialFlowCutter.class), Level.DEBUG);
-            Configurator.setLevel(LogManager.getLogger(CHTTFCustomizer.class), Level.DEBUG);
-            Configurator.setLevel(LogManager.getLogger(SpeedyALTData.class), Level.DEBUG);
-            System.out.println("Verbose logging enabled (DEBUG level for CH/ND/ALT preprocessing)");
         }
 
         long maxHeapMB = Runtime.getRuntime().maxMemory() / (1024 * 1024);
@@ -135,13 +120,16 @@ public class RouterBenchmark {
         FreespeedTravelTimeAndDisutility tc =
                 new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 
-        // ---- 2. Build graph WITH Morton Z-order spatial reordering ----
+        // ---- 2a. Build graph WITH Morton Z-order spatial reordering ----
         System.out.println();
         System.out.println("Building SpeedyGraph (Morton Z-order) ...");
         SpeedyGraph graphZ = SpeedyGraphBuilder.build(network);
 
+        // ---- 2b. Build graph WITHOUT spatial reordering (identity ordering) ----
+        System.out.println("Building SpeedyGraph (identity ordering) ...");
+        SpeedyGraph graphId = SpeedyGraphBuilder.buildWithIdentityOrdering(network);
 
-        // ---- 3. Compute ND order (Z-order graph) ----
+        // ---- 3. Compute ND order (once per graph, reuse for CH) ----
         System.out.println();
         System.out.println("Computing InertialFlowCutter ND order (Z-order graph) ...");
         long t0 = System.nanoTime();
@@ -149,8 +137,13 @@ public class RouterBenchmark {
         long orderZMs = (System.nanoTime() - t0) / 1_000_000;
         System.out.printf("  ND Order (Z):   %,6d ms%n", orderZMs);
 
+        System.out.println("Computing InertialFlowCutter ND order (identity graph) ...");
+        long t0b = System.nanoTime();
+        InertialFlowCutter.NDOrderResult orderId = new InertialFlowCutter(graphId).computeOrderWithBatches();
+        long orderIdMs = (System.nanoTime() - t0b) / 1_000_000;
+        System.out.printf("  ND Order (id):  %,6d ms%n", orderIdMs);
 
-        // ---- 4. Build CH (Z-order graph) ----
+        // ---- 4. Build CH for both graphs ----
         System.out.println();
         System.out.println("Building CH (Z-order graph) ...");
         long t1 = System.nanoTime();
@@ -160,8 +153,15 @@ public class RouterBenchmark {
         long totalBuildZMs = orderZMs + (System.nanoTime() - t1) / 1_000_000;
         System.out.printf("  CH build (Z):   %,6d ms  (%,d edges)%n", totalBuildZMs, chGraphZ.totalEdgeCount);
 
+        System.out.println("Building CH (identity graph) ...");
+        long t2 = System.nanoTime();
+        CHGraph chGraphId = new CHBuilder(graphId, tc).buildWithOrderParallel(orderId);
+        long contrIdMs = (System.nanoTime() - t2) / 1_000_000;
+        new CHTTFCustomizer().customize(chGraphId, tc, tc);
+        long totalBuildIdMs = orderIdMs + (System.nanoTime() - t2) / 1_000_000;
+        System.out.printf("  CH build (id):  %,6d ms  (%,d edges)%n", totalBuildIdMs, chGraphId.totalEdgeCount);
 
-        // ---- 5. Build ALT data (Z-order graph) ----
+        // ---- 5. Build ALT data for both graphs ----
         System.out.println();
         System.out.println("Building SpeedyALT landmarks ...");
         long altZStart = System.nanoTime();
@@ -169,9 +169,13 @@ public class RouterBenchmark {
         long altZMs = (System.nanoTime() - altZStart) / 1_000_000;
         System.out.printf("  ALT build (Z):  %,6d ms  (%d landmarks)%n", altZMs, altLandmarks);
 
+        long altIdStart = System.nanoTime();
+        SpeedyALTData altDataId = new SpeedyALTData(graphId, Math.min(altLandmarks, graphId.nodeCount), tc, 1);
+        long altIdMs = (System.nanoTime() - altIdStart) / 1_000_000;
+        System.out.printf("  ALT build (id): %,6d ms  (%d landmarks)%n", altIdMs, altLandmarks);
 
         // ---- 6. Create routers ----
-        List<RouterEntry> routers = buildRouters(graphZ, altDataZ, chGraphZ, tc);
+        List<RouterEntry> routers = buildRouters(graphZ, graphId, altDataZ, altDataId, chGraphZ, chGraphId, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
         int n = nodeList.size();
@@ -244,8 +248,11 @@ public class RouterBenchmark {
         resultRows.add(null); // separator
         resultRows.add(new String[]{ "Preprocessing" });
         resultRows.add(new String[]{ "  ND Order (Z)",    String.format("%,d ms", orderZMs) });
+        resultRows.add(new String[]{ "  ND Order (id)",   String.format("%,d ms", orderIdMs) });
         resultRows.add(new String[]{ "  CH build (Z)",    String.format("%,d ms  (incl. order)", totalBuildZMs) });
+        resultRows.add(new String[]{ "  CH build (id)",   String.format("%,d ms  (incl. order)", totalBuildIdMs) });
         resultRows.add(new String[]{ "  ALT build (Z)",   String.format("%,d ms  (%d landmarks)", altZMs, altLandmarks) });
+        resultRows.add(new String[]{ "  ALT build (id)",  String.format("%,d ms  (%d landmarks)", altIdMs, altLandmarks) });
         resultRows.add(null);
         resultRows.add(new String[]{ "Query Performance", String.format("(%,d queries, %d warmup)", benchmarkQueries, warmupQueries) });
         for (int r = 0; r < routers.size(); r++) {
@@ -258,7 +265,7 @@ public class RouterBenchmark {
         resultRows.add(new String[]{ "  Mismatches",      String.format("%d  (threshold: 1e-3)", mismatches) });
 
         System.out.println();
-        printBox("Routing Benchmark  —  ALT vs CH (Z-Order)", resultRows.toArray(String[][]::new));
+        printBox("Routing Benchmark  —  Z-Order vs Identity Comparison", resultRows.toArray(String[][]::new));
     }
 
     /**
@@ -320,13 +327,15 @@ public class RouterBenchmark {
      * append another {@code RouterEntry} to the returned list.
      */
     private static List<RouterEntry> buildRouters(
-            SpeedyGraph graphZ,
-            SpeedyALTData altDataZ,
-            CHGraph chGraphZ,
+            SpeedyGraph graphZ, SpeedyGraph graphId,
+            SpeedyALTData altDataZ, SpeedyALTData altDataId,
+            CHGraph chGraphZ, CHGraph chGraphId,
             FreespeedTravelTimeAndDisutility tc) {
 
         List<RouterEntry> routers = new ArrayList<>();
+        routers.add(new RouterEntry("ALT (identity)", new SpeedyALT(altDataId, tc, tc)));
         routers.add(new RouterEntry("ALT (Z-order)",  new SpeedyALT(altDataZ, tc, tc)));
+        routers.add(new RouterEntry("CH  (identity)", new CHRouterTimeDep(chGraphId, tc, tc)));
         routers.add(new RouterEntry("CH  (Z-order)",  new CHRouterTimeDep(chGraphZ, tc, tc)));
         return routers;
     }

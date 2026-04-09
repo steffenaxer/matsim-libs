@@ -112,23 +112,12 @@ class MultiInsertionDetourPathCalculator implements MobsimBeforeCleanupListener 
 	}
 
 	DetourPathDataCache calculatePaths(DrtRequest drtRequest, List<Insertion> filteredInsertions) {
-		// Compute maxTravelTime from the request's time budget.  This bounds the
-		// shortest-path-tree search, which is critical for CH performance: without
-		// a bound, CH does a full one-to-all search (O(N+E)) because the
-		// allEndNodesReached StopCriterion cannot fire during CH Phase 1 (most
-		// target nodes are at low CH ranks, unreachable in the upward Dijkstra).
-		// With the bound, CH Phase 1 stops early and Phase 2 sweep prunes nodes
-		// beyond the cost limit, making CH proportional to the reachable set.
-		// For Dijkstra, the allEndNodesReached criterion fires first (bounded by
-		// the farthest target), so the maxTravelTime acts as a harmless safety net.
-		double maxTravelTime = drtRequest.getLatestArrivalTime() - drtRequest.getEarliestStartTime();
-
 		// with vehicle insertion filtering -- pathsToPickup is the most computationally demanding task, while
 		// pathsFromDropoff is the least demanding one
-		var pathsToPickupFuture = executorService.submit(() -> calcPathsToPickup(drtRequest, filteredInsertions, maxTravelTime));
-		var pathsFromPickupFuture = executorService.submit(() -> calcPathsFromPickup(drtRequest, filteredInsertions, maxTravelTime));
-		var pathsToDropoffFuture = executorService.submit(() -> calcPathsToDropoff(drtRequest, filteredInsertions, maxTravelTime));
-		var pathsFromDropoffFuture = executorService.submit(() -> calcPathsFromDropoff(drtRequest, filteredInsertions, maxTravelTime));
+		var pathsToPickupFuture = executorService.submit(() -> calcPathsToPickup(drtRequest, filteredInsertions));
+		var pathsFromPickupFuture = executorService.submit(() -> calcPathsFromPickup(drtRequest, filteredInsertions));
+		var pathsToDropoffFuture = executorService.submit(() -> calcPathsToDropoff(drtRequest, filteredInsertions));
+		var pathsFromDropoffFuture = executorService.submit(() -> calcPathsFromDropoff(drtRequest, filteredInsertions));
 
 		try {
 			return new DetourPathDataCache(pathsToPickupFuture.get(), pathsFromPickupFuture.get(),
@@ -138,38 +127,38 @@ class MultiInsertionDetourPathCalculator implements MobsimBeforeCleanupListener 
 		}
 	}
 
-	private Map<Link, PathData> calcPathsToPickup(DrtRequest drtRequest, List<Insertion> filteredInsertions, double maxTravelTime) {
+	private Map<Link, PathData> calcPathsToPickup(DrtRequest drtRequest, List<Insertion> filteredInsertions) {
 		// calc backward dijkstra from pickup to ends of selected stops + starts
 		double earliestPickupTime = drtRequest.getEarliestStartTime(); // optimistic
 		Collection<Link> toLinks = getDetourLinks(filteredInsertions.stream(),
 				insertion -> insertion.pickup.previousWaypoint.getLink());
-		return toPickupPathSearch.calcPathDataMap(drtRequest.getFromLink(), toLinks, earliestPickupTime, false, maxTravelTime);
+		return toPickupPathSearch.calcPathDataMap(drtRequest.getFromLink(), toLinks, earliestPickupTime, false);
 	}
 
-	private Map<Link, PathData> calcPathsFromPickup(DrtRequest drtRequest, List<Insertion> filteredInsertions, double maxTravelTime) {
+	private Map<Link, PathData> calcPathsFromPickup(DrtRequest drtRequest, List<Insertion> filteredInsertions) {
 		// calc forward dijkstra from pickup to beginnings of selected stops + dropoff
 		double earliestPickupTime = drtRequest.getEarliestStartTime(); // optimistic
 		Collection<Link> toLinks = getDetourLinks(filteredInsertions.stream(),
 				insertion -> insertion.pickup.nextWaypoint.getLink());
-		return fromPickupPathSearch.calcPathDataMap(drtRequest.getFromLink(), toLinks, earliestPickupTime, true, maxTravelTime);
+		return fromPickupPathSearch.calcPathDataMap(drtRequest.getFromLink(), toLinks, earliestPickupTime, true);
 	}
 
-	private Map<Link, PathData> calcPathsToDropoff(DrtRequest drtRequest, List<Insertion> filteredInsertions, double maxTravelTime) {
+	private Map<Link, PathData> calcPathsToDropoff(DrtRequest drtRequest, List<Insertion> filteredInsertions) {
 		// calc backward dijkstra from dropoff to ends of selected stops
 		double latestDropoffTime = drtRequest.getLatestArrivalTime(); // pessimistic
 		Collection<Link> toLinks = getDetourLinks(filteredInsertions.stream()
 						.filter(insertion -> !(insertion.dropoff.previousWaypoint instanceof Waypoint.Pickup)),
 				insertion -> insertion.dropoff.previousWaypoint.getLink());
-		return toDropoffPathSearch.calcPathDataMap(drtRequest.getToLink(), toLinks, latestDropoffTime, false, maxTravelTime);
+		return toDropoffPathSearch.calcPathDataMap(drtRequest.getToLink(), toLinks, latestDropoffTime, false);
 	}
 
-	private Map<Link, PathData> calcPathsFromDropoff(DrtRequest drtRequest, List<Insertion> filteredInsertions, double maxTravelTime) {
+	private Map<Link, PathData> calcPathsFromDropoff(DrtRequest drtRequest, List<Insertion> filteredInsertions) {
 		// calc forward dijkstra from dropoff to beginnings of selected stops
 		double latestDropoffTime = drtRequest.getLatestArrivalTime(); // pessimistic
 		Collection<Link> toLinks = getDetourLinks(filteredInsertions.stream()
 						.filter(insertion -> !(insertion.dropoff.nextWaypoint instanceof Waypoint.End)),
 				insertion -> insertion.dropoff.nextWaypoint.getLink());
-		return fromDropoffPathSearch.calcPathDataMap(drtRequest.getToLink(), toLinks, latestDropoffTime, true, maxTravelTime);
+		return fromDropoffPathSearch.calcPathDataMap(drtRequest.getToLink(), toLinks, latestDropoffTime, true);
 	}
 
 	private Collection<Link> getDetourLinks(Stream<Insertion> filteredInsertions,
