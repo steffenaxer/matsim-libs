@@ -87,7 +87,7 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
     public LeastCostPathCalculator createPathCalculator(
             Network network, TravelDisutility travelCosts, TravelTime travelTimes) {
 
-        SpeedyGraph baseGraph = baseGraphs.computeIfAbsent(network, SpeedyGraphBuilder::build);
+        SpeedyGraph baseGraph = baseGraphs.computeIfAbsent(network, SpeedyGraphBuilder::buildWithSpatialOrdering);
 
         // Look up or build the contracted CH graph (expensive; cached per network).
         CHGraph chGraph = chGraphCache.computeIfAbsent(baseGraph, key -> {

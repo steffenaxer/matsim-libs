@@ -18,11 +18,11 @@ import java.util.List;
 /**
  * Creates a {@link SpeedyGraph} for a provided {@link Network}.
  *
- * <p>Nodes are renumbered using a Z-order (Morton) curve so that spatially
- * nearby nodes receive adjacent internal indices.  This improves CPU cache
- * locality during routing.  The reordering is applied in both the normal
- * and turn-restriction paths; colored (virtual) nodes inherit the
- * coordinate of their parent real node and are placed nearby in the ordering.
+ * <p>By default, nodes receive dense internal indices in the natural order of
+ * their external IDs (identity ordering).  A Z-order (Morton) spatial
+ * reordering that improves CPU cache locality is available via
+ * {@link #buildWithSpatialOrdering(Network)} and is used exclusively by the
+ * CHRouter preprocessing step.
  *
  * @author mrieser / Simunto
  */
@@ -65,28 +65,21 @@ public class SpeedyGraphBuilder {
 
 		TurnRestrictionsContext context = TurnRestrictionsContext.build(network, turnRestrictionsMode);
 
-		// Collect all nodes (real + colored) with their external indices and coordinates
-		// Colored nodes inherit the coordinate of their parent real node.
 		int realNodeCount = network.getNodes().size();
 		int coloredNodeCount = context.coloredNodes.size();
 		int totalNodes = realNodeCount + coloredNodeCount;
 		int totalSlots = context.getNodeCount(); // address space covering all external indices
 
 		int[] extIndices = new int[totalNodes];
-		Coord[] coords = new Coord[totalNodes];
 		int idx = 0;
 		for (Node node : network.getNodes().values()) {
-			extIndices[idx] = node.getId().index();
-			coords[idx] = node.getCoord();
-			idx++;
+			extIndices[idx++] = node.getId().index();
 		}
 		for (TurnRestrictionsContext.ColoredNode cn : context.coloredNodes) {
-			extIndices[idx] = cn.index();
-			coords[idx] = cn.node().getCoord(); // same coord as parent real node
-			idx++;
+			extIndices[idx++] = cn.index();
 		}
 
-		this.nodeReorder = computeSpatialOrder(extIndices, coords, totalSlots);
+		this.nodeReorder = computeIdentityOrder(extIndices, totalSlots);
 		this.nodeCount = totalNodes;
 		this.linkCount = context.getLinkCount();
 
@@ -120,21 +113,16 @@ public class SpeedyGraphBuilder {
 	}
 
 	private SpeedyGraph buildWithoutTurnRestrictions(Network network) {
-		// Collect all nodes with their external indices and coordinates
 		List<Node> networkNodes = new ArrayList<>(network.getNodes().values());
 		int actualNodeCount = networkNodes.size();
 		int totalIdSlots = Id.getNumberOfIds(Node.class);
 
 		int[] extIndices = new int[actualNodeCount];
-		Coord[] coords = new Coord[actualNodeCount];
 		for (int i = 0; i < actualNodeCount; i++) {
-			Node node = networkNodes.get(i);
-			extIndices[i] = node.getId().index();
-			coords[i] = node.getCoord();
+			extIndices[i] = networkNodes.get(i).getId().index();
 		}
 
-		// Build the Z-order mapping: external Id.index() → dense internal index
-		this.nodeReorder = computeSpatialOrder(extIndices, coords, totalIdSlots);
+		this.nodeReorder = computeIdentityOrder(extIndices, totalIdSlots);
 		this.nodeCount = actualNodeCount;
 		this.linkCount = Id.getNumberOfIds(Link.class);
 
@@ -170,6 +158,120 @@ public class SpeedyGraphBuilder {
 	 */
 	static SpeedyGraph buildWithIdentityOrdering(Network network) {
 		return new SpeedyGraphBuilder().buildWithoutTurnRestrictionsIdentity(network);
+	}
+
+	/**
+	 * Builds a routing graph with Z-order (Morton) spatial node reordering.
+	 *
+	 * <p>Spatially nearby nodes receive adjacent internal indices, which improves
+	 * CPU cache locality during CH (Contraction Hierarchy) preprocessing.
+	 * This method is intended <b>exclusively for CHRouter</b>.  All other routers
+	 * should use {@link #build(Network, String)} which preserves the original
+	 * identity node ordering and guarantees backward-compatible routing results.
+	 *
+	 * @param network the network to build the graph from
+	 * @return a SpeedyGraph with Z-order spatial node ordering
+	 */
+	public static SpeedyGraph buildWithSpatialOrdering(Network network) {
+		if (NetworkUtils.hasTurnRestrictions(network)) {
+			return new SpeedyGraphBuilder().buildWithTurnRestrictionsSpatialOrder(network, null);
+		}
+		return new SpeedyGraphBuilder().buildWithoutTurnRestrictionsSpatialOrder(network);
+	}
+
+	private SpeedyGraph buildWithoutTurnRestrictionsSpatialOrder(Network network) {
+		List<Node> networkNodes = new ArrayList<>(network.getNodes().values());
+		int actualNodeCount = networkNodes.size();
+		int totalIdSlots = Id.getNumberOfIds(Node.class);
+
+		int[] extIndices = new int[actualNodeCount];
+		Coord[] coords = new Coord[actualNodeCount];
+		for (int i = 0; i < actualNodeCount; i++) {
+			Node node = networkNodes.get(i);
+			extIndices[i] = node.getId().index();
+			coords[i] = node.getCoord();
+		}
+
+		this.nodeReorder = computeSpatialOrder(extIndices, coords, totalIdSlots);
+		this.nodeCount = actualNodeCount;
+		this.linkCount = Id.getNumberOfIds(Link.class);
+
+		this.nodeData = new int[this.nodeCount * SpeedyGraph.NODE_SIZE];
+		this.linkData = new int[this.linkCount * SpeedyGraph.LINK_SIZE];
+		this.links = new Link[this.linkCount];
+		this.nodes = new Node[this.nodeCount];
+
+		Arrays.fill(this.nodeData, -1);
+		Arrays.fill(this.linkData, -1);
+
+		for (Node node : networkNodes) {
+			int internalIdx = this.nodeReorder[node.getId().index()];
+			this.nodes[internalIdx] = node;
+		}
+		List<Id<Link>> linkIds = new ArrayList<>(network.getLinks().keySet());
+		Collections.sort(linkIds);
+		for (Id<Link> linkId : linkIds) {
+			Link link = network.getLinks().get(linkId);
+			addLink(link);
+		}
+
+		return new SpeedyGraph(this.nodeData, this.linkData, this.nodes, this.links, null, this.nodeReorder);
+	}
+
+	private SpeedyGraph buildWithTurnRestrictionsSpatialOrder(Network network, @Nullable String turnRestrictionsMode) {
+
+		TurnRestrictionsContext context = TurnRestrictionsContext.build(network, turnRestrictionsMode);
+
+		int realNodeCount = network.getNodes().size();
+		int coloredNodeCount = context.coloredNodes.size();
+		int totalNodes = realNodeCount + coloredNodeCount;
+		int totalSlots = context.getNodeCount();
+
+		int[] extIndices = new int[totalNodes];
+		Coord[] coords = new Coord[totalNodes];
+		int idx = 0;
+		for (Node node : network.getNodes().values()) {
+			extIndices[idx] = node.getId().index();
+			coords[idx] = node.getCoord();
+			idx++;
+		}
+		for (TurnRestrictionsContext.ColoredNode cn : context.coloredNodes) {
+			extIndices[idx] = cn.index();
+			coords[idx] = cn.node().getCoord();
+			idx++;
+		}
+
+		this.nodeReorder = computeSpatialOrder(extIndices, coords, totalSlots);
+		this.nodeCount = totalNodes;
+		this.linkCount = context.getLinkCount();
+
+		this.nodeData = new int[this.nodeCount * SpeedyGraph.NODE_SIZE];
+		this.linkData = new int[this.linkCount * SpeedyGraph.LINK_SIZE];
+		this.links = new Link[this.linkCount];
+		this.nodes = new Node[this.nodeCount];
+
+		Arrays.fill(this.nodeData, -1);
+		Arrays.fill(this.linkData, -1);
+
+		for (Node node : network.getNodes().values()) {
+			this.nodes[this.nodeReorder[node.getId().index()]] = node;
+		}
+		List<Id<Link>> linkIds = new ArrayList<>(network.getLinks().keySet());
+		Collections.sort(linkIds);
+		for (Id<Link> linkId : linkIds) {
+			Link link = network.getLinks().get(linkId);
+			if (context.replacedLinks.get(link.getId()) == null) {
+				addLink(link);
+			}
+		}
+		for (TurnRestrictionsContext.ColoredNode node : context.coloredNodes) {
+			this.nodes[this.nodeReorder[node.index()]] = node.node();
+		}
+		for (TurnRestrictionsContext.ColoredLink link : context.coloredLinks) {
+			addLink(link);
+		}
+
+		return new SpeedyGraph(this.nodeData, this.linkData, this.nodes, this.links, context, this.nodeReorder);
 	}
 
 	private SpeedyGraph buildWithoutTurnRestrictionsIdentity(Network network) {
