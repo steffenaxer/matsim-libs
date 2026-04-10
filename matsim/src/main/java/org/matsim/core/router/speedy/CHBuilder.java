@@ -471,15 +471,31 @@ public class CHBuilder {
      * Builds a CH using a pre-computed contraction order with <b>parallel</b>
      * contraction of independent nested-dissection cells.
      *
+     * <p>Uses {@code Runtime.getRuntime().availableProcessors()} as thread count.
+     * Consider using {@link #buildWithOrderParallel(InertialFlowCutter.NDOrderResult, int)}
+     * to explicitly control the number of threads (e.g. from config).
+     *
+     * @param orderResult result from {@link InertialFlowCutter#computeOrderWithBatches()}
+     * @return the ready-to-customize CH graph.
+     */
+    public CHGraph buildWithOrderParallel(InertialFlowCutter.NDOrderResult orderResult) {
+        return buildWithOrderParallel(orderResult, Runtime.getRuntime().availableProcessors());
+    }
+
+    /**
+     * Builds a CH using a pre-computed contraction order with <b>parallel</b>
+     * contraction of independent nested-dissection cells.
+     *
      * <p>Within each round, cells are contracted in parallel using a
      * {@link ForkJoinPool}.  Between rounds, a barrier ensures that all
      * cells at the current ND depth are fully contracted before moving
      * to the next (shallower) depth.
      *
      * @param orderResult result from {@link InertialFlowCutter#computeOrderWithBatches()}
+     * @param nThreads    number of threads for the ForkJoinPool
      * @return the ready-to-customize CH graph.
      */
-    public CHGraph buildWithOrderParallel(InertialFlowCutter.NDOrderResult orderResult) {
+    public CHGraph buildWithOrderParallel(InertialFlowCutter.NDOrderResult orderResult, int nThreads) {
         int baseEdges = graph.linkCount;
         LOG.debug("CH contraction (parallel): importing {} links from base graph ({} nodes)...",
                 baseEdges, nodeCount);
@@ -487,7 +503,6 @@ public class CHBuilder {
         initEdges();
         long t1 = System.nanoTime();
 
-        int nThreads = Runtime.getRuntime().availableProcessors();
         LOG.debug("CH contraction (parallel): contracting {} nodes with {} rounds, {} threads...",
                 nodeCount, orderResult.rounds.size(), nThreads);
         contractNodesParallel(orderResult.order, orderResult.rounds, nThreads);

@@ -24,6 +24,7 @@ import com.google.inject.Singleton;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.network.Network;
+import org.matsim.core.config.groups.GlobalConfigGroup;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.LeastCostPathCalculatorFactory;
 import org.matsim.core.router.util.TravelDisutility;
@@ -79,8 +80,11 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
      */
     private final Map<SpeedyGraph, CHGraph> chGraphCache = new ConcurrentHashMap<>();
 
+    private final int nThreads;
+
     @Inject
-    public CHRouterFactory() {
+    public CHRouterFactory(GlobalConfigGroup globalConfig) {
+        this.nThreads = Math.max(1, globalConfig.getNumberOfThreads());
     }
 
     @Override
@@ -91,7 +95,6 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
 
         // Look up or build the contracted CH graph (expensive; cached per network).
         CHGraph chGraph = chGraphCache.computeIfAbsent(baseGraph, key -> {
-            int nThreads = Runtime.getRuntime().availableProcessors();
 
             // ---- Auto-tune parameters from network structure ----
             NetworkProfile profile = profileCache.computeIfAbsent(key, NetworkAnalyzer::analyze);
@@ -110,7 +113,7 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
                     secs(ndOrder.elapsedNanos), ndOrder.rounds.size());
 
             CHBuilder builder = new CHBuilder(baseGraph, travelCosts, chParams);
-            CHGraph result = builder.buildWithOrderParallel(ndOrder);
+            CHGraph result = builder.buildWithOrderParallel(ndOrder, nThreads);
             CHBuilder.BuildStats stats = builder.getLastBuildStats();
 
             LOG.info("[CH]   Contraction: {}s ({} base + {} shortcuts = {} edges)",

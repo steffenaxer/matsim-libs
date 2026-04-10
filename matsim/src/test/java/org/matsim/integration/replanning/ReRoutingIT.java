@@ -126,6 +126,7 @@ public class ReRoutingIT {
 		Scenario scenario = this.loadScenario();
 		scenario.getConfig().controller().setRoutingAlgorithmType(RoutingAlgorithmType.CHRouter);
 		scenario.getConfig().routing().setAccessEgressType(RoutingConfigGroup.AccessEgressType.none);
+		scenario.getConfig().global().setNumberOfThreads(2);
 		Controler controler = new Controler(scenario);
 		controler.getConfig().controller().setCreateGraphs(false);
 		controler.getConfig().controller().setDumpDataAtEnd(false);
