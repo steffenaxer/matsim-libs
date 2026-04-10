@@ -32,9 +32,9 @@ import org.matsim.contrib.drt.stops.StopTimeCalculator;
 import org.matsim.contrib.dvrp.run.AbstractDvrpModeQSimModule;
 import org.matsim.contrib.dvrp.run.DvrpModes;
 import org.matsim.contrib.zone.skims.AdaptiveTravelTimeMatrix;
-import org.matsim.contrib.zone.skims.TravelTimeMatrix;
 import org.matsim.core.controler.MatsimServices;
 import org.matsim.core.modal.ModalProviders;
+import org.matsim.core.router.LeastCostPathCalculatorModule;
 import org.matsim.core.router.costcalculators.TravelDisutilityFactory;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
@@ -94,7 +94,8 @@ public class RepeatedSelectiveInsertionSearchQSimModule extends AbstractDvrpMode
 					Network network = getModalInstance(Network.class);
 					TravelDisutility travelDisutility = getModalInstance(
 						TravelDisutilityFactory.class).createTravelDisutility(travelTime);
-					return new SingleInsertionDetourPathCalculatorManager(network, travelTime, travelDisutility, drtCfg);
+					return new SingleInsertionDetourPathCalculatorManager(network, travelTime, travelDisutility, drtCfg,
+							LeastCostPathCalculatorModule.createFactory(getConfig()));
 				}
 			});
 	}

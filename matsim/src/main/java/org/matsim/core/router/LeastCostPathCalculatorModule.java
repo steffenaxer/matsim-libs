@@ -25,10 +25,25 @@ package org.matsim.core.router;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.groups.ControllerConfigGroup;
 import org.matsim.core.controler.AbstractModule;
+import org.matsim.core.router.speedy.CHRouterFactory;
 import org.matsim.core.router.speedy.SpeedyALTFactory;
 import org.matsim.core.router.util.*;
 
 public class LeastCostPathCalculatorModule extends AbstractModule {
+
+    /**
+     * Creates a {@link LeastCostPathCalculatorFactory} for the global
+     * {@link ControllerConfigGroup.RoutingAlgorithmType} configured in the given {@link Config}.
+     * This is used by DRT and other contribs to honour the global routing config setting.
+     */
+    public static LeastCostPathCalculatorFactory createFactory(Config config) {
+        return switch (config.controller().getRoutingAlgorithmType()) {
+            case Dijkstra -> new DijkstraFactory();
+            case AStarLandmarks -> new AStarLandmarksFactory(config.global(), config.routing());
+            case SpeedyALT -> new SpeedyALTFactory();
+            case CH -> new CHRouterFactory();
+        };
+    }
 
     @Override
     public void install() {
@@ -43,6 +58,8 @@ public class LeastCostPathCalculatorModule extends AbstractModule {
             bind(LeastCostPathCalculatorFactory.class).to(AStarLandmarksFactory.class);
         } else if (config.controller().getRoutingAlgorithmType().equals(ControllerConfigGroup.RoutingAlgorithmType.SpeedyALT)) {
             bind(LeastCostPathCalculatorFactory.class).to(SpeedyALTFactory.class);
+        } else if (config.controller().getRoutingAlgorithmType().equals(ControllerConfigGroup.RoutingAlgorithmType.CH)) {
+            bind(LeastCostPathCalculatorFactory.class).to(CHRouterFactory.class);
         }
     }
 

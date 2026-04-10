@@ -26,10 +26,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
-import org.matsim.api.core.v01.IdMap;
 import org.matsim.api.core.v01.network.Link;
-import org.matsim.api.core.v01.network.Node;
 import org.matsim.core.router.speedy.LeastCostPathTree;
+import org.matsim.core.router.speedy.ShortestPathTree;
 import org.matsim.core.router.speedy.SpeedyGraph;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
@@ -42,6 +41,16 @@ public class OneToManyPathSearch {
 			TravelDisutility travelDisutility, boolean lazyPathCreation) {
 		return new OneToManyPathSearch(new LeastCostPathTree(graph, travelTime, travelDisutility), travelTime,
 				lazyPathCreation);
+	}
+
+	/**
+	 * Creates a OneToManyPathSearch using a custom {@link ShortestPathTree} implementation.
+	 * This allows plugging in CH-accelerated trees ({@code CHLeastCostPathTree}) for
+	 * dramatically faster one-to-many queries on large networks.
+	 */
+	public static OneToManyPathSearch createSearch(ShortestPathTree tree, TravelTime travelTime,
+			boolean lazyPathCreation) {
+		return new OneToManyPathSearch(tree, travelTime, lazyPathCreation);
 	}
 
 	public static class PathData {
@@ -83,11 +92,11 @@ public class OneToManyPathSearch {
 		}
 	}
 
-	private final LeastCostPathTree dijkstraTree;
+	private final ShortestPathTree dijkstraTree;
 	private final TravelTime travelTime;
 	private final boolean lazyPathCreation;
 
-	private OneToManyPathSearch(LeastCostPathTree dijkstraTree, TravelTime travelTime,
+	private OneToManyPathSearch(ShortestPathTree dijkstraTree, TravelTime travelTime,
 			boolean lazyPathCreation) {
 		this.dijkstraTree = dijkstraTree;
 		this.travelTime = travelTime;

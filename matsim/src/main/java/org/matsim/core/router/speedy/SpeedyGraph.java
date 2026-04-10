@@ -55,7 +55,16 @@ public class SpeedyGraph {
     private final Node[] nodes;
     private final TurnRestrictionsContext turnRestrictions;
 
+    // Maps external MATSim Id.index() → internal (spatially ordered) node index.
+    // null means identity mapping (internal index == Id.index()).
+    private final int[] nodeReorder;
+
 	SpeedyGraph(int[] nodeData, int[] linkData, Node[] nodes, Link[] links, TurnRestrictionsContext turnRestrictions) {
+		this(nodeData, linkData, nodes, links, turnRestrictions, null);
+	}
+
+	SpeedyGraph(int[] nodeData, int[] linkData, Node[] nodes, Link[] links,
+				TurnRestrictionsContext turnRestrictions, int[] nodeReorder) {
 		this.nodeData = nodeData;
 		this.linkData = linkData;
 		this.nodes = nodes;
@@ -63,7 +72,37 @@ public class SpeedyGraph {
 		this.nodeCount = this.nodes.length;
 		this.linkCount = this.links.length;
 		this.turnRestrictions = turnRestrictions;
+		this.nodeReorder = nodeReorder;
 	}
+
+    /**
+     * Returns the internal (spatially ordered) node index for the given MATSim node.
+     * When no spatial reordering is active, this returns {@code node.getId().index()}.
+     */
+    public int getNodeIndex(Node node) {
+        if (nodeReorder != null) {
+            int externalIdx = node.getId().index();
+            if (externalIdx < 0 || externalIdx >= nodeReorder.length) {
+                return -1;
+            }
+            return nodeReorder[externalIdx];
+        }
+        return node.getId().index();
+    }
+
+    /**
+     * Returns the internal (spatially ordered) node index for a raw external index.
+     * When no spatial reordering is active, this returns the external index unchanged.
+     */
+    int getInternalIndex(int externalIdx) {
+        if (nodeReorder != null) {
+            if (externalIdx < 0 || externalIdx >= nodeReorder.length) {
+                return -1;
+            }
+            return nodeReorder[externalIdx];
+        }
+        return externalIdx;
+    }
 
     public LinkIterator getOutLinkIterator() {
         return new OutLinkIterator(this);

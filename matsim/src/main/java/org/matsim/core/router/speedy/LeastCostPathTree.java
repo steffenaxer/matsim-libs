@@ -27,7 +27,7 @@ import java.util.NoSuchElementException;
  * @author mrieser / Simunto, sponsored by SBB Swiss Federal Railways
  * @author hrewald, nkuehnel / MOIA turn restriction adjustments
  */
-public class LeastCostPathTree {
+public class LeastCostPathTree implements ShortestPathTree {
 
     private final SpeedyGraph graph;
     private final TravelTime tt;
@@ -288,6 +288,11 @@ public class LeastCostPathTree {
         return this.data[nodeIndex * 3 + 2];
     }
 
+    @Override
+    public int getNodeIndex(Node node) {
+        return node.getId().index();
+    }
+
     private void setCost(int nodeIndex, double cost) {
         this.data[nodeIndex * 3] = cost;
     }
@@ -299,11 +304,13 @@ public class LeastCostPathTree {
         this.data[index + 2] = distance;
     }
 
-    public PathIterator getNodePathIterator(Node node) {
+    @Override
+    public Iterator<Node> getNodePathIterator(Node node) {
         return new PathIterator(node);
     }
 
-    public LinkPathIterator getLinkPathIterator(Node node) {
+    @Override
+    public Iterator<Link> getLinkPathIterator(Node node) {
         return new LinkPathIterator(node);
     }
 
