@@ -66,8 +66,9 @@ import org.matsim.contrib.ev.infrastructure.ChargingInfrastructureUtils;
 import org.matsim.core.api.experimental.events.EventsManager;
 import org.matsim.core.mobsim.framework.MobsimTimer;
 import org.matsim.core.modal.ModalProviders;
+import org.matsim.core.router.LeastCostPathCalculatorModule;
 import org.matsim.core.router.costcalculators.TravelDisutilityFactory;
-import org.matsim.core.router.speedy.SpeedyALTFactory;
+import org.matsim.core.router.util.LeastCostPathCalculatorFactory;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
 
@@ -165,7 +166,8 @@ public class EDrtModeOptimizerQSimModule extends AbstractDvrpModeQSimModule {
 						DrtTaskFactory taskFactory = getModalInstance(DrtTaskFactory.class);
 						TravelDisutility travelDisutility = getModalInstance(
 								TravelDisutilityFactory.class).createTravelDisutility(travelTime);
-						return new EmptyVehicleRelocator(network, travelTime, travelDisutility, timer, taskFactory);
+						LeastCostPathCalculatorFactory routerFactory = LeastCostPathCalculatorModule.createFactory(getConfig());
+						return new EmptyVehicleRelocator(network, travelTime, travelDisutility, timer, taskFactory, routerFactory);
 					}
 				}).asEagerSingleton();
 
@@ -192,7 +194,8 @@ public class EDrtModeOptimizerQSimModule extends AbstractDvrpModeQSimModule {
 				TravelDisutility travelDisutility = getter.getModal(
 						TravelDisutilityFactory.class).createTravelDisutility(travelTime);
 
-				return new DrtRoutingDriveTaskUpdater(taskFactory, () -> new SpeedyALTFactory().createPathCalculator(network, travelDisutility, travelTime), travelTime);
+				return new DrtRoutingDriveTaskUpdater(taskFactory, () -> LeastCostPathCalculatorModule.createFactory(
+					getter.get(org.matsim.core.config.Config.class)).createPathCalculator(network, travelDisutility, travelTime), travelTime);
 			})).in(Singleton.class);
 		}
 
