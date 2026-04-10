@@ -82,6 +82,14 @@ public class CHRouterFactory implements LeastCostPathCalculatorFactory {
 
     private final int nThreads;
 
+    /**
+     * No-arg constructor that defaults to {@link GlobalConfigGroup}'s default
+     * thread count (2).  Useful when no Guice context is available.
+     */
+    public CHRouterFactory() {
+        this(new GlobalConfigGroup());
+    }
+
     @Inject
     public CHRouterFactory(GlobalConfigGroup globalConfig) {
         this.nThreads = Math.max(1, globalConfig.getNumberOfThreads());
