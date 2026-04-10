@@ -43,6 +43,7 @@ import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 
 /**
@@ -90,6 +91,9 @@ public class RouterBenchmark {
     record RouterEntry(String name, LeastCostPathCalculator router) {}
 
     public static void main(String[] args) {
+        // Use US locale for consistent number formatting (comma as thousands separator)
+        Locale.setDefault(Locale.US);
+
         // Enable DEBUG logging for CH preprocessing classes so we can see progress
         Configurator.setLevel(CHBuilder.class.getName(), Level.DEBUG);
         Configurator.setLevel(InertialFlowCutter.class.getName(), Level.DEBUG);
