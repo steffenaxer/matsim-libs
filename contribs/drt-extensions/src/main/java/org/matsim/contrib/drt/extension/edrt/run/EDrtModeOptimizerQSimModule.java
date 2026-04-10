@@ -193,9 +193,9 @@ public class EDrtModeOptimizerQSimModule extends AbstractDvrpModeQSimModule {
 				DrtTaskFactory taskFactory = getter.getModal(DrtTaskFactory.class);
 				TravelDisutility travelDisutility = getter.getModal(
 						TravelDisutilityFactory.class).createTravelDisutility(travelTime);
-
-				return new DrtRoutingDriveTaskUpdater(taskFactory, () -> LeastCostPathCalculatorModule.createFactory(
-					getter.get(org.matsim.core.config.Config.class)).createPathCalculator(network, travelDisutility, travelTime), travelTime);
+				LeastCostPathCalculatorFactory routerFactory = LeastCostPathCalculatorModule.createFactory(
+						getter.get(org.matsim.core.config.Config.class));
+				return new DrtRoutingDriveTaskUpdater(taskFactory, () -> routerFactory.createPathCalculator(network, travelDisutility, travelTime), travelTime);
 			})).in(Singleton.class);
 		}
 
