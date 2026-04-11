@@ -130,22 +130,26 @@ class SpeedyALTData {
 
 	private void calcLandmarks(int threads) {
 		LOG.info("calculate landmarks...");
-		Node firstNode = null;
+		// Find the first landmark as its INTERNAL graph index (not the external Id.index()).
+		// Using getId().index() would break when the graph has Z-order spatial node
+		// reordering (buildWithSpatialOrdering), where internal indices differ from
+		// external MATSim Id indices.
+		int firstLandmarkIdx = -1;
 		for (int i = 0; i < this.graph.nodeCount; i++) {
-			firstNode = this.graph.getNode(i);
-			if (firstNode != null) {
+			if (this.graph.getNode(i) != null) {
+				firstLandmarkIdx = i;
 				break;
 			}
 		}
-		if (firstNode == null) {
+		if (firstLandmarkIdx < 0) {
 			LOG.warn("Network does not contain any nodes!");
 			return;
 		}
+		final int firstLandmarkIndex = firstLandmarkIdx;
 
 		Future<double[]>[] trees = new Future[this.landmarksCount * 2];
 		ExecutorService executor = Executors.newFixedThreadPool(threads);
 
-		int firstLandmarkIndex = firstNode.getId().index();
 		this.landmarksNodeIndices[0] = firstLandmarkIndex;
 		trees[0] = executor.submit(() -> calculateTreeForward(firstLandmarkIndex));
 		trees[1] = executor.submit(() -> calculateTreeBackward(firstLandmarkIndex));
