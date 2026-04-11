@@ -38,7 +38,7 @@
 		       - RepeatedSelective: Retries selective search multiple times
 		     Each search strategy is combined with each inserter type (cross-product).
 		-->
-		<param name="insertionSearchStrategies" value="RepeatedSelective"/>
+		<param name="insertionSearchStrategies" value="RepeatedSelective, Extensive"/>
 
 		<!-- ================================================================== -->
 		<!-- Partitioner Configuration (only for Parallel inserter type)        -->
