@@ -714,12 +714,13 @@ public class CHBuilder {
                     }
                     compactAdjacencyLists(roundNodesArr);
 
-                    // At >=85% contracted, also prune dominated parallel edges.
+                    // At >=75% contracted, also prune dominated parallel edges.
                     // Late separator cells accumulate massive shortcut bloat
                     // that makes witness searches exponentially expensive.
-                    // Starting at 85% (instead of 90%) ensures depth-14 rounds
-                    // (~89% contracted on 752k networks) are also pruned.
-                    if (totalContracted > nodeCount * 0.85) {
+                    // Starting at 75% (together with compaction) ensures that
+                    // witness searches in deeper ND rounds see clean adjacency
+                    // lists, finding more witnesses and creating fewer shortcuts.
+                    if (totalContracted > nodeCount * 0.75) {
                         pruneParallelEdges(roundNodesArr, roundNodes);
                     }
                     long compactMs = (System.nanoTime() - compactStart) / 1_000_000;
@@ -961,13 +962,12 @@ public class CHBuilder {
 
             // Tiered skip-witness strategy for deferred phase:
             // Tier 1: Very small degree products -> emit all shortcuts (no witness search)
-            //         Threshold: skipWitnessDegreeProduct * 6.  Generous multiplier because
-            //         deferred nodes already have the lowest-priority ordering from Phase 2;
-            //         the extra shortcuts from skipping witness search on nodes with
-            //         degProduct <= ~480 are negligible (typically <5% edge overhead).
+            //         Threshold: skipWitnessDegreeProduct * 4.  Moderate multiplier to avoid
+            //         creating excessive blind shortcuts while still fast-pathing truly
+            //         low-degree deferred nodes (degProduct <= ~240 for medium tier).
             // Tier 2: Medium degree products -> use reduced witness limits
             // Tier 3: Large degree products -> use full intra-parallel contraction
-            if (degProduct <= skipWitnessDegreeProduct * 6L) {
+            if (degProduct <= skipWitnessDegreeProduct * 4L) {
                 // Tier 1: skip witness search entirely (fast path)
                 contractNodeNoWitness(node);
             } else if (pool != null && activeInDeg >= DEFERRED_INTRA_PAR_MIN_IN_DEGREE) {
@@ -1060,6 +1060,14 @@ public class CHBuilder {
             numTargets++;
         }
         if (numTargets == 0) return;
+
+        // Dedup: keep only cheapest out-edge per target (same as contractNodeBatched).
+        if (numTargets > 1) {
+            int genBase = dedupGeneration + 1;
+            dedupGeneration += 3;
+            numTargets = dedupTargetsByNode(scratchTargets, scratchMaxCosts, scratchOutEdgeIdx,
+                    numTargets, dedupGen, dedupBest, genBase);
+        }
 
         for (int j = 0; j < iLen; j++) {
             int inIdx = iArr[j];
@@ -1822,6 +1830,11 @@ public class CHBuilder {
         }
         if (numTargets == 0) return;
 
+        // Dedup: keep only cheapest out-edge per target (O(n²), n bounded by out-degree).
+        if (numTargets > 1) {
+            numTargets = dedupTargetsSimple(targets, tgtCosts, tgtEdge, numTargets);
+        }
+
         // Collect active in-neighbors
         int numInNbrs = 0;
         int[] inNbrs  = new int[iLen];
@@ -2151,6 +2164,15 @@ public class CHBuilder {
         }
         if (numTargets == 0) return;
 
+        // Dedup: if the contracted node has multiple out-edges to the same target
+        // (e.g. a direct edge and a shortcut), keep only the cheapest.
+        if (numTargets > 1) {
+            int genBase = dedupGeneration + 1;
+            dedupGeneration += 3;
+            numTargets = dedupTargetsByNode(scratchTargets, scratchMaxCosts, scratchOutEdgeIdx,
+                    numTargets, dedupGen, dedupBest, genBase);
+        }
+
         // For each active in-neighbour u, run ONE batched witness search.
         for (int j = 0; j < iLen; j++) {
             int inIdx = iArr[j];
@@ -2202,6 +2224,113 @@ public class CHBuilder {
                 addBuildEdge(u, w, -1, node, inIdx, scratchOutEdgeIdx[t], shortcutCost);
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Target dedup  --  keep only cheapest out-edge per target node
+    // -------------------------------------------------------------------------
+
+    /**
+     * Deduplicates collected out-neighbor targets in-place, keeping only the
+     * cheapest out-edge per target node.  Uses the generation-stamp pattern.
+     *
+     * <p>When a contracted node has multiple out-edges to the same target
+     * (e.g. a direct original edge and a shortcut through a previously-contracted
+     * intermediate), each parallel edge would generate a separate shortcut for
+     * every in-neighbour.  Only the cheapest shortcut is ever useful (even for
+     * time-dependent CH, the witness search guarantees that the cheapest via-edge
+     * through this contracted node is the one that matters).  Deduplicating
+     * targets before the shortcut loop prevents dominated parallel shortcuts
+     * from being created in the first place.
+     *
+     * @return new target count after dedup
+     */
+    private static int dedupTargetsByNode(int[] targets, double[] costs, int[] edgeIdx,
+                                           int numTargets,
+                                           int[] genArr, double[] bestArr,
+                                           int genBase) {
+        if (numTargets <= 1) return numTargets;
+
+        // Quick duplicate check: if all targets are unique, skip the full dedup.
+        boolean hasDupes = false;
+        for (int t = 0; t < numTargets; t++) {
+            int w = targets[t];
+            if (genArr[w] == genBase) { hasDupes = true; break; }
+            genArr[w] = genBase;
+        }
+        if (!hasDupes) return numTargets;
+
+        // Pass 1: find cheapest cost per target.
+        int findGen = genBase + 1;
+        for (int t = 0; t < numTargets; t++) {
+            int w = targets[t];
+            double c = costs[t];
+            if (genArr[w] != findGen || c < bestArr[w]) {
+                genArr[w] = findGen;
+                bestArr[w] = c;
+            }
+        }
+
+        // Pass 2: emit first edge matching cheapest cost per target.
+        int emitGen = genBase + 2;
+        int write = 0;
+        for (int t = 0; t < numTargets; t++) {
+            int w = targets[t];
+            if (genArr[w] == emitGen) continue; // already emitted
+            if (genArr[w] == findGen && costs[t] == bestArr[w]) {
+                genArr[w] = emitGen;
+                targets[write] = w;
+                costs[write]   = costs[t];
+                edgeIdx[write] = edgeIdx[t];
+                write++;
+            }
+        }
+
+        // Pass 3: floating-point fallback — emit any remaining unemitted targets.
+        for (int t = 0; t < numTargets; t++) {
+            int w = targets[t];
+            if (genArr[w] == emitGen) continue;
+            genArr[w] = emitGen;
+            targets[write] = w;
+            costs[write]   = costs[t];
+            edgeIdx[write] = edgeIdx[t];
+            write++;
+        }
+        return write;
+    }
+
+    /**
+     * Simple O(n²) target dedup for methods that lack generation-stamp arrays
+     * (e.g. the intra-parallel contraction path where targets are in local arrays).
+     * The quadratic cost is negligible because n is bounded by the active out-degree.
+     *
+     * @return new target count after dedup
+     */
+    private static int dedupTargetsSimple(int[] targets, double[] costs, int[] edgeIdx,
+                                           int numTargets) {
+        if (numTargets <= 1) return numTargets;
+        int write = 0;
+        for (int t = 0; t < numTargets; t++) {
+            int w = targets[t];
+            boolean found = false;
+            for (int k = 0; k < write; k++) {
+                if (targets[k] == w) {
+                    if (costs[t] < costs[k]) {
+                        costs[k]   = costs[t];
+                        edgeIdx[k] = edgeIdx[t];
+                    }
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                targets[write] = w;
+                costs[write]   = costs[t];
+                edgeIdx[write] = edgeIdx[t];
+                write++;
+            }
+        }
+        return write;
     }
 
     // -------------------------------------------------------------------------
@@ -2376,6 +2505,14 @@ public class CHBuilder {
             numTargets++;
         }
         if (numTargets == 0) return;
+
+        // Dedup: keep only cheapest out-edge per target (ctx dedup arrays).
+        if (numTargets > 1) {
+            int genBase = ctx.dedupGeneration + 1;
+            ctx.dedupGeneration += 3;
+            numTargets = dedupTargetsByNode(ctx.scratchTargets, ctx.scratchMaxCosts, ctx.scratchOutEdgeIdx,
+                    numTargets, ctx.dedupGen, ctx.dedupBest, genBase);
+        }
 
         // Phase 1: Read-only  --  run witness searches and collect shortcuts
         ctx.scCount = 0;
