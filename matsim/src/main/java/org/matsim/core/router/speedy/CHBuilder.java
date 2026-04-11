@@ -179,6 +179,27 @@ public class CHBuilder {
     private volatile boolean deferredPhaseActive;
 
     /**
+     * Ensures the graph uses Z-order spatial node reordering, which is required
+     * for optimal CH preprocessing performance.  If the graph does not have
+     * spatial ordering, a warning is logged — the result is still correct, but
+     * CH preprocessing will be slower due to reduced CPU cache locality.
+     *
+     * <p>Note: {@link CHRouterFactory} always calls
+     * {@link SpeedyGraphBuilder#buildWithSpatialOrdering} automatically.
+     * Only direct {@link CHBuilder} instantiation can trigger this warning.
+     */
+    private static SpeedyGraph requireSpatialOrdering(SpeedyGraph graph) {
+        if (!graph.hasSpatialOrdering()) {
+            LOG.warn("CHBuilder received a SpeedyGraph WITHOUT spatial (Z-order) node ordering. " +
+                    "CH preprocessing will work correctly but may be significantly slower. " +
+                    "Use SpeedyGraphBuilder.buildWithSpatialOrdering(network) instead of " +
+                    "SpeedyGraphBuilder.build(network) when building graphs for CH routing.");
+        }
+        return graph;
+    }
+
+
+    /**
      * Per-thread witness search state, used for parallel contraction.
      * Each thread gets its own context to avoid sharing mutable state.
      *
@@ -258,12 +279,15 @@ public class CHBuilder {
      * Creates a CHBuilder with auto-tuned parameters based on network profile.
      * This is the recommended constructor for new code.
      *
-     * @param graph   the base graph
+     * @param graph   the base graph — should be built with
+     *                {@link SpeedyGraphBuilder#buildWithSpatialOrdering} for best
+     *                CH preprocessing performance.  If a non-spatial-ordered graph
+     *                is passed, a warning is logged but the result is still correct.
      * @param td      travel disutility for edge weights
      * @param params  pre-computed parameters from {@link RoutingParameterTuner}
      */
     public CHBuilder(SpeedyGraph graph, TravelDisutility td, CHBuilderParams params) {
-        this.graph     = graph;
+        this.graph     = requireSpatialOrdering(graph);
         this.td        = td;
         this.nodeCount = graph.nodeCount;
 
@@ -297,7 +321,7 @@ public class CHBuilder {
      * auto-tuned {@link CHBuilderParams}.
      */
     public CHBuilder(SpeedyGraph graph, TravelDisutility td) {
-        this.graph     = graph;
+        this.graph     = requireSpatialOrdering(graph);
         this.td        = td;
         this.nodeCount = graph.nodeCount;
 

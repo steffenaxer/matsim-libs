@@ -79,6 +79,17 @@ public class SpeedyGraph {
      * Returns the internal (spatially ordered) node index for the given MATSim node.
      * When no spatial reordering is active, this returns {@code node.getId().index()}.
      */
+    /**
+     * Returns {@code true} if this graph was built with Z-order (Morton) spatial
+     * node reordering via {@link SpeedyGraphBuilder#buildWithSpatialOrdering}.
+     * CH preprocessing benefits significantly from spatial ordering due to improved
+     * CPU cache locality.  Use {@link SpeedyGraphBuilder#buildWithSpatialOrdering}
+     * when building a graph for the CH router.
+     */
+    public boolean hasSpatialOrdering() {
+        return nodeReorder != null;
+    }
+
     public int getNodeIndex(Node node) {
         if (nodeReorder != null) {
             int externalIdx = node.getId().index();

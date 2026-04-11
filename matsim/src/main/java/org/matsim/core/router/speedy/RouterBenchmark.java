@@ -135,9 +135,14 @@ public class RouterBenchmark {
                 new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 
         // ---- 2. Build graph with Morton Z-order spatial reordering ----
+        // Must use buildWithSpatialOrdering() here to match what CHRouterFactory
+        // does in production — SpeedyALT uses the identity-ordered graph in
+        // practice (SpeedyALTFactory calls SpeedyGraphBuilder.build()), so both
+        // routers are benchmarked on the same graph for a fair comparison,
+        // but the CH preprocessing benefits from the spatial ordering.
         System.out.println();
-        System.out.println("Building SpeedyGraph (Morton Z-order) ...");
-        SpeedyGraph graph = SpeedyGraphBuilder.build(network);
+        System.out.println("Building SpeedyGraph (Morton Z-order, matches CHRouterFactory) ...");
+        SpeedyGraph graph = SpeedyGraphBuilder.buildWithSpatialOrdering(network);
 
         // ---- 2b. Analyse network structure and auto-tune parameters ----
         System.out.println();
