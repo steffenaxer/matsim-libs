@@ -34,19 +34,15 @@ import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.drt.optimizer.Waypoint;
 import org.matsim.contrib.drt.passenger.DrtRequest;
-import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.dvrp.path.VrpPaths;
 import org.matsim.core.mobsim.framework.events.MobsimBeforeCleanupEvent;
 import org.matsim.core.mobsim.framework.listeners.MobsimBeforeCleanupListener;
-import org.matsim.core.router.speedy.SpeedyALTFactory;
-import org.matsim.core.router.speedy.CHRouterFactory;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.router.util.LeastCostPathCalculatorFactory;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.Futures;
 
 /**
@@ -55,19 +51,6 @@ import com.google.common.util.concurrent.Futures;
 public class SingleInsertionDetourPathCalculator implements MobsimBeforeCleanupListener {
 
 	public static final int MAX_THREADS = 4;
-
-	/**
-	 * Holder classes for lazy, thread-safe singleton initialization.
-	 * The JVM guarantees that class initialization is atomic — no volatile
-	 * or synchronization needed.
-	 */
-	private static final class CHFactoryHolder {
-		static final CHRouterFactory INSTANCE = new CHRouterFactory();
-	}
-
-	private static final class ALTFactoryHolder {
-		static final SpeedyALTFactory INSTANCE = new SpeedyALTFactory();
-	}
 
 	private final TravelTime travelTime;
 
@@ -78,14 +61,7 @@ public class SingleInsertionDetourPathCalculator implements MobsimBeforeCleanupL
 
 	private final ExecutorService executorService;
 
-	public SingleInsertionDetourPathCalculator(Network network, TravelTime travelTime,
-											   TravelDisutility travelDisutility, DrtConfigGroup drtCfg) {
-		this(network, travelTime, travelDisutility, drtCfg.getNumberOfThreads(),
-				drtCfg.isUseCHForInsertionSearch() ? CHFactoryHolder.INSTANCE : ALTFactoryHolder.INSTANCE);
-	}
-
-	@VisibleForTesting
-	SingleInsertionDetourPathCalculator(Network network, TravelTime travelTime, TravelDisutility travelDisutility,
+	public SingleInsertionDetourPathCalculator(Network network, TravelTime travelTime, TravelDisutility travelDisutility,
 			int numberOfThreads, LeastCostPathCalculatorFactory pathCalculatorFactory) {
 		this.travelTime = travelTime;
 

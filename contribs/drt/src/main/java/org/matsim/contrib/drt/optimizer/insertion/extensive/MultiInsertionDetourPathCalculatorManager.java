@@ -40,15 +40,23 @@ public class MultiInsertionDetourPathCalculatorManager implements MobsimBeforeCl
 	private final TravelTime travelTime;
 	private final TravelDisutility travelDisutility;
 	private final DrtConfigGroup drtCfg;
+	private final boolean useCH;
 	private final List<MultiInsertionDetourPathCalculator> multiInsertionDetourPathCalculatorList;
 
+	/**
+	 * Creates a new manager.
+	 *
+	 * @param useCH if {@code true}, uses the CH (Contraction Hierarchies) accelerated
+	 *              one-to-many path search; derive this from
+	 *              {@code config.controller().getRoutingAlgorithmType() == ControllerConfigGroup.RoutingAlgorithmType.CHRouter}.
+	 */
 	MultiInsertionDetourPathCalculatorManager(Network network, TravelTime travelTime, TravelDisutility travelDisutility,
-											  DrtConfigGroup drtCfg)
-	{
+											  DrtConfigGroup drtCfg, boolean useCH) {
 		this.network = network;
 		this.travelTime = travelTime;
 		this.travelDisutility = travelDisutility;
 		this.drtCfg = drtCfg;
+		this.useCH = useCH;
 		this.multiInsertionDetourPathCalculatorList = new ArrayList<>();
 	}
 
@@ -57,10 +65,9 @@ public class MultiInsertionDetourPathCalculatorManager implements MobsimBeforeCl
 		multiInsertionDetourPathCalculatorList.forEach(i -> i.notifyMobsimBeforeCleanup(e));
 	}
 
-	MultiInsertionDetourPathCalculator create()
-	{
+	MultiInsertionDetourPathCalculator create() {
 		MultiInsertionDetourPathCalculator instance;
-		if (drtCfg.isUseCHForInsertionSearch()) {
+		if (useCH) {
 			instance = new MultiInsertionDetourPathCalculator(getOrBuildCHGraph(), travelTime, travelDisutility, drtCfg);
 		} else {
 			instance = new MultiInsertionDetourPathCalculator(network, travelTime, travelDisutility, drtCfg);

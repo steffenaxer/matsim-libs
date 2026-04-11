@@ -7,13 +7,14 @@ package org.matsim.contrib.drt.extension.benchmark;
 /**
  * Enums for DRT benchmark configuration.
  * <p>
- * The benchmark has three orthogonal dimensions:
+ * The benchmark has two orthogonal dimensions:
  * <ul>
  *   <li>{@link RequestInserterType} – HOW requests are dispatched (Default sequential vs. Parallel partitioned)</li>
  *   <li>{@link InsertionSearchStrategy} – WHICH algorithm finds the best insertion for a request</li>
- *   <li>{@link DetourPathCalculatorType} – WHICH routing algorithm computes detour paths during insertion search</li>
  * </ul>
- * Every combination of these dimensions is valid.
+ * The routing algorithm type for detour path computation is configured via
+ * {@link org.matsim.core.config.groups.ControllerConfigGroup.RoutingAlgorithmType} directly
+ * (e.g. {@code SpeedyALT}, {@code CHRouter}).
  *
  * @author Steffen Axer
  */
@@ -42,18 +43,6 @@ public final class InsertionStrategy {
 	 */
 	public enum InsertionSearchStrategy {
 		Selective, Extensive, RepeatedSelective
-	}
-
-	/**
-	 * The routing algorithm used for computing detour paths during DRT insertion search.
-	 * <ul>
-	 *   <li><b>SpeedyALT</b> – default Dijkstra-based one-to-many router (SpeedyALT). Good for small/medium networks.</li>
-	 *   <li><b>CH</b> – Contraction Hierarchies time-dependent router. Dramatically faster on large networks
-	 *       (e.g. Berlin v7 with ~88k nodes), but requires a one-time CH graph build per network.</li>
-	 * </ul>
-	 */
-	public enum DetourPathCalculatorType {
-		SpeedyALT, CH
 	}
 }
 

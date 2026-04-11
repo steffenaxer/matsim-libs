@@ -12,6 +12,7 @@ import org.matsim.contrib.drt.optimizer.insertion.parallel.DrtParallelInserterPa
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigGroup;
 import org.matsim.core.config.ReflectiveConfigGroup;
+import org.matsim.core.config.groups.ControllerConfigGroup;
 
 import java.util.Arrays;
 import java.util.List;
@@ -373,10 +374,9 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 	@Comment("Enable spatial request-fleet filter (reduces search space)")
 	private boolean useSpatialFilter = true;
 
-	@Comment("Comma-separated list of detour path calculator types to benchmark. " +
-		"Options: SpeedyALT, CH. " +
-		"'SpeedyALT' uses the default Dijkstra-based one-to-many router. " +
-		"'CH' uses Contraction Hierarchies (faster on large networks, requires one-time CH build).")
+	@Comment("Comma-separated list of routing algorithm types for detour path computation. " +
+		"Options: SpeedyALT, CHRouter. " +
+		"Maps directly to config.controller.routingAlgorithmType.")
 	@NotBlank
 	private String detourPathCalculatorTypes = "SpeedyALT";
 
@@ -415,14 +415,14 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 		this.detourPathCalculatorTypes = detourPathCalculatorTypes;
 	}
 
-	public List<InsertionStrategy.DetourPathCalculatorType> getDetourPathCalculatorTypes() {
+	public List<ControllerConfigGroup.RoutingAlgorithmType> getRoutingAlgorithmTypes() {
 		return Arrays.stream(detourPathCalculatorTypes.split(","))
 			.map(String::trim)
-			.map(this::parseDetourPathCalculatorType)
+			.map(this::parseRoutingAlgorithmType)
 			.collect(Collectors.toList());
 	}
 
-	public void setDetourPathCalculatorTypes(List<InsertionStrategy.DetourPathCalculatorType> types) {
+	public void setRoutingAlgorithmTypes(List<ControllerConfigGroup.RoutingAlgorithmType> types) {
 		this.detourPathCalculatorTypes = types.stream()
 			.map(Enum::name)
 			.collect(Collectors.joining(","));
@@ -507,12 +507,12 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 		};
 	}
 
-	private InsertionStrategy.DetourPathCalculatorType parseDetourPathCalculatorType(String name) {
+	private ControllerConfigGroup.RoutingAlgorithmType parseRoutingAlgorithmType(String name) {
 		return switch (name.toLowerCase()) {
-			case "speedyalt", "speedy" -> InsertionStrategy.DetourPathCalculatorType.SpeedyALT;
-			case "ch", "contractionhierarchies" -> InsertionStrategy.DetourPathCalculatorType.CH;
+			case "speedyalt", "speedy" -> ControllerConfigGroup.RoutingAlgorithmType.SpeedyALT;
+			case "ch", "chrouter" -> ControllerConfigGroup.RoutingAlgorithmType.CHRouter;
 			default -> throw new IllegalArgumentException("Unknown detour path calculator type: " + name +
-				". Valid options: SpeedyALT, CH");
+				". Valid options: SpeedyALT, CHRouter");
 		};
 	}
 
@@ -533,7 +533,7 @@ public class DrtBenchmarkConfigGroup extends ReflectiveConfigGroup {
 		comments.put(MEASURED_RUNS, "Number of measured runs");
 		comments.put(OUTPUT_DIRECTORY, "Output directory for results");
 		comments.put(USE_SPATIAL_FILTER, "Enable spatial filter");
-		comments.put(DETOUR_PATH_CALCULATOR_TYPES, "Detour path calculator types: SpeedyALT, CH");
+		comments.put(DETOUR_PATH_CALCULATOR_TYPES, "Detour path calculator types: SpeedyALT, CHRouter");
 		comments.put(NETWORK_URL, "URL or file path to a MATSim network (empty = synthetic grid)");
 		return comments;
 	}

@@ -4,7 +4,6 @@
 
 package org.matsim.contrib.drt.extension.benchmark;
 
-import org.matsim.contrib.drt.extension.benchmark.InsertionStrategy.DetourPathCalculatorType;
 import org.matsim.contrib.drt.extension.benchmark.InsertionStrategy.InsertionSearchStrategy;
 import org.matsim.contrib.drt.extension.benchmark.InsertionStrategy.RequestInserterType;
 import org.matsim.contrib.drt.extension.benchmark.scenario.SyntheticBenchmarkScenario;
@@ -23,6 +22,7 @@ import org.matsim.core.config.CommandLine;
 import org.matsim.core.config.CommandLine.ConfigurationException;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
+import org.matsim.core.config.groups.ControllerConfigGroup;
 import org.matsim.core.controler.Controler;
 
 import java.nio.file.Path;
@@ -117,34 +117,32 @@ public class RunScalabilityBenchmark {
 			int vehicles = agents * config.getVehiclesPerHundredAgents() / 100;
 
 			for (InsertionSearchStrategy searchStrategy : config.getInsertionSearchStrategies()) {
-				for (DetourPathCalculatorType pathCalcType : config.getDetourPathCalculatorTypes()) {
+				for (ControllerConfigGroup.RoutingAlgorithmType routingType : config.getRoutingAlgorithmTypes()) {
 					for (RequestInserterType inserterType : config.getRequestInserterTypes()) {
 
 						if (inserterType == RequestInserterType.Parallel) {
-							// Parallel inserter: expand partitioner × collectionPeriod combinations
 							for (int collectionPeriod : config.getCollectionPeriods()) {
 								for (VehiclesPartitioner vp : config.getVehiclePartitioners()) {
 									for (RequestsPartitioner rp : config.getRequestPartitioners()) {
 
 										String scenarioName = String.format("Parallel_%s_%s_%s_%s_cp%d_%dk",
-											searchStrategy.name(), pathCalcType.name(),
+											searchStrategy.name(), routingType.name(),
 											shortName(vp), shortName(rp),
 											collectionPeriod, agents / 1000);
 										String outputDir = String.format("%s/%s/%s",
 											config.getOutputDirectory(), timestamp, scenarioName);
 
-										// Capture for lambda
 										final int fAgents = agents, fVehicles = vehicles, fCp = collectionPeriod;
 										final VehiclesPartitioner fVp = vp;
 										final RequestsPartitioner fRp = rp;
 										final InsertionSearchStrategy fSearch = searchStrategy;
-										final DetourPathCalculatorType fPathCalc = pathCalcType;
+										final ControllerConfigGroup.RoutingAlgorithmType fRoutingType = routingType;
 										final DrtBenchmarkConfigGroup fConfig = config;
 
 										runner.addScenario(scenarioName, () -> {
 											DrtInsertionSearchParams searchParams = createSearchParams(fSearch);
 											Controler c = buildControler(fConfig, fAgents, fVehicles,
-												outputDir, searchParams, fPathCalc);
+												outputDir, searchParams, fRoutingType);
 
 											var drtCfg = MultiModeDrtConfigGroup.get(c.getConfig())
 												.getModalElements().iterator().next();
@@ -170,19 +168,19 @@ public class RunScalabilityBenchmark {
 						} else {
 							// Default (sequential) inserter
 							String scenarioName = String.format("Default_%s_%s_%dk",
-								searchStrategy.name(), pathCalcType.name(), agents / 1000);
+								searchStrategy.name(), routingType.name(), agents / 1000);
 							String outputDir = String.format("%s/%s/%s",
 								config.getOutputDirectory(), timestamp, scenarioName);
 
 							final int fAgents = agents, fVehicles = vehicles;
 							final InsertionSearchStrategy fSearch = searchStrategy;
-							final DetourPathCalculatorType fPathCalc = pathCalcType;
+							final ControllerConfigGroup.RoutingAlgorithmType fRoutingType = routingType;
 							final DrtBenchmarkConfigGroup fConfig = config;
 
 							runner.addScenario(scenarioName, () -> {
 								DrtInsertionSearchParams searchParams = createSearchParams(fSearch);
 								Controler c = buildControler(fConfig, fAgents, fVehicles,
-									outputDir, searchParams, fPathCalc);
+									outputDir, searchParams, fRoutingType);
 
 								var drtCfg = MultiModeDrtConfigGroup.get(c.getConfig())
 									.getModalElements().iterator().next();
@@ -200,17 +198,13 @@ public class RunScalabilityBenchmark {
 		runner.run();
 	}
 
-	// =========================================================================
-	// Helper methods
-	// =========================================================================
-
 	/**
-	 * Builds a Controler with the given insertion search params and detour path calculator type.
+	 * Builds a Controler and sets the routing algorithm type directly on the controller config.
 	 */
 	private static Controler buildControler(DrtBenchmarkConfigGroup config, int agents,
 											int vehicles, String outputDir,
 											DrtInsertionSearchParams searchParams,
-											DetourPathCalculatorType pathCalcType) {
+											ControllerConfigGroup.RoutingAlgorithmType routingAlgorithmType) {
 		var builder = SyntheticBenchmarkScenario.builder()
 			.agents(agents)
 			.vehicles(vehicles)
@@ -223,11 +217,7 @@ public class RunScalabilityBenchmark {
 		}
 
 		Controler c = builder.build();
-
-		var drtCfg = MultiModeDrtConfigGroup.get(c.getConfig())
-			.getModalElements().iterator().next();
-		drtCfg.setUseCHForInsertionSearch(pathCalcType == DetourPathCalculatorType.CH);
-
+		c.getConfig().controller().setRoutingAlgorithmType(routingAlgorithmType);
 		return c;
 	}
 
@@ -260,7 +250,7 @@ public class RunScalabilityBenchmark {
 		System.out.println("Vehicles per 100 agents: " + config.getVehiclesPerHundredAgents());
 		System.out.println("Request Inserter Types: " + config.getRequestInserterTypesString());
 		System.out.println("Insertion Search Strategies: " + config.getInsertionSearchStrategiesString());
-		System.out.println("Detour Path Calculators: " + config.getDetourPathCalculatorTypesString());
+		System.out.println("Routing Algorithm Types: " + config.getDetourPathCalculatorTypesString());
 		System.out.println("Vehicle Partitioners (Parallel): " + config.getVehiclePartitionersString());
 		System.out.println("Request Partitioners (Parallel): " + config.getRequestPartitionersString());
 		System.out.println("Collection Periods (Parallel): " + config.getCollectionPeriods());
@@ -276,16 +266,16 @@ public class RunScalabilityBenchmark {
 
 		int agentCount = config.getAgentCounts().size();
 		int searchCount = config.getInsertionSearchStrategies().size();
-		int pathCalcCount = config.getDetourPathCalculatorTypes().size();
+		int routingTypeCount = config.getRoutingAlgorithmTypes().size();
 		int parallelCombinations = config.getVehiclePartitioners().size()
 			* config.getRequestPartitioners().size()
 			* config.getCollectionPeriods().size();
 		int totalScenarios = 0;
 		for (RequestInserterType inserterType : config.getRequestInserterTypes()) {
 			if (inserterType == RequestInserterType.Parallel) {
-				totalScenarios += agentCount * searchCount * pathCalcCount * parallelCombinations;
+				totalScenarios += agentCount * searchCount * routingTypeCount * parallelCombinations;
 			} else {
-				totalScenarios += agentCount * searchCount * pathCalcCount;
+				totalScenarios += agentCount * searchCount * routingTypeCount;
 			}
 		}
 		System.out.println("Total scenarios to run: " + totalScenarios);

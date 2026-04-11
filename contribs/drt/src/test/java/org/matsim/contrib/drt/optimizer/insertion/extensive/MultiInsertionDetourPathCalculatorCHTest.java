@@ -23,7 +23,6 @@ package org.matsim.contrib.drt.optimizer.insertion.extensive;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CyclicBarrier;
@@ -59,9 +58,10 @@ import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
  * Tests for the CHRouter-based DRT insertion one-to-many path search.
  * <p>
  * Verifies that {@link MultiInsertionDetourPathCalculatorManager} correctly creates
- * CH-accelerated calculators when {@code useCHForInsertionSearch=true}
- * in {@link DrtConfigGroup}, that the travel times match the Dijkstra baseline,
- * and that the shared CH graph cache is thread-safe under concurrent access.
+ * CH-accelerated calculators when {@code config.controller.routingAlgorithmType=CHRouter}
+ * is configured (passed as {@code useCH=true}), that the travel times match the
+ * Dijkstra baseline, and that the shared CH graph cache is thread-safe under
+ * concurrent access.
  *
  * @author Steffen Axer
  */
@@ -211,25 +211,9 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 	}
 
 	/**
-	 * Verifies that {@link DrtConfigGroup#isUseCHForInsertionSearch()} defaults
-	 * to false and can be set to true.
-	 */
-	@Test
-	void drtConfigGroupFlagDefaultsFalse() {
-		DrtConfigGroup cfg = new DrtConfigGroup();
-		assertThat(cfg.isUseCHForInsertionSearch()).isFalse();
-	}
-
-	@Test
-	void drtConfigGroupFlagCanBeEnabled() {
-		DrtConfigGroup cfg = new DrtConfigGroup();
-		cfg.setUseCHForInsertionSearch(true);
-		assertThat(cfg.isUseCHForInsertionSearch()).isTrue();
-	}
-
-	/**
 	 * Smoke test: {@link MultiInsertionDetourPathCalculatorManager} successfully
-	 * creates a CH-based calculator when the config flag is set.
+	 * creates a CH-based calculator when {@code useCH=true} is passed
+	 * (derived from {@code config.controller.routingAlgorithmType=CHRouter}).
 	 */
 	@Test
 	void managerCreatesCHCalculatorWhenFlagSet() {
@@ -238,9 +222,9 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 
 		DrtConfigGroup drtCfg = new DrtConfigGroup();
-		drtCfg.setUseCHForInsertionSearch(true);
-
-		var manager = new MultiInsertionDetourPathCalculatorManager(network, travelTime, tc, drtCfg);
+		// useCH is now derived from ControllerConfigGroup.routingAlgorithmType == CHRouter
+		// and passed explicitly to the manager – no longer read from DrtConfigGroup
+		var manager = new MultiInsertionDetourPathCalculatorManager(network, travelTime, tc, drtCfg, true);
 		// Should not throw
 		var calculator = manager.create();
 		assertThat(calculator).isNotNull();
@@ -354,7 +338,8 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 
 		DrtConfigGroup drtCfg = new DrtConfigGroup();
-		drtCfg.setUseCHForInsertionSearch(true);
+		// useCH is now derived from ControllerConfigGroup.routingAlgorithmType == CHRouter
+		final boolean useCH = true;
 
 		int numThreads = 8;
 		ExecutorService executor = Executors.newFixedThreadPool(numThreads);
@@ -364,7 +349,7 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		for (int t = 0; t < numThreads; t++) {
 			futures.add(executor.submit(() -> {
 				// All managers share the SAME network, travelTime, travelDisutility objects
-				var manager = new MultiInsertionDetourPathCalculatorManager(network, travelTime, tc, drtCfg);
+				var manager = new MultiInsertionDetourPathCalculatorManager(network, travelTime, tc, drtCfg, useCH);
 				// Wait so all threads attempt create() at the same time
 				barrier.await();
 				return manager.create();
@@ -400,10 +385,11 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		TravelTime travelTime = new FreeSpeedTravelTime();
 		FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 		DrtConfigGroup drtCfg = new DrtConfigGroup();
-		drtCfg.setUseCHForInsertionSearch(true);
+		// useCH derived from ControllerConfigGroup.routingAlgorithmType == CHRouter
+		final boolean useCH = true;
 
-		var manager1 = new MultiInsertionDetourPathCalculatorManager(network1, travelTime, tc, drtCfg);
-		var manager2 = new MultiInsertionDetourPathCalculatorManager(network2, travelTime, tc, drtCfg);
+		var manager1 = new MultiInsertionDetourPathCalculatorManager(network1, travelTime, tc, drtCfg, useCH);
+		var manager2 = new MultiInsertionDetourPathCalculatorManager(network2, travelTime, tc, drtCfg, useCH);
 
 		// Both should create valid calculators (each triggering its own CH build)
 		var calc1 = manager1.create();
@@ -429,10 +415,10 @@ public class MultiInsertionDetourPathCalculatorCHTest {
 		List<Link> linkList = new ArrayList<>(network.getLinks().values());
 
 		DrtConfigGroup drtCfg = new DrtConfigGroup();
-		drtCfg.setUseCHForInsertionSearch(true);
+		// useCH derived from ControllerConfigGroup.routingAlgorithmType == CHRouter
+		var manager = new MultiInsertionDetourPathCalculatorManager(network, travelTime, tc, drtCfg, true);
 
 		// One manager, multiple calculators (simulates DRT creating 4 per insertion worker)
-		var manager = new MultiInsertionDetourPathCalculatorManager(network, travelTime, tc, drtCfg);
 
 		// Dijkstra baseline
 		SpeedyGraph dijGraph = SpeedyGraphBuilder.build(network);
