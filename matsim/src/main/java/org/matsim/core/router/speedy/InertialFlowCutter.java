@@ -511,7 +511,7 @@ public class InertialFlowCutter {
         long bestScore = Long.MAX_VALUE;
 
         for (double[] dir : directions) {
-            int[][] result = tryDirection(subNodes, dir[0], dir[1], gen);
+            int[][] result = tryDirection(subNodes, dir[0], dir[1]);
             if (result != null) {
                 int balance = Math.abs(result[0].length - result[2].length);
                 long score = scoreSimple(result[1], balance);
@@ -1318,9 +1318,12 @@ public class InertialFlowCutter {
      * Try a single projection direction with multiple split ratios.
      * Uses per-thread scratch buffers to avoid per-call allocation.
      *
-     * @param gen current subgraph generation stamp
+     * <p>Thinning is deferred: {@link #trySplitAt} returns unthinned separators,
+     * and only the final best result per direction is thinned before returning.
+     * This avoids hundreds of redundant {@link #thinSeparator} calls during
+     * ratio scanning.
      */
-    private int[][] tryDirection(int[] subNodes, double dx, double dy, int gen) {
+    private int[][] tryDirection(int[] subNodes, double dx, double dy) {
         int n = subNodes.length;
         if (n < 3) return null;
 
@@ -1337,7 +1340,7 @@ public class InertialFlowCutter {
 
         for (double ratio : ratios) {
             int splitAt = Math.max(1, Math.min(n - 1, (int) (n * ratio)));
-            int[][] result = trySplitAt(subNodes, sortedIdx, n, splitAt, gen);
+            int[][] result = trySplitAt(subNodes, sortedIdx, n, splitAt);
             if (result != null) {
                 int balance = Math.abs(result[0].length - result[2].length);
                 long score = scoreSimple(result[1], balance);
@@ -1348,21 +1351,43 @@ public class InertialFlowCutter {
             }
         }
 
+        // Thin only the final best separator (deferred from trySplitAt)
+        if (bestResult != null && bestResult[1].length > 1) {
+            bestResult = thinSeparator(bestResult);
+        }
         return bestResult;
     }
 
     /**
      * Try splitting the sorted projection at a specific index.
      *
-     * @param gen current subgraph generation stamp
+     * <p>Uses generation-stamped side values to merge the subgraph-membership
+     * check and side comparison into a single array read, eliminating the
+     * {@code inSubGraphGen} access from the hot inner loop.  Each call obtains
+     * two fresh unique values ({@code sideAVal}, {@code sideBVal}) via
+     * {@link #nextBoundaryGen()}, so stale values from earlier calls or
+     * concurrent ForkJoin tasks on disjoint node sets are never equal to the
+     * current values.
+     *
+     * <p>Partition counts are derived arithmetically from the boundary counts
+     * and {@code splitAt}, avoiding two extra O(n) counting loops.
+     *
+     * <p>Does <b>not</b> thin the separator; thinning is deferred to
+     * {@link #tryDirection} for the final best result only, avoiding hundreds
+     * of redundant {@link #thinSeparator} calls during ratio scanning.
      */
     private int[][] trySplitAt(int[] subNodes, int[] sortedIdx,
-                                int n, int splitAt, int gen) {
+                                int n, int splitAt) {
         int[] side = scratchSide;
 
-        for (int i = 0; i < n; i++) side[subNodes[sortedIdx[i]]] = 0;
-        for (int i = 0; i < splitAt; i++) side[subNodes[sortedIdx[i]]] = 1;
-        for (int i = splitAt; i < n; i++) side[subNodes[sortedIdx[i]]] = 2;
+        // Gen-stamped side values: unique per call, so stale values from
+        // earlier calls (or concurrent ForkJoin tasks on disjoint nodes)
+        // are never equal to the current values.
+        int sideAVal = nextBoundaryGen();
+        int sideBVal = nextBoundaryGen();
+
+        for (int i = 0; i < splitAt; i++) side[subNodes[sortedIdx[i]]] = sideAVal;
+        for (int i = splitAt; i < n; i++) side[subNodes[sortedIdx[i]]] = sideBVal;
 
         final int[] data = adjData;
         final int[] off  = adjOffset;
@@ -1374,13 +1399,12 @@ public class InertialFlowCutter {
         for (int idx = 0; idx < n; idx++) {
             int node = subNodes[idx];
             int mySide = side[node];
+            int otherSide = (mySide == sideAVal) ? sideBVal : sideAVal;
             for (int ei = off[node], eiEnd = off[node + 1]; ei < eiEnd; ei++) {
-                int w = data[ei];
-                if (inSubGraphGen[w] != gen) continue;
-                if (side[w] != 0 && side[w] != mySide) {
+                if (side[data[ei]] == otherSide) {
                     if (boundaryMark[node] != bgen) {
                         boundaryMark[node] = bgen;
-                        if (mySide == 1) boundaryACount++;
+                        if (mySide == sideAVal) boundaryACount++;
                         else boundaryBCount++;
                     }
                     break;
@@ -1390,55 +1414,52 @@ public class InertialFlowCutter {
 
         if (boundaryACount == 0 && boundaryBCount == 0) return null;
 
-        int[][] bestSideResult = null;
-        long bestSideScore = Long.MAX_VALUE;
+        // Pick the better separator side using precomputed counts (no extra loop).
+        // sepSide A: sep = boundary-A nodes, pA = non-boundary A, pB = all B
+        // sepSide B: sep = boundary-B nodes, pA = all A,          pB = non-boundary B
+        int pACountA = splitAt - boundaryACount;
+        int pBCountA = n - splitAt;
+        long scoreA = (boundaryACount > 0 && boundaryACount < n - 1
+                       && pACountA > 0 && pBCountA > 0)
+                      ? boundaryACount * 256L + Math.abs(pACountA - pBCountA)
+                      : Long.MAX_VALUE;
 
-        for (int sepSide : new int[]{1, 2}) {
-            int sepCount = (sepSide == 1) ? boundaryACount : boundaryBCount;
-            if (sepCount == 0 || sepCount >= n - 1) continue;
+        int pACountB = splitAt;
+        int pBCountB = n - splitAt - boundaryBCount;
+        long scoreB = (boundaryBCount > 0 && boundaryBCount < n - 1
+                       && pACountB > 0 && pBCountB > 0)
+                      ? boundaryBCount * 256L + Math.abs(pACountB - pBCountB)
+                      : Long.MAX_VALUE;
 
-            int countA = 0, countB = 0;
-            for (int idx = 0; idx < n; idx++) {
-                int node = subNodes[idx];
-                boolean isSep = (boundaryMark[node] == bgen && side[node] == sepSide);
-                if (isSep) continue;
-                if (side[node] == 1) countA++;
-                else countB++;
-            }
-            if (countA == 0 || countB == 0) continue;
+        if (scoreA == Long.MAX_VALUE && scoreB == Long.MAX_VALUE) return null;
 
-            int[] pA = new int[countA];
-            int[] sep = new int[sepCount];
-            int[] pB = new int[countB];
-            int ia2 = 0, is2 = 0, ib2 = 0;
-            for (int idx = 0; idx < n; idx++) {
-                int node = subNodes[idx];
-                boolean isSep = (boundaryMark[node] == bgen && side[node] == sepSide);
-                if (isSep) {
-                    sep[is2++] = node;
-                } else if (side[node] == 1) {
-                    pA[ia2++] = node;
-                } else {
-                    pB[ib2++] = node;
-                }
-            }
+        int sepSideVal;
+        int sepCount, countA, countB;
+        if (scoreA <= scoreB) {
+            sepSideVal = sideAVal;
+            sepCount = boundaryACount;  countA = pACountA;  countB = pBCountA;
+        } else {
+            sepSideVal = sideBVal;
+            sepCount = boundaryBCount;  countA = pACountB;  countB = pBCountB;
+        }
 
-            int[][] candidate = new int[][]{pA, sep, pB};
-            if (sep.length > 1) {
-                candidate = thinSeparator(candidate);
-            }
-
-            int thinnedSepSize = candidate[1].length;
-            int thinnedBalance = Math.abs(candidate[0].length - candidate[2].length);
-            long thinnedScore = thinnedSepSize * 256L + thinnedBalance;
-
-            if (thinnedScore < bestSideScore) {
-                bestSideScore = thinnedScore;
-                bestSideResult = candidate;
+        // Build partition arrays in a single pass
+        int[] pA  = new int[countA];
+        int[] sep = new int[sepCount];
+        int[] pB  = new int[countB];
+        int ia = 0, is = 0, ib = 0;
+        for (int idx = 0; idx < n; idx++) {
+            int node = subNodes[idx];
+            if (boundaryMark[node] == bgen && side[node] == sepSideVal) {
+                sep[is++] = node;
+            } else if (side[node] == sideAVal) {
+                pA[ia++] = node;
+            } else {
+                pB[ib++] = node;
             }
         }
 
-        return bestSideResult;
+        return new int[][]{pA, sep, pB};
     }
 
     /**
