@@ -84,13 +84,13 @@ public class SpeedyALT implements LeastCostPathCalculator {
 
 	public Path calcLeastCostPath(Link fromLink, Link toLink, double starttime, final Person person, final Vehicle vehicle) {
 
-		int startNodeIndex = fromLink.getToNode().getId().index();
-		int endNodeIndex = toLink.getFromNode().getId().index();
+		int startNodeIndex = this.graph.getNodeIndex(fromLink.getToNode());
+		int endNodeIndex = this.graph.getNodeIndex(toLink.getFromNode());
 
 		if(graph.getTurnRestrictions().isPresent()) {
 			Map<Id<Link>, TurnRestrictionsContext.ColoredLink> replacedLinks = graph.getTurnRestrictions().get().replacedLinks;
 			if(replacedLinks.containsKey(fromLink.getId())) {
-				startNodeIndex = replacedLinks.get(fromLink.getId()).toColoredNode.index();
+				startNodeIndex = this.graph.getInternalIndex(replacedLinks.get(fromLink.getId()).toColoredNode.index());
 			}
 		}
 
@@ -107,7 +107,7 @@ public class SpeedyALT implements LeastCostPathCalculator {
 
 	@Override
 	public Path calcLeastCostPath(Node startNode, Node endNode, double startTime, Person person, Vehicle vehicle) {
-		Path path = calcLeastCostPathImpl(startNode.getId().index(), endNode.getId().index(), startTime, person, vehicle);
+		Path path = calcLeastCostPathImpl(this.graph.getNodeIndex(startNode), this.graph.getNodeIndex(endNode), startTime, person, vehicle);
 		if(path == null) {
       LOG.warn("No route was found from node " + startNode.getId() + " to node " + endNode.getId() + ". Some possible reasons:");
 		  LOG.warn("  * Network is not connected.  Run NetworkUtils.cleanNetwork(Network network, Set<String> modes).") ;
@@ -130,6 +130,17 @@ public class SpeedyALT implements LeastCostPathCalculator {
 		int startDeadend = this.astarData.getNodeDeadend(startNodeIndex);
 		int endDeadend = this.astarData.getNodeDeadend(endNodeIndex);
 
+		// When turn restrictions are in use, colored copies of the end node must be
+		// identified by their original external MATSim Id index rather than the
+		// internal graph index (which differs with Z-order spatial reordering).
+		final int endNodeExternalId;
+		if (hasTurnRestrictions && endNodeIndex >= 0) {
+			Node endNode = this.graph.getNode(endNodeIndex);
+			endNodeExternalId = (endNode != null) ? endNode.getId().index() : -1;
+		} else {
+			endNodeExternalId = endNodeIndex;
+		}
+
 		double estimation = estimateMinTravelcostToDestination(startNodeIndex, endNodeIndex);
 
 		this.comingFrom[startNodeIndex] = -1;
@@ -145,7 +156,7 @@ public class SpeedyALT implements LeastCostPathCalculator {
 				break;
 			}
 			// if turn restrictions are used, we might be on a colored node, so check for the original node
-			if (hasTurnRestrictions && this.graph.getNode(nodeIdx).getId().index() == endNodeIndex) {
+			if (hasTurnRestrictions && this.graph.getNode(nodeIdx).getId().index() == endNodeExternalId) {
 				foundEndNode = true;
 				int bestNodeIndex = nodeIdx;
 				double bestCost = getCost(bestNodeIndex);
@@ -156,7 +167,7 @@ public class SpeedyALT implements LeastCostPathCalculator {
 				DAryMinHeap.IntIterator iter = this.pq.iterator();
 				while (iter.hasNext()) {
 					int candidate = iter.next();
-					if (this.graph.getNode(candidate).getId().index() == endNodeIndex) {
+					if (this.graph.getNode(candidate).getId().index() == endNodeExternalId) {
 						double alternativeCost = getCost(candidate);
 						if (alternativeCost < bestCost) {
 							bestCost = alternativeCost;
