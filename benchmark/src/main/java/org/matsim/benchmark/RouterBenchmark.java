@@ -200,6 +200,13 @@ public class RouterBenchmark {
             }
         }
 
+        // Reset CH stats now so warmup queries don't pollute the measurement.
+        CHRouterTimeDep chRouter = (CHRouterTimeDep) routers.stream()
+                .filter(e -> e.router() instanceof CHRouterTimeDep)
+                .map(RouterEntry::router)
+                .findFirst().orElseThrow();
+        chRouter.resetStats();
+
         System.out.printf("Running benchmark (%,d queries per router) ...%n", benchmarkQueries);
         rng = new Random(123);
         int[][] pairs = new int[benchmarkQueries][2];
@@ -261,14 +268,37 @@ public class RouterBenchmark {
         resultRows.add(new String[]{ "  ALT build",       String.format("%,d ms  (%d landmarks)", altMs, effectiveLandmarks) });
         resultRows.add(null);
         resultRows.add(new String[]{ "Query Performance", String.format("(%,d queries, %d warmup)", benchmarkQueries, warmupQueries) });
+        double refUs = elapsedNs[0] / (benchmarkQueries * 1000.0);
         for (int r = 0; r < routers.size(); r++) {
             double avgUs = elapsedNs[r] / (benchmarkQueries * 1000.0);
-            resultRows.add(new String[]{ "  " + routers.get(r).name(), String.format("%,.0f µs/query", avgUs) });
+            String value = r == 0
+                    ? String.format("%,.0f µs/query", avgUs)
+                    : String.format("%,.0f µs/query  (%.1fx)", avgUs, refUs / avgUs);
+            resultRows.add(new String[]{ "  " + routers.get(r).name(), value });
         }
         resultRows.add(null);
         resultRows.add(new String[]{ "Correctness" });
         resultRows.add(new String[]{ "  Max cost diff",   String.format("%.6f", maxCostDiff) });
         resultRows.add(new String[]{ "  Mismatches",      String.format("%d  (threshold: 1e-3)", mismatches) });
+
+        // CH Quality: search space size is the hardware-independent quality metric.
+        // A good CH settles << 1% of all nodes per query direction.
+        long chQueries = chRouter.getChQueryCount();
+        if (chQueries > 0) {
+            double avgFwd = (double) chRouter.getTotalFwdSettled() / chQueries;
+            double avgBwd = (double) chRouter.getTotalBwdSettled() / chQueries;
+            double avgTotal = avgFwd + avgBwd;
+            double searchSpaceRatio = avgTotal / nodeCount * 100.0;
+            // Approximate Dijkstra speedup: Dijkstra settles all nodeCount nodes
+            double dijkstraSpeedup = nodeCount / Math.max(1, avgTotal);
+            resultRows.add(null);
+            resultRows.add(new String[]{ "CH Quality  (search space, lower = better)" });
+            resultRows.add(new String[]{ "  Avg settled fwd",    String.format("%,.0f nodes/query", avgFwd) });
+            resultRows.add(new String[]{ "  Avg settled bwd",    String.format("%,.0f nodes/query", avgBwd) });
+            resultRows.add(new String[]{ "  Avg settled total",  String.format("%,.0f nodes/query", avgTotal) });
+            resultRows.add(new String[]{ "  Search space ratio", String.format("%.3f%%  of %,d nodes", searchSpaceRatio, nodeCount) });
+            resultRows.add(new String[]{ "  vs Dijkstra",        String.format("~%.0fx fewer settled nodes", dijkstraSpeedup) });
+        }
 
         System.out.println();
         printBox("Routing Benchmark  —  ALT vs CH Comparison", resultRows.toArray(String[][]::new));

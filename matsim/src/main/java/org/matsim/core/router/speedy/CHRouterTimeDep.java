@@ -82,6 +82,28 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
     private final double[] minTTF;
     private final int      totalEdgeCount; // stride for bin-major TTF layout
 
+    // -------------------------------------------------------------------------
+    // Stats tracking (search space size — the primary CH quality metric)
+    // -------------------------------------------------------------------------
+
+    /** Total forward PQ polls across all queries since last {@link #resetStats()}. */
+    private long totalFwdSettled = 0;
+    /** Total backward PQ polls across all queries since last {@link #resetStats()}. */
+    private long totalBwdSettled = 0;
+    /** Number of queries executed since last {@link #resetStats()}. */
+    private long chQueryCount = 0;
+
+    /** Resets all accumulated stats (call between warmup and measurement phase). */
+    public void resetStats() {
+        totalFwdSettled = 0;
+        totalBwdSettled = 0;
+        chQueryCount    = 0;
+    }
+
+    public long getTotalFwdSettled() { return totalFwdSettled; }
+    public long getTotalBwdSettled() { return totalBwdSettled; }
+    public long getChQueryCount()    { return chQueryCount; }
+
     public CHRouterTimeDep(CHGraph chGraph, TravelTime tt, TravelDisutility td) {
         this.chGraph   = chGraph;
         this.baseGraph = chGraph.getBaseGraph();
@@ -158,6 +180,7 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
         advanceIteration();
 
         if (startIdx == endIdx) {
+            chQueryCount++;
             return new Path(
                     Collections.singletonList(baseGraph.getNode(startIdx)),
                     Collections.emptyList(), 0.0, 0.0);
@@ -196,6 +219,10 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
         double bestBound   = Double.POSITIVE_INFINITY;
         int    meetingNode = -1;
 
+        // Per-query counters (accumulated into totals at the end)
+        int fwdSettled = 0;
+        int bwdSettled = 0;
+
         while (!fwdPQ.isEmpty() || !bwdPQ.isEmpty()) {
             double fMin = fwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : fwdCost[fwdPQ.peek()];
             double bMin = bwdPQ.isEmpty() ? Double.POSITIVE_INFINITY : bwdLB[bwdPQ.peek()];
@@ -206,6 +233,7 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
 
             if (expandForward) {
                 int v      = fwdPQ.poll();
+                fwdSettled++;
                 double arr = fwdArrival[v];
                 double cost = fwdCost[v];
 
@@ -276,6 +304,7 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
 
             } else {
                 int v   = bwdPQ.poll();
+                bwdSettled++;
                 double lb = bwdLB[v];
 
                 if (fwdIterIds[v] == currentIteration) {
@@ -334,6 +363,10 @@ public class CHRouterTimeDep implements LeastCostPathCalculator {
                 }
             }
         }
+
+        totalFwdSettled += fwdSettled;
+        totalBwdSettled += bwdSettled;
+        chQueryCount++;
 
         if (meetingNode < 0) return null;
         return constructPath(startIdx, meetingNode, startTime, person, vehicle);
