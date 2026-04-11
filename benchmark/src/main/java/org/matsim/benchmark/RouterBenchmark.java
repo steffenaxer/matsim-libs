@@ -56,6 +56,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Random;
@@ -76,11 +77,20 @@ import java.util.Random;
  *   <li>CH Time-Dependent (Z-order)</li>
  * </ol>
  *
+ * <p>OD pair generation modes:
+ * <ul>
+ *   <li><b>mid</b> (default) — Distance-weighted sampling inspired by
+ *       MiD 2017 (Mobilität in Deutschland). Beeline distances follow a
+ *       log-normal distribution (median ≈ 5 km, mean ≈ 10 km).</li>
+ *   <li><b>random</b> — Uniform random origin and destination nodes.</li>
+ * </ul>
+ *
  * <p>Run with sufficient heap, e.g.:
  * <pre>
  *   java -Xmx8G -cp ... org.matsim.benchmark.RouterBenchmark \
  *        [--network path/to/network.xml.gz | berlin | duesseldorf] \
- *        [--queries 2000] [--warmup 200] [--landmarks 16]
+ *        [--queries 2000] [--warmup 200] [--landmarks 16] \
+ *        [--od-mode mid|random]
  * </pre>
  *
  * <p>If {@code --network} is omitted, the Berlin v7.0 network is used.
@@ -100,8 +110,37 @@ public class RouterBenchmark {
     private static int warmupQueries    = 200;
     private static int benchmarkQueries = 2_000;
     private static int altLandmarks     = 16;
+    private static String odMode        = "mid";
 
     record RouterEntry(String name, LeastCostPathCalculator router) {}
+
+    /**
+     * Result of OD pair generation, including beeline distance statistics.
+     */
+    record ODPairResult(int[][] pairs, double[] beelineDistances, double metersPerUnit) {
+        double medianKm() { return percentileKm(50); }
+        double meanKm() {
+            double sum = 0;
+            for (double d : beelineDistances) sum += d;
+            return (sum / beelineDistances.length) * metersPerUnit / 1000.0;
+        }
+        double percentileKm(int p) {
+            double[] sorted = beelineDistances.clone();
+            Arrays.sort(sorted);
+            int idx = Math.min((int) (sorted.length * p / 100.0), sorted.length - 1);
+            return sorted[idx] * metersPerUnit / 1000.0;
+        }
+        double minKm() {
+            double min = Double.MAX_VALUE;
+            for (double d : beelineDistances) min = Math.min(min, d);
+            return min * metersPerUnit / 1000.0;
+        }
+        double maxKm() {
+            double max = 0;
+            for (double d : beelineDistances) max = Math.max(max, d);
+            return max * metersPerUnit / 1000.0;
+        }
+    }
 
     public static void main(String[] args) {
         Locale.setDefault(Locale.US);
@@ -119,15 +158,23 @@ public class RouterBenchmark {
                 case "--queries"   -> benchmarkQueries   = Integer.parseInt(args[++i]);
                 case "--warmup"    -> warmupQueries       = Integer.parseInt(args[++i]);
                 case "--landmarks" -> altLandmarks        = Integer.parseInt(args[++i]);
+                case "--od-mode"   -> odMode              = args[++i].toLowerCase(Locale.ROOT);
                 default -> {
                     System.err.println("Unknown argument: " + args[i]);
                     System.err.println("Usage: java ... RouterBenchmark "
-                            + "[--network <path|berlin|duesseldorf>] [--queries <n>] [--warmup <n>] [--landmarks <n>]");
+                            + "[--network <path|berlin|duesseldorf>] [--queries <n>] [--warmup <n>] "
+                            + "[--landmarks <n>] [--od-mode mid|random]");
                     System.exit(1);
                 }
             }
         }
 
+        if (!odMode.equals("mid") && !odMode.equals("random")) {
+            System.err.println("ERROR: --od-mode must be 'mid' or 'random' (got '" + odMode + "')");
+            System.exit(1);
+        }
+
+        // ...existing code... (heap check, network loading, graph building, CH/ALT build)
         long maxHeapMB = Runtime.getRuntime().maxMemory() / (1024 * 1024);
         System.out.printf("JVM max heap: %,d MB%n", maxHeapMB);
         if (maxHeapMB < 3000) {
@@ -179,21 +226,31 @@ public class RouterBenchmark {
         System.out.println();
         System.out.println("Building SpeedyALT landmarks ...");
         long altStart = System.nanoTime();
-        SpeedyALTData altData = new SpeedyALTData(graph, Math.min(effectiveLandmarks, graph.getNodeCount()), tc, 1);
+        int altThreads = Runtime.getRuntime().availableProcessors();
+        SpeedyALTData altData = new SpeedyALTData(graph, Math.min(effectiveLandmarks, graph.getNodeCount()), tc, altThreads);
         long altMs = (System.nanoTime() - altStart) / 1_000_000;
-        System.out.printf("  ALT build: %,6d ms  (%d landmarks)%n", altMs, effectiveLandmarks);
+        System.out.printf("  ALT build: %,6d ms  (%d landmarks, %d threads)%n", altMs, effectiveLandmarks, altThreads);
 
         List<RouterEntry> routers = buildRouters(altData, chGraph, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
-        int n = nodeList.size();
+
+        // ---- Generate OD pairs ----
+        System.out.println();
+        System.out.printf("Generating OD pairs (mode=%s) ...%n", odMode);
+        ODPairResult warmupOD = generateODPairs(nodeList, warmupQueries, new Random(42), odMode);
+        ODPairResult benchOD  = generateODPairs(nodeList, benchmarkQueries, new Random(123), odMode);
+
+        System.out.printf("  Benchmark beeline distances: min=%.1f km, median=%.1f km, mean=%.1f km, "
+                        + "P90=%.1f km, P95=%.1f km, max=%.1f km%n",
+                benchOD.minKm(), benchOD.medianKm(), benchOD.meanKm(),
+                benchOD.percentileKm(90), benchOD.percentileKm(95), benchOD.maxKm());
 
         System.out.println();
         System.out.printf("Warming up (%d queries per router) ...%n", warmupQueries);
-        Random rng = new Random(42);
         for (int i = 0; i < warmupQueries; i++) {
-            Node s = nodeList.get(rng.nextInt(n));
-            Node d = nodeList.get(rng.nextInt(n));
+            Node s = nodeList.get(warmupOD.pairs()[i][0]);
+            Node d = nodeList.get(warmupOD.pairs()[i][1]);
             double depTime = 8.0 * 3600;
             for (RouterEntry entry : routers) {
                 entry.router().calcLeastCostPath(s, d, depTime, null, null);
@@ -208,12 +265,7 @@ public class RouterBenchmark {
         chRouter.resetStats();
 
         System.out.printf("Running benchmark (%,d queries per router) ...%n", benchmarkQueries);
-        rng = new Random(123);
-        int[][] pairs = new int[benchmarkQueries][2];
-        for (int i = 0; i < benchmarkQueries; i++) {
-            pairs[i][0] = rng.nextInt(n);
-            pairs[i][1] = rng.nextInt(n);
-        }
+        int[][] pairs = benchOD.pairs();
 
         long[] elapsedNs = new long[routers.size()];
         for (int r = 0; r < routers.size(); r++) {
@@ -262,6 +314,14 @@ public class RouterBenchmark {
         resultRows.add(new String[]{ "  Est. diameter",   String.valueOf(profile.estimatedDiameter()) });
         resultRows.add(new String[]{ "  Components",      String.valueOf(profile.connectedComponents()) });
         resultRows.add(null);
+        resultRows.add(new String[]{ "OD Pairs",          String.format("(mode=%s)", odMode) });
+        resultRows.add(new String[]{ "  Beeline min",     String.format("%.1f km", benchOD.minKm()) });
+        resultRows.add(new String[]{ "  Beeline median",  String.format("%.1f km", benchOD.medianKm()) });
+        resultRows.add(new String[]{ "  Beeline mean",    String.format("%.1f km", benchOD.meanKm()) });
+        resultRows.add(new String[]{ "  Beeline P90",     String.format("%.1f km", benchOD.percentileKm(90)) });
+        resultRows.add(new String[]{ "  Beeline P95",     String.format("%.1f km", benchOD.percentileKm(95)) });
+        resultRows.add(new String[]{ "  Beeline max",     String.format("%.1f km", benchOD.maxKm()) });
+        resultRows.add(null);
         resultRows.add(new String[]{ "Preprocessing" });
         resultRows.add(new String[]{ "  ND Order",        String.format("%,d ms", orderMs) });
         resultRows.add(new String[]{ "  CH build",        String.format("%,d ms  (incl. order)", totalBuildMs) });
@@ -289,7 +349,6 @@ public class RouterBenchmark {
             double avgBwd = (double) chRouter.getTotalBwdSettled() / chQueries;
             double avgTotal = avgFwd + avgBwd;
             double searchSpaceRatio = avgTotal / nodeCount * 100.0;
-            // Approximate Dijkstra speedup: Dijkstra settles all nodeCount nodes
             double dijkstraSpeedup = nodeCount / Math.max(1, avgTotal);
             resultRows.add(null);
             resultRows.add(new String[]{ "CH Quality  (search space, lower = better)" });
@@ -303,6 +362,160 @@ public class RouterBenchmark {
         System.out.println();
         printBox("Routing Benchmark  —  ALT vs CH Comparison", resultRows.toArray(String[][]::new));
     }
+
+    // ---- OD pair generation ----
+
+    /**
+     * Generates OD pairs according to the selected mode.
+     *
+     * @param nodeList  all network nodes
+     * @param count     number of pairs to generate
+     * @param rng       random number generator (seeded for reproducibility)
+     * @param mode      "mid" for MiD-inspired distribution, "random" for uniform
+     * @return OD pairs with beeline distance statistics
+     */
+    private static ODPairResult generateODPairs(List<Node> nodeList, int count, Random rng, String mode) {
+        return switch (mode) {
+            case "mid" -> generateMiDPairs(nodeList, count, rng);
+            case "random" -> generateRandomPairs(nodeList, count, rng);
+            default -> throw new IllegalArgumentException("Unknown OD mode: " + mode);
+        };
+    }
+
+    /**
+     * Generates uniform random OD pairs (original behavior).
+     */
+    private static ODPairResult generateRandomPairs(List<Node> nodeList, int count, Random rng) {
+        int n = nodeList.size();
+        double metersPerUnit = detectMetersPerUnit(nodeList);
+
+        int[][] pairs = new int[count][2];
+        double[] distances = new double[count];
+        for (int i = 0; i < count; i++) {
+            int o = rng.nextInt(n);
+            int d = rng.nextInt(n);
+            pairs[i][0] = o;
+            pairs[i][1] = d;
+            distances[i] = beeline(nodeList.get(o), nodeList.get(d));
+        }
+        return new ODPairResult(pairs, distances, metersPerUnit);
+    }
+
+    /**
+     * Generates OD pairs with a distance distribution inspired by
+     * <b>MiD 2017</b> (Mobilität in Deutschland).
+     *
+     * <p>Beeline distances are sampled from a <b>log-normal distribution</b>:
+     * <ul>
+     *   <li>Median ≈ 5 km  (μ = ln(5000) ≈ 8.52 in meters)</li>
+     *   <li>σ = 1.1  →  Mean ≈ 9.3 km, P90 ≈ 21 km, P99 ≈ 72 km</li>
+     * </ul>
+     *
+     * <p>This approximates the MiD 2017 findings where:
+     * <ul>
+     *   <li>~30% of trips are &lt; 3 km (walking, cycling)</li>
+     *   <li>~50% are &lt; 6 km</li>
+     *   <li>~80% are &lt; 15 km</li>
+     *   <li>~95% are &lt; 40 km</li>
+     *   <li>~99% are &lt; 100 km</li>
+     * </ul>
+     *
+     * <p>For each pair, a random origin is selected and a destination is found
+     * by picking the best match among 50 random candidates whose beeline
+     * distance is closest to the sampled target distance.  This is efficient
+     * (no spatial index needed) and produces a smooth distribution.
+     *
+     * @see <a href="https://www.mobilitaet-in-deutschland.de/">MiD 2017</a>
+     */
+    private static ODPairResult generateMiDPairs(List<Node> nodeList, int count, Random rng) {
+        int n = nodeList.size();
+        double metersPerUnit = detectMetersPerUnit(nodeList);
+
+        // Log-normal parameters (in coordinate units):
+        // median = 5000 m / metersPerUnit
+        double medianCU = 5_000.0 / metersPerUnit;
+        double muLn = Math.log(medianCU);
+        double sigmaLn = 1.1;
+
+        // Network extent for clamping
+        double diagonal = networkDiagonal(nodeList);
+        double minDist = 200.0 / metersPerUnit;   // minimum 200 m beeline
+        double maxDist = diagonal * 0.9;           // cap at 90% of diagonal
+
+        int candidates = 50;  // candidates per OD pair for distance matching
+
+        int[][] pairs = new int[count][2];
+        double[] distances = new double[count];
+
+        for (int i = 0; i < count; i++) {
+            int origin = rng.nextInt(n);
+
+            // Sample target beeline distance from log-normal
+            double targetDist = Math.exp(muLn + sigmaLn * rng.nextGaussian());
+            targetDist = Math.max(minDist, Math.min(maxDist, targetDist));
+
+            // Find best matching destination among candidates
+            int bestDest = (origin + 1) % n;  // fallback
+            double bestDiff = Double.MAX_VALUE;
+            for (int c = 0; c < candidates; c++) {
+                int dest = rng.nextInt(n);
+                double dist = beeline(nodeList.get(origin), nodeList.get(dest));
+                double diff = Math.abs(dist - targetDist);
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    bestDest = dest;
+                }
+            }
+
+            pairs[i][0] = origin;
+            pairs[i][1] = bestDest;
+            distances[i] = beeline(nodeList.get(origin), nodeList.get(bestDest));
+        }
+
+        return new ODPairResult(pairs, distances, metersPerUnit);
+    }
+
+    /**
+     * Detects whether coordinates are in meters (projected CRS like UTM) or
+     * degrees (WGS84) by examining the bounding box diagonal.
+     *
+     * @return approximate meters per coordinate unit
+     */
+    private static double detectMetersPerUnit(List<Node> nodeList) {
+        double diagonal = networkDiagonal(nodeList);
+        // If diagonal > 10 km worth of units, assume meters.
+        // Typical German UTM network: diagonal 50k-900k (meters).
+        // WGS84 for Germany: diagonal ~5-12 (degrees).
+        if (diagonal > 10_000) {
+            return 1.0;  // already in meters
+        } else if (diagonal > 100) {
+            return 100.0; // some intermediate CRS (rare)
+        } else {
+            return 111_000.0; // degrees → approximate meters at ~50°N
+        }
+    }
+
+    private static double networkDiagonal(List<Node> nodeList) {
+        double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE;
+        double minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        for (Node node : nodeList) {
+            double x = node.getCoord().getX();
+            double y = node.getCoord().getY();
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+        return Math.sqrt((maxX - minX) * (maxX - minX) + (maxY - minY) * (maxY - minY));
+    }
+
+    private static double beeline(Node a, Node b) {
+        double dx = a.getCoord().getX() - b.getCoord().getX();
+        double dy = a.getCoord().getY() - b.getCoord().getY();
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // ---- Benchmarking ----
 
     private static long benchmarkRouter(LeastCostPathCalculator router,
                                         List<Node> nodeList, int[][] pairs, String label) {
@@ -324,6 +537,8 @@ public class RouterBenchmark {
         System.out.printf("  %,.0f µs/query%n", avgUs);
         return elapsedNs;
     }
+
+    // ---- Network loading ----
 
     private static Network loadNetwork(String networkPath) {
         if (networkPath == null || "berlin".equalsIgnoreCase(networkPath)) {
