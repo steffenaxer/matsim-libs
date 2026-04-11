@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   <li><b>FM refinement</b>: Fiduccia&ndash;Mattheyses local search minimises
  *       the edge cut of the underlying bipartition, using a bucket linked-list
  *       for O(1) max-gain lookup.  Up to 5 passes until fixpoint.</li>
- *   <li><b>Max-flow refinement</b>: Dinic's algorithm on a node-split flow
+ *   <li><b>Max-flow refinement</b>: Dinic&rsquo;s algorithm on a node-split flow
  *       network finds the minimum vertex separator between the two partition
  *       sides.  Each internal node is split into v_in/v_out with capacity 1;
  *       original edges have capacity &infin;.</li>
@@ -58,6 +58,30 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <p>This eliminates witness searches during ordering and is dramatically faster
  * than priority-queue-based ordering for large networks.
+ *
+ * <h3>Data-structure optimisations</h3>
+ * <ul>
+ *   <li><b>CSR adjacency</b>: the symmetric (undirected) adjacency is stored in
+ *       Compressed Sparse Row format ({@code adjData} / {@code adjOffset}) built
+ *       once at construction time.  This replaces the previous {@code int[][]}
+ *       representation (one heap object per node), giving a single contiguous
+ *       allocation, better cache behaviour, and lower GC pressure.</li>
+ *   <li><b>Pre-allocated scratch arrays</b>: {@code bfsDist} and {@code toCompact}
+ *       (each of size {@code nodeCount}) are allocated once and reused across all
+ *       max-flow calls, avoiding ~8 MB heap pressure per call.  Concurrent
+ *       ForkJoin tasks write only to their own (disjoint) node indices.</li>
+ *   <li><b>Per-thread scratch buffers</b>: projection arrays, sort indices/temp,
+ *       and FM move-tracking arrays are held in {@code ThreadLocal} storage and
+ *       resized only when a larger subgraph is encountered, eliminating per-call
+ *       allocation throughout the recursive decomposition.</li>
+ *   <li><b>Explicit generation passing</b>: the subgraph generation stamp is
+ *       returned from {@link #markSubGraph} and threaded as a plain {@code int}
+ *       parameter instead of a {@code ThreadLocal}, eliminating a hash-table
+ *       lookup on every subgraph-membership test in hot inner loops.</li>
+ *   <li><b>Static direction arrays</b>: the projection-direction constants are
+ *       pre-built as {@code static final} arrays, avoiding repeated inline
+ *       allocation inside {@code findSeparator}.</li>
+ * </ul>
  *
  * <p>References: Dibbelt et al. (2016) "Customizable Contraction Hierarchies",
  * Hamann &amp; Strasser (2018) "Graph Bisection with Pareto Optimization",
@@ -71,14 +95,6 @@ public class InertialFlowCutter {
     /**
      * Result of {@link #computeOrderWithBatches()}: contraction order plus
      * partition structure for parallel contraction.
-     *
-     * <p>{@code rounds} is a list of "rounds" processed sequentially.
-     * Each round contains a list of independent cells that can be contracted
-     * in parallel.  Within each cell, nodes are in contraction order and must
-     * be processed sequentially.
-     *
-     * <p>Rounds are ordered from the deepest ND level (leaf cells, contracted
-     * first) to the shallowest (root separator, contracted last).
      */
     public static class NDOrderResult {
         public final int[] order;
@@ -99,27 +115,13 @@ public class InertialFlowCutter {
     private static final int MIN_PARTITION_SIZE = 2;
 
     // ---- Network-size-adaptive parameters ----
-    // Computed in the constructor based on graph.nodeCount.
 
-    /** Minimum subgraph size to apply FM refinement. */
     private final int fmMinSize;
-
-    /** Maximum FM passes per separator refinement. */
     private final int fmMaxPasses;
-
-    /** Minimum subgraph size to apply max-flow refinement. */
     private final int maxflowMinSize;
-
-    /** BFS depth from boundary for max-flow cuttable region. */
     private final int maxflowBorderDepth;
-
-    /** Minimum combined subgraph size to fork recursive sub-tasks in parallel. */
     private final int parallelMinSize;
-
-    /** Subgraph size threshold below which fewer projection directions are used. */
     private final int reducedDirectionsThreshold;
-
-    /** Subgraph size threshold below which fewer split ratios are tried. */
     private final int reducedRatiosThreshold;
 
     private final SpeedyGraph graph;
@@ -128,28 +130,53 @@ public class InertialFlowCutter {
     private double[] nodeX;
     private double[] nodeY;
 
-    // Reusable scratch arrays (sized to nodeCount, indexed by node ID).
-    // Thread-safe for concurrent use on DISJOINT node sets because each
-    // recursive sub-task only accesses entries for its own partition nodes.
+    // ---- CSR adjacency (symmetric/undirected, built once in constructor) ----
+    /**
+     * Concatenated neighbor data in CSR format.
+     * Node {@code i}'s neighbors are {@code adjData[adjOffset[i] .. adjOffset[i+1])}.
+     */
+    private int[] adjData;
+    /**
+     * CSR offset array (size {@code nodeCount + 1}).
+     */
+    private int[] adjOffset;
+
+    // ---- Pre-allocated scratch arrays (size = nodeCount) ----
+    // Concurrent ForkJoin tasks operate on disjoint node-index ranges -> thread-safe.
+    // Each user must reset touched entries to 0 after use.
     private int[] scratchSide;
-    private int[] scratchBoundary;  // generation-stamped boundary markers
-    private final AtomicInteger scratchBoundaryGen = new AtomicInteger(0);
-
-    // Subgraph membership: generation-stamped for thread-safe parallel recursion.
-    // inSubGraphGen[node] == currentSubGraphGen.get() means node is in the subgraph.
-    // Stale generation values are automatically ignored (no cleanup needed).
-    private int[] inSubGraphGen;
-    private final AtomicInteger subGraphGenCounter = new AtomicInteger(0);
-    private final ThreadLocal<Integer> currentSubGraphGen = ThreadLocal.withInitial(() -> 0);
-
-    // Pre-allocated scratch arrays for FM refinement (indexed by node ID, disjoint access)
+    private int[] scratchBoundary;   // generation-stamped boundary markers
+    private int[] inSubGraphGen;     // subgraph generation stamp per node
+    private int[] bfsDist;           // max-flow BFS distances  (0 = not visited)
+    private int[] toCompact;         // max-flow compact mapping (0 = not in subgraph)
     private int[] fmGain;
     private int[] fmNext;
     private int[] fmPrev;
 
+    private final AtomicInteger scratchBoundaryGen = new AtomicInteger(0);
+    private final AtomicInteger subGraphGenCounter  = new AtomicInteger(0);
+
+    // ---- Per-thread scratch buffers (static: shared across all IFC instances) ----
+    // Resized lazily (capacity doubled) to handle arbitrarily large subgraphs.
+    private static final ThreadLocal<double[]> TL_PROJ     = ThreadLocal.withInitial(() -> new double[1024]);
+    private static final ThreadLocal<int[]>    TL_SORT_IDX = ThreadLocal.withInitial(() -> new int[1024]);
+    private static final ThreadLocal<int[]>    TL_SORT_TMP = ThreadLocal.withInitial(() -> new int[1024]);
+    private static final ThreadLocal<int[]>    TL_ALLNODES = ThreadLocal.withInitial(() -> new int[2048]);
+    private static final ThreadLocal<int[]>    TL_MOVENODE = ThreadLocal.withInitial(() -> new int[2048]);
+    private static final ThreadLocal<int[]>    TL_MOVEFROM = ThreadLocal.withInitial(() -> new int[2048]);
+
+    // ---- Static direction arrays (avoid per-call allocation in findSeparator) ----
+    private static final double[][] ALL_DIRECTIONS = {
+        {1, 0}, {0, 1}, {1, 1}, {1, -1},
+        {2, 1}, {1, 2}, {2, -1}, {1, -2},
+        {3, 1}, {1, 3}, {3, -1}, {1, -3},
+        {4, 1}, {1, 4}, {4, -1}, {1, -4}
+    };
+    private static final double[][] DIRS_4 = Arrays.copyOf(ALL_DIRECTIONS, 4);
+    private static final double[][] DIRS_8 = Arrays.copyOf(ALL_DIRECTIONS, 8);
+
     /**
      * Creates an InertialFlowCutter with auto-tuned parameters.
-     * This is the recommended constructor for new code.
      *
      * @param graph  the base graph
      * @param params pre-computed parameters from {@link RoutingParameterTuner}
@@ -169,7 +196,7 @@ public class InertialFlowCutter {
         LOG.debug("IFC parameters (auto-tuned) for {} nodes: fmMinSize={}, maxflowMinSize={}, " +
                         "reducedRatiosThreshold={}", n, fmMinSize, maxflowMinSize, reducedRatiosThreshold);
 
-        initCoordinatesAndScratch(n);
+        initScratch(n);
     }
 
     /**
@@ -209,12 +236,14 @@ public class InertialFlowCutter {
         LOG.debug("IFC parameters (legacy tier) for {} nodes: fmMinSize={}, maxflowMinSize={}, " +
                         "reducedRatiosThreshold={}", n, fmMinSize, maxflowMinSize, reducedRatiosThreshold);
 
-        initCoordinatesAndScratch(n);
+        initScratch(n);
     }
 
-    /** Common initialisation for both constructors. */
-    private void initCoordinatesAndScratch(int n) {
-
+    /**
+     * Common initialisation: extract node coordinates, allocate scratch arrays,
+     * and build the CSR adjacency from the directed SpeedyGraph.
+     */
+    private void initScratch(int n) {
         this.nodeX = new double[n];
         this.nodeY = new double[n];
 
@@ -226,26 +255,28 @@ public class InertialFlowCutter {
             }
         }
 
-        this.scratchSide = new int[n];
+        this.scratchSide     = new int[n];
         this.scratchBoundary = new int[n];
-        this.inSubGraphGen = new int[n];
-        this.fmGain = new int[n];
-        this.fmNext = new int[n];
-        this.fmPrev = new int[n];
+        this.inSubGraphGen   = new int[n];
+        this.bfsDist         = new int[n];
+        this.toCompact       = new int[n];
+        this.fmGain          = new int[n];
+        this.fmNext          = new int[n];
+        this.fmPrev          = new int[n];
+
+        buildSymmetricAdjacency();
     }
 
-    // ---- Thread-safe subgraph membership helpers ----
+    // ---- Subgraph membership helpers ----
 
-    /** Marks all nodes as belonging to the current subgraph (thread-local generation). */
-    private void markSubGraph(int[] subNodes) {
+    /**
+     * Marks all nodes as belonging to the current subgraph.
+     * Returns the generation stamp; pass this to all methods that test membership.
+     */
+    private int markSubGraph(int[] subNodes) {
         int gen = subGraphGenCounter.incrementAndGet();
-        currentSubGraphGen.set(gen);
         for (int node : subNodes) inSubGraphGen[node] = gen;
-    }
-
-    /** Checks if a node belongs to the current thread's subgraph. */
-    private boolean isInSubGraph(int node) {
-        return inSubGraphGen[node] == currentSubGraphGen.get();
+        return gen;
     }
 
     /** Gets a unique boundary generation value (thread-safe). */
@@ -253,37 +284,49 @@ public class InertialFlowCutter {
         return scratchBoundaryGen.incrementAndGet();
     }
 
+    // ---- ThreadLocal buffer helpers ----
+
+    /** Ensures the {@code double[]} ThreadLocal buffer has at least {@code minLen} capacity. */
+    private static double[] ensureCapDbl(ThreadLocal<double[]> tl, int minLen) {
+        double[] buf = tl.get();
+        if (buf.length >= minLen) return buf;
+        int cap = buf.length;
+        while (cap < minLen) cap <<= 1;
+        tl.set(buf = new double[cap]);
+        return buf;
+    }
+
+    /** Ensures the {@code int[]} ThreadLocal buffer has at least {@code minLen} capacity. */
+    private static int[] ensureCapInt(ThreadLocal<int[]> tl, int minLen) {
+        int[] buf = tl.get();
+        if (buf.length >= minLen) return buf;
+        int cap = buf.length;
+        while (cap < minLen) cap <<= 1;
+        tl.set(buf = new int[cap]);
+        return buf;
+    }
+
     /**
      * Computes a nested-dissection contraction order.
-     * @return array where {@code order[i]} is the contraction level of node {@code i}
-     *         (0 = contracted first, nodeCount-1 = contracted last).
+     * @return array where {@code order[i]} is the contraction level of node {@code i}.
      */
     public int[] computeOrder() {
         int n = graph.nodeCount;
         int[] order = new int[n];
         Arrays.fill(order, -1);
 
-        // Collect all valid node indices
         int[] nodes = new int[n];
         int count = 0;
         for (int i = 0; i < n; i++) {
-            if (graph.getNode(i) != null) {
-                nodes[count++] = i;
-            }
+            if (graph.getNode(i) != null) nodes[count++] = i;
         }
         nodes = Arrays.copyOf(nodes, count);
 
-        // Build symmetric adjacency for the base graph (undirected view)
-        int[][] adj = buildSymmetricAdjacency();
-
         int[] levelCounter = new int[]{0};
-        recursiveDissect(nodes, adj, order, levelCounter);
+        recursiveDissect(nodes, order, levelCounter);
 
-        // Fill any unassigned (isolated / null nodes)
         for (int i = 0; i < n; i++) {
-            if (order[i] < 0) {
-                order[i] = levelCounter[0]++;
-            }
+            if (order[i] < 0) order[i] = levelCounter[0]++;
         }
 
         LOG.debug("Nested dissection ordering computed for {} nodes", n);
@@ -291,15 +334,8 @@ public class InertialFlowCutter {
     }
 
     /**
-     * Computes a nested-dissection contraction order <b>plus</b> a partition
+     * Computes a nested-dissection contraction order plus a partition
      * structure for parallel contraction.
-     *
-     * <p>Nodes in different cells within the same round are guaranteed to be
-     * independent (no edges between them), so they can be contracted in
-     * parallel.  Within each cell, nodes must be contracted sequentially.
-     *
-     * @return {@link NDOrderResult} containing the contraction order and
-     *         a list of rounds of independent cells.
      */
     public NDOrderResult computeOrderWithBatches() {
         long startNanos = System.nanoTime();
@@ -310,39 +346,25 @@ public class InertialFlowCutter {
         int[] nodes = new int[n];
         int count = 0;
         for (int i = 0; i < n; i++) {
-            if (graph.getNode(i) != null) {
-                nodes[count++] = i;
-            }
+            if (graph.getNode(i) != null) nodes[count++] = i;
         }
         nodes = Arrays.copyOf(nodes, count);
 
-        int[][] adj = buildSymmetricAdjacency();
-
-        // Use parallel recursion with ForkJoinPool for large graphs.
         int nThreads = Runtime.getRuntime().availableProcessors();
         ForkJoinPool pool = (count >= parallelMinSize && nThreads > 1) ? new ForkJoinPool(nThreads) : null;
 
-        // Phase 1: Recursively partition (possibly in parallel) and build a
-        // deterministic tree of cells.  No global level counter is used during
-        // this phase, so thread scheduling cannot affect the result.
-        NDCell root = recursiveDissectWithBatches(nodes, adj, 0, pool);
+        NDCell root = recursiveDissectWithBatches(nodes, 0, pool);
 
         if (pool != null) pool.shutdown();
 
-        // Phase 2: Walk the tree depth-first (deterministic) to assign levels
-        // and collect cells-by-depth.
         Map<Integer, List<int[]>> cellsByDepth = new java.util.HashMap<>();
         int[] levelCounter = {0};
         assignLevels(root, order, levelCounter, cellsByDepth);
 
-        // Fill any unassigned (isolated / null nodes)
         for (int i = 0; i < n; i++) {
-            if (order[i] < 0) {
-                order[i] = levelCounter[0]++;
-            }
+            if (order[i] < 0) order[i] = levelCounter[0]++;
         }
 
-        // Convert to rounds: highest depth first (leaf cells contracted first)
         int maxDepth = 0;
         for (int d : cellsByDepth.keySet()) {
             if (d > maxDepth) maxDepth = d;
@@ -350,9 +372,7 @@ public class InertialFlowCutter {
         List<List<int[]>> rounds = new ArrayList<>();
         for (int d = maxDepth; d >= 0; d--) {
             List<int[]> cells = cellsByDepth.get(d);
-            if (cells != null && !cells.isEmpty()) {
-                rounds.add(cells);
-            }
+            if (cells != null && !cells.isEmpty()) rounds.add(cells);
         }
 
         long elapsed = System.nanoTime() - startNanos;
@@ -363,20 +383,14 @@ public class InertialFlowCutter {
 
     /**
      * Lightweight tree node representing one recursive dissection step.
-     * Built during the (possibly parallel) partitioning phase without assigning
-     * any global level numbers, so thread scheduling cannot cause non-determinism.
      */
     private static class NDCell {
         final int depth;
-        /** Leaf cell: nodes in this cell (non-null only for leaves). */
         final int[] leafNodes;
-        /** Interior cell: separator nodes (non-null only for interior). */
         final int[] separator;
-        /** Interior cell: left / right children (null for leaves). */
         final NDCell childA;
         final NDCell childB;
 
-        /** Leaf constructor. */
         NDCell(int depth, int[] leafNodes) {
             this.depth = depth;
             this.leafNodes = leafNodes;
@@ -385,7 +399,6 @@ public class InertialFlowCutter {
             this.childB = null;
         }
 
-        /** Interior constructor. */
         NDCell(int depth, int[] separator, NDCell childA, NDCell childB) {
             this.depth = depth;
             this.leafNodes = null;
@@ -395,55 +408,33 @@ public class InertialFlowCutter {
         }
     }
 
-    /**
-     * Recursive dissection that builds a deterministic {@link NDCell} tree.
-     * Supports parallel recursion via ForkJoinPool when subgraphs are large enough.
-     *
-     * <p>Thread-safety for parallel mode: all scratch arrays are indexed by node ID,
-     * and concurrent recursive calls operate on disjoint node sets (partitions).
-     * Subgraph membership uses generation stamps (no cleanup needed), and boundary
-     * generation uses an AtomicInteger counter.
-     *
-     * <p>No global level counter is touched here  --  level assignment happens in the
-     * sequential {@link #assignLevels} pass, guaranteeing determinism.
-     */
-    private NDCell recursiveDissectWithBatches(int[] subNodes, int[][] adj,
-                                               int depth, ForkJoinPool pool) {
+    private NDCell recursiveDissectWithBatches(int[] subNodes, int depth, ForkJoinPool pool) {
         if (subNodes.length <= MIN_PARTITION_SIZE) {
             return new NDCell(depth, subNodes);
         }
 
-        int[][] result = findSeparator(subNodes, adj);
+        int[][] result = findSeparator(subNodes);
         int[] partA     = result[0];
         int[] separator = result[1];
         int[] partB     = result[2];
 
         NDCell cellA, cellB;
-
-        // Recurse into partitions  --  fork when subgraph is large enough
         if (pool != null && (partA.length + partB.length) >= parallelMinSize) {
-            // Fork one sub-task, run the other in-line
             ForkJoinTask<NDCell> taskA = pool.submit(() ->
-                    recursiveDissectWithBatches(partA, adj, depth + 1, pool));
-            cellB = recursiveDissectWithBatches(partB, adj, depth + 1, pool);
+                    recursiveDissectWithBatches(partA, depth + 1, pool));
+            cellB = recursiveDissectWithBatches(partB, depth + 1, pool);
             cellA = taskA.join();
         } else {
-            cellA = recursiveDissectWithBatches(partA, adj, depth + 1, pool);
-            cellB = recursiveDissectWithBatches(partB, adj, depth + 1, pool);
+            cellA = recursiveDissectWithBatches(partA, depth + 1, pool);
+            cellB = recursiveDissectWithBatches(partB, depth + 1, pool);
         }
 
         return new NDCell(depth, separator, cellA, cellB);
     }
 
-    /**
-     * Deterministic depth-first walk of the {@link NDCell} tree.
-     * Assigns contraction levels (partA first, then partB, then separator)
-     * and collects cells by depth for batch contraction.
-     */
     private static void assignLevels(NDCell cell, int[] order, int[] levelCounter,
                                       Map<Integer, List<int[]>> cellsByDepth) {
         if (cell.leafNodes != null) {
-            // Leaf cell
             int ci = 0;
             int[] cellOrdered = new int[cell.leafNodes.length];
             for (int node : cell.leafNodes) {
@@ -459,11 +450,9 @@ public class InertialFlowCutter {
             return;
         }
 
-        // Interior: recurse children first (partA then partB)
         assignLevels(cell.childA, order, levelCounter, cellsByDepth);
         assignLevels(cell.childB, order, levelCounter, cellsByDepth);
 
-        // Separator nodes get highest levels at this depth
         int si = 0;
         int[] sepOrdered = new int[cell.separator.length];
         for (int node : cell.separator) {
@@ -478,36 +467,24 @@ public class InertialFlowCutter {
         }
     }
 
-    /**
-     * Recursively bisect the sub-graph and assign contraction levels.
-     * Separator nodes get the highest levels; partition nodes are recursed into.
-     */
-    private void recursiveDissect(int[] subNodes, int[][] adj, int[] order, int[] levelCounter) {
+    private void recursiveDissect(int[] subNodes, int[] order, int[] levelCounter) {
         if (subNodes.length <= MIN_PARTITION_SIZE) {
-            // Base case: assign levels in arbitrary order
             for (int node : subNodes) {
-                if (order[node] < 0) {
-                    order[node] = levelCounter[0]++;
-                }
+                if (order[node] < 0) order[node] = levelCounter[0]++;
             }
             return;
         }
 
-        // Find best separator via inertial flow
-        int[][] result = findSeparator(subNodes, adj);
+        int[][] result = findSeparator(subNodes);
         int[] partA     = result[0];
         int[] separator = result[1];
         int[] partB     = result[2];
 
-        // Recurse into smaller partitions first (contracted earlier = lower level)
-        recursiveDissect(partA, adj, order, levelCounter);
-        recursiveDissect(partB, adj, order, levelCounter);
+        recursiveDissect(partA, order, levelCounter);
+        recursiveDissect(partB, order, levelCounter);
 
-        // Separator nodes get highest levels (contracted last)
         for (int node : separator) {
-            if (order[node] < 0) {
-                order[node] = levelCounter[0]++;
-            }
+            if (order[node] < 0) order[node] = levelCounter[0]++;
         }
     }
 
@@ -515,43 +492,26 @@ public class InertialFlowCutter {
      * Find a separator for the given sub-graph using inertial flow with
      * graph-based refinement (FM + max-flow).
      * Returns [partitionA, separator, partitionB].
-     *
-     * <p>Thread-safe: uses generation-stamped subgraph membership so concurrent
-     * calls on disjoint node sets do not interfere.
-     *
-     * <p>Uses adaptive direction/ratio counts: fewer directions and split ratios
-     * for small subgraphs where the geometric information is less valuable and the
-     * recursion overhead dominates.
      */
-    private int[][] findSeparator(int[] subNodes, int[][] adj) {
+    private int[][] findSeparator(int[] subNodes) {
         int n = subNodes.length;
 
-        // Adaptive directions: fewer for small/medium subgraphs.
-        // The recursion creates thousands of subgraphs with 500 -- 5000 nodes
-        // where 16 directions yields negligible improvement over 8.
-        double[][] allDirections = {
-            {1, 0}, {0, 1}, {1, 1}, {1, -1},        // 0 deg, 90 deg, 45 deg, 135 deg
-            {2, 1}, {1, 2}, {2, -1}, {1, -2},        // ~27 deg, ~63 deg, ~153 deg, ~117 deg
-            {3, 1}, {1, 3}, {3, -1}, {1, -3},        // ~18.4 deg, ~71.6 deg, ~161.6 deg, ~108.4 deg
-            {4, 1}, {1, 4}, {4, -1}, {1, -4}         // ~14.0 deg, ~76.0 deg, ~166.0 deg, ~104.0 deg
-        };
         double[][] directions;
         if (n < reducedDirectionsThreshold) {
-            directions = Arrays.copyOf(allDirections, 4);  // cardinal + diagonal only
+            directions = DIRS_4;
         } else if (n < 5000) {
-            directions = Arrays.copyOf(allDirections, 8);  // +4 intermediate angles
+            directions = DIRS_8;
         } else {
-            directions = allDirections;                      // all 16 directions
+            directions = ALL_DIRECTIONS;
         }
 
-        // Mark subgraph membership using generation stamp (thread-safe, no cleanup needed)
-        markSubGraph(subNodes);
+        int gen = markSubGraph(subNodes);
 
         int[][] bestResult = null;
         long bestScore = Long.MAX_VALUE;
 
         for (double[] dir : directions) {
-            int[][] result = tryDirection(subNodes, adj, dir[0], dir[1]);
+            int[][] result = tryDirection(subNodes, dir[0], dir[1]);
             if (result != null) {
                 int balance = Math.abs(result[0].length - result[2].length);
                 long score = scoreSimple(result[1], balance);
@@ -566,64 +526,51 @@ public class InertialFlowCutter {
             return trivialSplit(subNodes);
         }
 
-        // Recompute baseline score with degree-weighted scoring for
-        // fair comparison against FM/max-flow refinements
         long refScore = scoreSeparator(bestResult[1],
-                Math.abs(bestResult[0].length - bestResult[2].length), adj);
+                Math.abs(bestResult[0].length - bestResult[2].length), gen);
 
-        // --- FM refinement: try BOTH bipartition orientations ---
         if (n >= fmMinSize) {
-            bestResult = tryFMBothOrientations(bestResult, adj, subNodes, refScore);
+            bestResult = tryFMBothOrientations(bestResult, subNodes, refScore, gen);
             refScore = scoreSeparator(bestResult[1],
-                    Math.abs(bestResult[0].length - bestResult[2].length), adj);
+                    Math.abs(bestResult[0].length - bestResult[2].length), gen);
         }
 
-        // --- Max-flow refinement with wider cuttable region ---
-        // Adaptive depth: scale down for large subgraphs where deep BFS is expensive.
-        // For n=1000: depth=8, for n=100k: depth=5, for n=500k: depth=4.
         if (n >= maxflowMinSize) {
             int adaptiveDepth = Math.max(3, Math.min(maxflowBorderDepth,
                     (int) (12.0 - Math.log(n) / Math.log(2))));
-            int[][] mfResult = maxFlowRefineWideDepth(bestResult, adj, adaptiveDepth);
-            if (mfResult != null && isValidSeparator(mfResult, adj)) {
+            int[][] mfResult = maxFlowRefineWideDepth(bestResult, adaptiveDepth, gen);
+            if (mfResult != null && isValidSeparator(mfResult, gen)) {
                 int mfBal = Math.abs(mfResult[0].length - mfResult[2].length);
-                long mfScore = scoreSeparator(mfResult[1], mfBal, adj);
+                long mfScore = scoreSeparator(mfResult[1], mfBal, gen);
                 if (mfScore < refScore) {
                     bestResult = mfResult;
-                    refScore = mfScore;
                 }
             }
         }
 
-        // No cleanup needed  --  stale generation values are ignored
         return bestResult;
     }
 
     // ========================= Degree-weighted scoring =========================
 
-    /**
-     * Try FM refinement in both bipartition orientations, return best result.
-     */
-    private int[][] tryFMBothOrientations(int[][] current, int[][] adj,
-                                           int[] subNodes, long currentScore) {
+    private int[][] tryFMBothOrientations(int[][] current, int[] subNodes,
+                                           long currentScore, int gen) {
         int[][] best = current;
         long bestScore = currentScore;
 
-        // Orientation 1: sideA = partA, sideB = sep  U  partB
-        int[][] fmResult1 = fmRefineSeparator(best, adj, subNodes, false);
-        if (isValidSeparator(fmResult1, adj)) {
+        int[][] fmResult1 = fmRefineSeparator(best, subNodes, false, gen);
+        if (isValidSeparator(fmResult1, gen)) {
             int fmBal = Math.abs(fmResult1[0].length - fmResult1[2].length);
-            long fmScore = scoreSeparator(fmResult1[1], fmBal, adj);
+            long fmScore = scoreSeparator(fmResult1[1], fmBal, gen);
             if (fmScore < bestScore) {
                 best = fmResult1;
                 bestScore = fmScore;
             }
         }
-        // Orientation 2: sideA = partA  U  sep, sideB = partB
-        int[][] fmResult2 = fmRefineSeparator(best, adj, subNodes, true);
-        if (isValidSeparator(fmResult2, adj)) {
+        int[][] fmResult2 = fmRefineSeparator(best, subNodes, true, gen);
+        if (isValidSeparator(fmResult2, gen)) {
             int fmBal = Math.abs(fmResult2[0].length - fmResult2[2].length);
-            long fmScore = scoreSeparator(fmResult2[1], fmBal, adj);
+            long fmScore = scoreSeparator(fmResult2[1], fmBal, gen);
             if (fmScore < bestScore) {
                 best = fmResult2;
             }
@@ -632,56 +579,46 @@ public class InertialFlowCutter {
     }
 
     /**
-     * Score a separator using degree-weighted cost: 256 per node (dominant) plus
-     * &sum;(subgraphDeg&sup2;) as refinement.  The 256 base ensures separator SIZE
-     * remains the primary criterion; the degree term breaks ties in favour of
-     * low-degree separators that create fewer shortcuts.
+     * Degree-weighted separator score: 256 per node plus sum(subgraphDeg^2).
      *
-     * @param separator separator nodes
-     * @param balance   partition imbalance |partA| - |partB|
-     * @param adj       symmetric adjacency lists
-     * @return weighted score (lower is better)
+     * @param gen current subgraph generation stamp
      */
-    private long scoreSeparator(int[] separator, int balance, int[][] adj) {
+    private long scoreSeparator(int[] separator, int balance, int gen) {
         long cost = 0;
+        final int[] data = adjData;
+        final int[] off  = adjOffset;
         for (int s : separator) {
             int subDeg = 0;
-            for (int w : adj[s]) {
-                if (isInSubGraph(w)) subDeg++;
+            for (int ei = off[s], eiEnd = off[s + 1]; ei < eiEnd; ei++) {
+                if (inSubGraphGen[data[ei]] == gen) subDeg++;
             }
             cost += 256L + (long) subDeg * subDeg;
         }
         return cost + balance;
     }
 
-    /** Simple size-based scoring matching the original formula. */
     private static long scoreSimple(int[] separator, int balance) {
         return separator.length * 256L + balance;
     }
 
-    /**
-     * Check that the separator is valid: no edge connects partA directly to partB.
-     * Uses generation-stamped subgraph membership (thread-safe).
-     */
-    private boolean isValidSeparator(int[][] result, int[][] adj) {
+    private boolean isValidSeparator(int[][] result, int gen) {
         int[] partA = result[0];
         int[] sep   = result[1];
         int[] partB = result[2];
         if (partA.length == 0 || partB.length == 0 || sep.length == 0) return false;
 
-        // Mark separator and partB with generation stamps
         int genSep = nextBoundaryGen();
         int genB   = nextBoundaryGen();
         int[] mark = scratchBoundary;
         for (int s : sep) mark[s] = genSep;
         for (int b : partB) mark[b] = genB;
 
-        // Check: no partA node has a partB neighbour (within subgraph)
+        final int[] data = adjData;
+        final int[] off  = adjOffset;
         for (int a : partA) {
-            for (int w : adj[a]) {
-                if (isInSubGraph(w) && mark[w] == genB) {
-                    return false; // direct A->B edge -> invalid separator
-                }
+            for (int ei = off[a], eiEnd = off[a + 1]; ei < eiEnd; ei++) {
+                int w = data[ei];
+                if (inSubGraphGen[w] == gen && mark[w] == genB) return false;
             }
         }
         return true;
@@ -690,20 +627,13 @@ public class InertialFlowCutter {
     // ========================= FM Refinement ==================================
 
     /**
-     * Fiduccia -- Mattheyses refinement: operate on the bipartition underlying
-     * the separator to minimise the edge cut, then re-extract the separator.
+     * Fiduccia-Mattheyses refinement on the bipartition underlying the separator.
+     * Uses per-thread scratch buffers to avoid per-call heap allocation.
      *
-     * <p>Uses a bucket linked-list indexed by gain value for O(1) max-gain
-     * lookup.  Each FM pass is O(n &times; avgDeg).
-     *
-     * @param result   current [partA, separator, partB]
-     * @param adj      symmetric adjacency lists
-     * @param subNodes all nodes in the sub-graph
-     * @param sepToA   if true, separator joins sideA; if false, separator joins sideB
-     * @return improved [partA, separator, partB], or the original if no improvement
+     * @param gen current subgraph generation stamp
      */
-    private int[][] fmRefineSeparator(int[][] result, int[][] adj, int[] subNodes,
-                                       boolean sepToA) {
+    private int[][] fmRefineSeparator(int[][] result, int[] subNodes,
+                                       boolean sepToA, int gen) {
         int[] partA = result[0];
         int[] sep   = result[1];
         int[] partB = result[2];
@@ -711,22 +641,17 @@ public class InertialFlowCutter {
         int totalN = partA.length + sep.length + partB.length;
         if (totalN < fmMinSize || sep.length <= 1) return result;
 
-        // Build allNodes array (partA, sep, partB)
-        int[] allNodes = new int[totalN];
-        int idx = 0;
+        int[] allNodes = ensureCapInt(TL_ALLNODES, totalN);
         System.arraycopy(partA, 0, allNodes, 0, partA.length);
         System.arraycopy(sep, 0, allNodes, partA.length, sep.length);
         System.arraycopy(partB, 0, allNodes, partA.length + sep.length, partB.length);
 
-        // Setup bipartition based on orientation
         int[] side = scratchSide;
         if (sepToA) {
-            // sideA = partA  U  sep, sideB = partB
             for (int v : partA) side[v] = 1;
             for (int v : sep) side[v] = 1;
             for (int v : partB) side[v] = 2;
         } else {
-            // sideA = partA, sideB = sep  U  partB
             for (int v : partA) side[v] = 1;
             for (int v : sep) side[v] = 2;
             for (int v : partB) side[v] = 2;
@@ -736,14 +661,16 @@ public class InertialFlowCutter {
         int sizeB = sepToA ? partB.length : (sep.length + partB.length);
         int minSize = Math.max(2, totalN / 4);
 
-        // Compute initial gains and find max subgraph degree
         int[] gain = fmGain;
+        final int[] data = adjData;
+        final int[] off  = adjOffset;
         int maxDeg = 0;
         for (int i = 0; i < totalN; i++) {
             int v = allNodes[i];
             int ext = 0, internal = 0;
-            for (int w : adj[v]) {
-                if (!isInSubGraph(w)) continue;
+            for (int ei = off[v], eiEnd = off[v + 1]; ei < eiEnd; ei++) {
+                int w = data[ei];
+                if (inSubGraphGen[w] != gen) continue;
                 if (side[w] != side[v]) ext++;
                 else internal++;
             }
@@ -754,26 +681,24 @@ public class InertialFlowCutter {
 
         if (maxDeg == 0) return result;
 
-        // Bucket linked-list: gain g -> bucket index (g + maxDeg)
         int bucketOffset = maxDeg;
         int numBuckets = 2 * maxDeg + 1;
         int[] bucketHead = new int[numBuckets];
         int[] fmN = fmNext;
         int[] fmP = fmPrev;
 
-        // FM passes
         boolean improved = true;
         for (int pass = 0; pass < fmMaxPasses && improved; pass++) {
             improved = false;
 
-            // Recompute gains at start of each pass
             if (pass > 0) {
                 maxDeg = 0;
                 for (int i = 0; i < totalN; i++) {
                     int v = allNodes[i];
                     int ext = 0, internal = 0;
-                    for (int w : adj[v]) {
-                        if (!isInSubGraph(w)) continue;
+                    for (int ei = off[v], eiEnd = off[v + 1]; ei < eiEnd; ei++) {
+                        int w = data[ei];
+                        if (inSubGraphGen[w] != gen) continue;
                         if (side[w] != side[v]) ext++;
                         else internal++;
                     }
@@ -789,7 +714,6 @@ public class InertialFlowCutter {
                 }
             }
 
-            // Initialize buckets
             Arrays.fill(bucketHead, 0, numBuckets, -1);
             for (int i = 0; i < totalN; i++) {
                 int v = allNodes[i];
@@ -797,7 +721,6 @@ public class InertialFlowCutter {
                 fmP[v] = -1;
             }
 
-            // Insert all nodes into buckets
             for (int i = 0; i < totalN; i++) {
                 int v = allNodes[i];
                 int b = gain[v] + bucketOffset;
@@ -806,21 +729,18 @@ public class InertialFlowCutter {
                 fmBucketInsert(v, b, bucketHead, fmN, fmP);
             }
 
-            // Lock via generation stamp
             int lockGen = nextBoundaryGen();
             int[] locked = scratchBoundary;
 
-            // Track moves for rollback
-            int[] moveNode = new int[totalN];
-            int[] moveFrom = new int[totalN];
+            int[] moveNode = ensureCapInt(TL_MOVENODE, totalN);
+            int[] moveFrom = ensureCapInt(TL_MOVEFROM, totalN);
             int bestCumGain = 0;
             int bestStep = -1;
             int cumGain = 0;
             int step = 0;
-            int topBucket = numBuckets - 1;  // highest non-empty bucket hint
+            int topBucket = numBuckets - 1;
 
             while (step < totalN) {
-                // Find max-gain unlocked node (scan from top bucket down)
                 int bestNode = -1;
                 while (topBucket >= 0 && bucketHead[topBucket] == -1) topBucket--;
                 if (topBucket < 0) break;
@@ -844,15 +764,12 @@ public class InertialFlowCutter {
                 if (bestNode < 0) break;
 
                 int nodeGain = gain[bestNode];
-
-                // Lock and remove from bucket
                 locked[bestNode] = lockGen;
                 int b = nodeGain + bucketOffset;
                 if (b < 0) b = 0;
                 if (b >= numBuckets) b = numBuckets - 1;
                 fmBucketRemove(bestNode, b, bucketHead, fmN, fmP);
 
-                // Move node
                 int fromSide = side[bestNode];
                 int toSide = (fromSide == 1) ? 2 : 1;
                 side[bestNode] = toSide;
@@ -868,17 +785,15 @@ public class InertialFlowCutter {
                     bestStep = step;
                 }
 
-                // Update neighbours' gains
-                for (int w : adj[bestNode]) {
-                    if (!isInSubGraph(w) || locked[w] == lockGen) continue;
+                for (int ei = off[bestNode], eiEnd = off[bestNode + 1]; ei < eiEnd; ei++) {
+                    int w = data[ei];
+                    if (inSubGraphGen[w] != gen || locked[w] == lockGen) continue;
 
                     int oldGain = gain[w];
                     int oldB = oldGain + bucketOffset;
                     if (oldB < 0) oldB = 0;
                     if (oldB >= numBuckets) oldB = numBuckets - 1;
 
-                    // w on fromSide -> lost internal, gained external -> gain += 2
-                    // w on toSide   -> lost external, gained internal -> gain -= 2
                     if (side[w] == fromSide) gain[w] += 2;
                     else gain[w] -= 2;
 
@@ -896,7 +811,6 @@ public class InertialFlowCutter {
                 step++;
             }
 
-            // Roll back to best position
             if (bestCumGain > 0) {
                 improved = true;
                 for (int s = step - 1; s > bestStep; s--) {
@@ -906,7 +820,6 @@ public class InertialFlowCutter {
                     else { sizeA--; sizeB++; }
                 }
             } else {
-                // Roll back all moves
                 for (int s = step - 1; s >= 0; s--) {
                     int v = moveNode[s];
                     side[v] = moveFrom[s];
@@ -916,12 +829,9 @@ public class InertialFlowCutter {
             }
         }
 
-        // Extract separator from the improved bipartition.
-        int[][] extracted = extractSeparatorFromBipartition(allNodes, totalN, adj, side);
+        int[][] extracted = extractSeparatorFromBipartition(allNodes, totalN, side, gen);
 
-        // If bipartition extraction produced an invalid separator, try max-flow
-        // on the FM-improved bipartition to get a guaranteed-valid result.
-        if (!isValidSeparator(extracted, adj) && totalN >= maxflowMinSize) {
+        if (!isValidSeparator(extracted, gen) && totalN >= maxflowMinSize) {
             int countA = 0, countB = 0;
             for (int i = 0; i < totalN; i++) {
                 if (side[allNodes[i]] == 1) countA++;
@@ -935,8 +845,8 @@ public class InertialFlowCutter {
                     if (side[allNodes[i]] == 1) sA[ai++] = allNodes[i];
                     else sB[bi++] = allNodes[i];
                 }
-                int[][] mfResult = maxFlowRefineBipartition(sA, sB, adj);
-                if (mfResult != null && isValidSeparator(mfResult, adj)) {
+                int[][] mfResult = maxFlowRefineBipartition(sA, sB);
+                if (mfResult != null && isValidSeparator(mfResult, gen)) {
                     return mfResult;
                 }
             }
@@ -945,7 +855,6 @@ public class InertialFlowCutter {
         return extracted;
     }
 
-    /** Insert node v at head of bucket b. */
     private void fmBucketInsert(int v, int b, int[] bucketHead, int[] next, int[] prev) {
         prev[v] = -1;
         next[v] = bucketHead[b];
@@ -953,7 +862,6 @@ public class InertialFlowCutter {
         bucketHead[b] = v;
     }
 
-    /** Remove node v from bucket b. */
     private void fmBucketRemove(int v, int b, int[] bucketHead, int[] next, int[] prev) {
         if (prev[v] >= 0) next[prev[v]] = next[v];
         else bucketHead[b] = next[v];
@@ -962,22 +870,21 @@ public class InertialFlowCutter {
         prev[v] = -1;
     }
 
-    /**
-     * Extract a one-sided vertex separator from a bipartition (side 1 / side 2).
-     * Tries both sides as separator source, picks the better after thinning.
-     */
     private int[][] extractSeparatorFromBipartition(int[] allNodes, int totalN,
-                                                     int[][] adj, int[] side) {
-        // Find boundary nodes on each side
+                                                     int[] side, int gen) {
         int genB = nextBoundaryGen();
         int[] boundaryMark = scratchBoundary;
         int boundaryACount = 0, boundaryBCount = 0;
 
+        final int[] data = adjData;
+        final int[] off  = adjOffset;
+
         for (int i = 0; i < totalN; i++) {
             int node = allNodes[i];
             int mySide = side[node];
-            for (int w : adj[node]) {
-                if (!isInSubGraph(w)) continue;
+            for (int ei = off[node], eiEnd = off[node + 1]; ei < eiEnd; ei++) {
+                int w = data[ei];
+                if (inSubGraphGen[w] != gen) continue;
                 if (side[w] != 0 && side[w] != mySide) {
                     if (boundaryMark[node] != genB) {
                         boundaryMark[node] = genB;
@@ -990,7 +897,6 @@ public class InertialFlowCutter {
         }
 
         if (boundaryACount == 0 && boundaryBCount == 0) {
-            // No boundary  --  return trivial split
             int half = totalN / 2;
             int[] pA = Arrays.copyOfRange(allNodes, 0, half);
             int[] sepArr = new int[]{allNodes[half]};
@@ -1033,11 +939,11 @@ public class InertialFlowCutter {
 
             int[][] candidate = new int[][]{pA, sep, pB};
             if (sep.length > 1) {
-                candidate = thinSeparator(candidate, adj);
+                candidate = thinSeparator(candidate);
             }
 
             int thinnedBalance = Math.abs(candidate[0].length - candidate[2].length);
-            long thinnedScore = scoreSeparator(candidate[1], thinnedBalance, adj);
+            long thinnedScore = scoreSeparator(candidate[1], thinnedBalance, gen);
 
             if (thinnedScore < bestSideScore) {
                 bestSideScore = thinnedScore;
@@ -1055,14 +961,12 @@ public class InertialFlowCutter {
 
     /**
      * Find the minimum vertex separator using Dinic's algorithm on a node-split
-     * flow network with a <b>wide cuttable region</b>.
+     * flow network with a wide cuttable region.
+     * Uses pre-allocated {@code bfsDist} and {@code toCompact} member arrays.
      *
-     * <p>Allows cutting any node within the given BFS depth from the separator.
-     *
-     * @param depth BFS depth for cuttable region
-     * @return improved [partA, separator, partB], or null if no improvement
+     * @param gen current subgraph generation stamp
      */
-    private int[][] maxFlowRefineWideDepth(int[][] result, int[][] adj, int depth) {
+    private int[][] maxFlowRefineWideDepth(int[][] result, int depth, int gen) {
         int[] partA = result[0];
         int[] sep   = result[1];
         int[] partB = result[2];
@@ -1070,106 +974,83 @@ public class InertialFlowCutter {
         int totalN = partA.length + sep.length + partB.length;
         if (totalN < maxflowMinSize || sep.length <= 1) return null;
 
-        // --- Mark which nodes are "cuttable" (capacity 1) ---
-        // Start from separator nodes, BFS outward maxflowBorderDepth hops
         int genCuttable = nextBoundaryGen();
         int[] cuttableMark = scratchBoundary;
         for (int s : sep) cuttableMark[s] = genCuttable;
 
-        // BFS to expand cuttable region
+        final int[] data = adjData;
+        final int[] off  = adjOffset;
+        int[] dist = bfsDist;
+
         int[] bfsQueue = new int[totalN];
-        int[] bfsDist = new int[graph.nodeCount]; // distance from sep
         int qHead = 0, qTail = 0;
         for (int s : sep) {
             bfsQueue[qTail++] = s;
-            bfsDist[s] = 1; // mark as visited (1-indexed distance)
+            dist[s] = 1;
         }
         while (qHead < qTail) {
             int u = bfsQueue[qHead++];
-            int d = bfsDist[u];
+            int d = dist[u];
             if (d > depth) continue;
-            for (int w : adj[u]) {
-                if (!isInSubGraph(w) || bfsDist[w] != 0) continue;
-                bfsDist[w] = d + 1;
+            for (int ei = off[u], eiEnd = off[u + 1]; ei < eiEnd; ei++) {
+                int w = data[ei];
+                if (inSubGraphGen[w] != gen || dist[w] != 0) continue;
+                dist[w] = d + 1;
                 cuttableMark[w] = genCuttable;
                 if (qTail < bfsQueue.length) bfsQueue[qTail++] = w;
             }
         }
-        // Cleanup bfsDist
-        for (int i = 0; i < qTail; i++) bfsDist[bfsQueue[i]] = 0;
-        for (int s : sep) bfsDist[s] = 0;
+        for (int i = 0; i < qTail; i++) dist[bfsQueue[i]] = 0;
 
-        // --- Compact mapping: global node ID -> compact 0..totalN-1 ---
         int[] nodeId = new int[totalN];
-        int[] toCompact = new int[graph.nodeCount];
+        int[] compactMap = toCompact;
         int ci = 0;
-        for (int v : partA) { nodeId[ci] = v; toCompact[v] = ci + 1; ci++; }
-        for (int v : sep)   { nodeId[ci] = v; toCompact[v] = ci + 1; ci++; }
-        for (int v : partB) { nodeId[ci] = v; toCompact[v] = ci + 1; ci++; }
+        for (int v : partA) { nodeId[ci] = v; compactMap[v] = ci + 1; ci++; }
+        for (int v : sep)   { nodeId[ci] = v; compactMap[v] = ci + 1; ci++; }
+        for (int v : partB) { nodeId[ci] = v; compactMap[v] = ci + 1; ci++; }
 
         int aLen = partA.length;
         int sLen = sep.length;
 
-        // --- Build node-split flow network ---
-        // Flow nodes: v_in=2*i, v_out=2*i+1, superS=2*totalN, superT=2*totalN+1
         int fN = 2 * totalN + 2;
         int superS = fN - 2;
         int superT = fN - 1;
-
-        // Estimate edge count: internal(totalN) + original(~3*totalN) + source/sink(totalN)
-        // Each edge creates 2 entries (forward + reverse), multiply by 2 for safety
         int maxEdges = (totalN + 6 * totalN + totalN) * 2;
         int[] eTo = new int[maxEdges];
         int[] eCap = new int[maxEdges];
         int[] eCount = {0};
-
-        // Per-node adjacency
         int[][] fAdj = new int[fN][];
         int[] fAdjLen = new int[fN];
+        int infCap = totalN + 1;
 
-        int infCap = totalN + 1; // effectively infinite
-
-        // Internal node-split edges: v_in -> v_out
-        // Cuttable nodes (in the border region) get capacity 1
-        // Non-cuttable nodes (deep in partA or partB) get infinite capacity
         for (int i = 0; i < totalN; i++) {
-            int globalId = nodeId[i];
-            int cap = (cuttableMark[globalId] == genCuttable) ? 1 : infCap;
+            int cap = (cuttableMark[nodeId[i]] == genCuttable) ? 1 : infCap;
             flowAddEdge(2 * i, 2 * i + 1, cap, eTo, eCap, eCount, fAdj, fAdjLen);
         }
 
-        // Original undirected edges: for each u->v, add u_out->v_in and v_out->u_in
         for (int i = 0; i < totalN; i++) {
             int v = nodeId[i];
-            for (int w : adj[v]) {
-                int j = toCompact[w] - 1;
-                if (j < 0 || j <= i) continue; // not in subgraph, or deduplicate
+            for (int ei = off[v], eiEnd = off[v + 1]; ei < eiEnd; ei++) {
+                int j = compactMap[data[ei]] - 1;
+                if (j < 0 || j <= i) continue;
                 flowAddEdge(2 * i + 1, 2 * j, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
                 flowAddEdge(2 * j + 1, 2 * i, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
             }
         }
 
-        // Source edges: superS -> v_in for all non-cuttable A nodes (deep A)
+        boolean hasSource = false;
         for (int i = 0; i < aLen; i++) {
             if (cuttableMark[nodeId[i]] != genCuttable) {
                 flowAddEdge(superS, 2 * i, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
+                hasSource = true;
             }
         }
-
-        // Sink edges: v_out -> superT for all non-cuttable B nodes (deep B)
+        boolean hasSink = false;
         for (int i = aLen + sLen; i < totalN; i++) {
             if (cuttableMark[nodeId[i]] != genCuttable) {
                 flowAddEdge(2 * i + 1, superT, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
+                hasSink = true;
             }
-        }
-
-        // If no source or no sink connected, fall back: connect all A/B
-        boolean hasSource = false, hasSink = false;
-        for (int i = 0; i < aLen; i++) {
-            if (cuttableMark[nodeId[i]] != genCuttable) { hasSource = true; break; }
-        }
-        for (int i = aLen + sLen; i < totalN; i++) {
-            if (cuttableMark[nodeId[i]] != genCuttable) { hasSink = true; break; }
         }
         if (!hasSource) {
             for (int i = 0; i < aLen; i++)
@@ -1180,18 +1061,15 @@ public class InertialFlowCutter {
                 flowAddEdge(2 * i + 1, superT, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
         }
 
-        // --- Dinic's algorithm ---
         int[] level = new int[fN];
         int[] iter = new int[fN];
         int[] queue = new int[fN];
 
         while (true) {
-            // BFS to build level graph
             Arrays.fill(level, -1);
             level[superS] = 0;
             int bfsH = 0, bfsT = 0;
             queue[bfsT++] = superS;
-
             while (bfsH < bfsT) {
                 int u = queue[bfsH++];
                 int len = fAdjLen[u];
@@ -1205,17 +1083,11 @@ public class InertialFlowCutter {
                     }
                 }
             }
-
-            if (level[superT] < 0) break; // no augmenting path
-
-            // DFS to find blocking flows
+            if (level[superT] < 0) break;
             Arrays.fill(iter, 0);
-            while (dinicDFS(superS, superT, infCap, level, iter, eTo, eCap, fAdj, fAdjLen) > 0) {
-                // continue pushing
-            }
+            while (dinicDFS(superS, superT, infCap, level, iter, eTo, eCap, fAdj, fAdjLen) > 0) {}
         }
 
-        // --- Extract min-cut: reachable from source in residual graph ---
         boolean[] reachable = new boolean[fN];
         reachable[superS] = true;
         {
@@ -1236,54 +1108,32 @@ public class InertialFlowCutter {
             }
         }
 
-        // Min-cut: nodes where v_in is reachable but v_out is not
-        int newSepCount = 0;
-        int newACount = 0, newBCount = 0;
+        for (int i = 0; i < totalN; i++) compactMap[nodeId[i]] = 0;
+
+        int newSepCount = 0, newACount = 0, newBCount = 0;
         for (int i = 0; i < totalN; i++) {
-            if (reachable[2 * i] && !reachable[2 * i + 1]) {
-                newSepCount++;
-            } else if (reachable[2 * i]) {
-                newACount++;
-            } else {
-                newBCount++;
-            }
+            if (reachable[2 * i] && !reachable[2 * i + 1]) newSepCount++;
+            else if (reachable[2 * i]) newACount++;
+            else newBCount++;
         }
 
-        // Cleanup compact mapping
-        for (int i = 0; i < totalN; i++) toCompact[nodeId[i]] = 0;
+        if (newSepCount == 0 || newACount == 0 || newBCount == 0) return null;
 
-        // Validate: must have non-empty partitions
-        if (newSepCount == 0 || newACount == 0 || newBCount == 0) {
-            return null;
-        }
-
-        // Build result arrays
         int[] newSep = new int[newSepCount];
         int[] newA = new int[newACount];
         int[] newB = new int[newBCount];
         int ai = 0, si = 0, bi = 0;
         for (int i = 0; i < totalN; i++) {
-            if (reachable[2 * i] && !reachable[2 * i + 1]) {
-                newSep[si++] = nodeId[i];
-            } else if (reachable[2 * i]) {
-                newA[ai++] = nodeId[i];
-            } else {
-                newB[bi++] = nodeId[i];
-            }
+            if (reachable[2 * i] && !reachable[2 * i + 1]) newSep[si++] = nodeId[i];
+            else if (reachable[2 * i]) newA[ai++] = nodeId[i];
+            else newB[bi++] = nodeId[i];
         }
 
         int[][] mfResult = new int[][]{newA, newSep, newB};
-        if (newSep.length > 1) {
-            mfResult = thinSeparator(mfResult, adj);
-        }
+        if (newSep.length > 1) mfResult = thinSeparator(mfResult);
         return mfResult;
     }
 
-    /**
-     * Add a directed edge from -> to with given capacity, plus a reverse edge
-     * (capacity 0) for the residual graph.  Edges are stored in pairs so that
-     * the reverse of edge e is at index e^1.
-     */
     private static void flowAddEdge(int from, int to, int cap,
                                      int[] eTo, int[] eCap, int[] eCount,
                                      int[][] fAdj, int[] fAdjLen) {
@@ -1306,7 +1156,6 @@ public class InertialFlowCutter {
         fAdjLen[node] = len + 1;
     }
 
-    /** Dinic's DFS: find a blocking flow along shortest augmenting paths. */
     private static int dinicDFS(int u, int sink, int pushed,
                                  int[] level, int[] iter,
                                  int[] eTo, int[] eCap,
@@ -1330,22 +1179,20 @@ public class InertialFlowCutter {
     }
 
     /**
-     * Find minimum vertex separator between sideA and sideB (pure bipartition,
-     * no initial separator) using Dinic's max-flow.  All non-source/sink nodes
-     * have capacity 1 in the node-split network.
+     * Find minimum vertex separator between sideA and sideB using Dinic's max-flow.
+     * Uses pre-allocated {@code toCompact} member array.
      */
-    private int[][] maxFlowRefineBipartition(int[] sideA, int[] sideB, int[][] adj) {
+    private int[][] maxFlowRefineBipartition(int[] sideA, int[] sideB) {
         int totalN = sideA.length + sideB.length;
         if (totalN < 10) return null;
 
         int[] nodeId = new int[totalN];
-        int[] toCompact = new int[graph.nodeCount];
+        int[] compactMap = toCompact;
         int ci = 0;
-        for (int v : sideA) { nodeId[ci] = v; toCompact[v] = ci + 1; ci++; }
-        for (int v : sideB) { nodeId[ci] = v; toCompact[v] = ci + 1; ci++; }
+        for (int v : sideA) { nodeId[ci] = v; compactMap[v] = ci + 1; ci++; }
+        for (int v : sideB) { nodeId[ci] = v; compactMap[v] = ci + 1; ci++; }
 
         int aLen = sideA.length;
-
         int fN = 2 * totalN + 2;
         int superS = fN - 2;
         int superT = fN - 1;
@@ -1358,37 +1205,32 @@ public class InertialFlowCutter {
         int[][] fAdj = new int[fN][];
         int[] fAdjLen = new int[fN];
 
-        // Internal node-split: all nodes have capacity 1
-        // (any can be part of the separator)
+        final int[] data = adjData;
+        final int[] off  = adjOffset;
+
         for (int i = 0; i < totalN; i++) {
             flowAddEdge(2 * i, 2 * i + 1, 1, eTo, eCap, eCount, fAdj, fAdjLen);
         }
 
-        // Original edges
         for (int i = 0; i < totalN; i++) {
             int v = nodeId[i];
-            for (int w : adj[v]) {
-                int j = toCompact[w] - 1;
+            for (int ei = off[v], eiEnd = off[v + 1]; ei < eiEnd; ei++) {
+                int j = compactMap[data[ei]] - 1;
                 if (j < 0 || j <= i) continue;
                 flowAddEdge(2 * i + 1, 2 * j, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
                 flowAddEdge(2 * j + 1, 2 * i, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
             }
         }
 
-        // Source -> A nodes (extra capacity to avoid cutting source nodes)
         for (int i = 0; i < aLen; i++) {
             flowAddEdge(superS, 2 * i, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
-            // Also boost A node internal capacity so they can't be cut
-            eCap[i * 2] = infCap; // the v_in->v_out edge for node i
+            eCap[i * 2] = infCap;
         }
-
-        // B nodes -> sink (extra capacity)
         for (int i = aLen; i < totalN; i++) {
             flowAddEdge(2 * i + 1, superT, infCap, eTo, eCap, eCount, fAdj, fAdjLen);
-            eCap[i * 2] = infCap; // boost B node internal capacity
+            eCap[i * 2] = infCap;
         }
 
-        // Run Dinic's
         int[] level = new int[fN];
         int[] iter = new int[fN];
         int[] queue = new int[fN];
@@ -1416,7 +1258,6 @@ public class InertialFlowCutter {
             while (dinicDFS(superS, superT, infCap, level, iter, eTo, eCap, fAdj, fAdjLen) > 0) {}
         }
 
-        // Extract min-cut
         boolean[] reachable = new boolean[fN];
         reachable[superS] = true;
         int qHead = 0, qTail = 0;
@@ -1442,7 +1283,7 @@ public class InertialFlowCutter {
             else newBCount++;
         }
 
-        for (int i = 0; i < totalN; i++) toCompact[nodeId[i]] = 0;
+        for (int i = 0; i < totalN; i++) compactMap[nodeId[i]] = 0;
 
         if (newSepCount == 0 || newACount == 0 || newBCount == 0) return null;
 
@@ -1457,44 +1298,36 @@ public class InertialFlowCutter {
         }
 
         int[][] mfResult = new int[][]{newA, newSep, newB};
-        if (newSep.length > 1) mfResult = thinSeparator(mfResult, adj);
+        if (newSep.length > 1) mfResult = thinSeparator(mfResult);
         return mfResult;
     }
 
     /**
      * Split ratios to try for each projection direction.
-     * On irregular road networks, the optimal cut is often NOT at the geometric
-     * median.  Trying multiple split points finds "natural boundaries" (highways,
-     * rivers, etc.) with far fewer boundary edges, dramatically reducing separator
-     * size and thus shortcut count.
      */
     private static final double[] SPLIT_RATIOS = {
         0.25, 0.28, 0.30, 0.33, 0.36, 0.38, 0.40, 0.42, 0.44, 0.46, 0.48,
         0.50, 0.52, 0.54, 0.56, 0.58, 0.60, 0.62, 0.64, 0.67, 0.70, 0.72, 0.75
     };
 
-    /** Reduced split ratios for small subgraphs where precision matters less. */
     private static final double[] REDUCED_SPLIT_RATIOS = {
         0.30, 0.37, 0.43, 0.50, 0.57, 0.63, 0.70
     };
 
     /**
-     * Try a single projection direction with <b>multiple split ratios</b>,
-     * returning the best one-sided vertex separator found.
+     * Try a single projection direction with multiple split ratios.
+     * Uses per-thread scratch buffers to avoid per-call allocation.
      *
-     * <p>For each split ratio, the sorted projection is divided and a one-sided
-     * vertex separator is extracted from the smaller boundary side.
-     * The split with the best (lowest) score is returned.
-     *
-     * <p>Uses adaptive split ratios: fewer ratios for small subgraphs to reduce
-     * overhead at deep recursion levels.
+     * <p>Thinning is deferred: {@link #trySplitAt} returns unthinned separators,
+     * and only the final best result per direction is thinned before returning.
+     * This avoids hundreds of redundant {@link #thinSeparator} calls during
+     * ratio scanning.
      */
-    private int[][] tryDirection(int[] subNodes, int[][] adj, double dx, double dy) {
+    private int[][] tryDirection(int[] subNodes, double dx, double dy) {
         int n = subNodes.length;
         if (n < 3) return null;
 
-        // Project onto direction (once per direction, reused for all split ratios)
-        double[] projections = new double[n];
+        double[] projections = ensureCapDbl(TL_PROJ, n);
         for (int i = 0; i < n; i++) {
             projections[i] = nodeX[subNodes[i]] * dx + nodeY[subNodes[i]] * dy;
         }
@@ -1503,13 +1336,11 @@ public class InertialFlowCutter {
         int[][] bestResult = null;
         long bestScore = Long.MAX_VALUE;
 
-        // Adaptive ratio selection: fewer ratios for small subgraphs
         double[] ratios = (n < reducedRatiosThreshold) ? REDUCED_SPLIT_RATIOS : SPLIT_RATIOS;
 
-        // Try each split ratio
         for (double ratio : ratios) {
             int splitAt = Math.max(1, Math.min(n - 1, (int) (n * ratio)));
-            int[][] result = trySplitAt(subNodes, adj, sortedIdx, n, splitAt);
+            int[][] result = trySplitAt(subNodes, sortedIdx, n, splitAt);
             if (result != null) {
                 int balance = Math.abs(result[0].length - result[2].length);
                 long score = scoreSimple(result[1], balance);
@@ -1520,53 +1351,60 @@ public class InertialFlowCutter {
             }
         }
 
+        // Thin only the final best separator (deferred from trySplitAt)
+        if (bestResult != null && bestResult[1].length > 1) {
+            bestResult = thinSeparator(bestResult);
+        }
         return bestResult;
     }
 
     /**
-     * Try splitting the sorted projection at a specific index, extracting a
-     * one-sided vertex separator from the smaller boundary side.
+     * Try splitting the sorted projection at a specific index.
      *
-     * <p>Uses generation-stamped subgraph membership (thread-safe).
+     * <p>Uses generation-stamped side values to merge the subgraph-membership
+     * check and side comparison into a single array read, eliminating the
+     * {@code inSubGraphGen} access from the hot inner loop.  Each call obtains
+     * two fresh unique values ({@code sideAVal}, {@code sideBVal}) via
+     * {@link #nextBoundaryGen()}, so stale values from earlier calls or
+     * concurrent ForkJoin tasks on disjoint node sets are never equal to the
+     * current values.
      *
-     * @param subNodes  nodes in the sub-graph
-     * @param adj       symmetric adjacency lists
-     * @param sortedIdx projection-sorted indices into subNodes
-     * @param n         number of nodes
-     * @param splitAt   number of nodes on side A
-     * @return [partA, separator, partB] or null if the split is degenerate
+     * <p>Partition counts are derived arithmetically from the boundary counts
+     * and {@code splitAt}, avoiding two extra O(n) counting loops.
+     *
+     * <p>Does <b>not</b> thin the separator; thinning is deferred to
+     * {@link #tryDirection} for the final best result only, avoiding hundreds
+     * of redundant {@link #thinSeparator} calls during ratio scanning.
      */
-    private int[][] trySplitAt(int[] subNodes, int[][] adj, int[] sortedIdx,
+    private int[][] trySplitAt(int[] subNodes, int[] sortedIdx,
                                 int n, int splitAt) {
         int[] side = scratchSide;
 
-        // Reset only the nodes we're using (avoid full Arrays.fill)
-        for (int i = 0; i < n; i++) side[subNodes[sortedIdx[i]]] = 0;
+        // Gen-stamped side values: unique per call, so stale values from
+        // earlier calls (or concurrent ForkJoin tasks on disjoint nodes)
+        // are never equal to the current values.
+        int sideAVal = nextBoundaryGen();
+        int sideBVal = nextBoundaryGen();
 
-        for (int i = 0; i < splitAt; i++) {
-            side[subNodes[sortedIdx[i]]] = 1; // side A
-        }
-        for (int i = splitAt; i < n; i++) {
-            side[subNodes[sortedIdx[i]]] = 2; // side B
-        }
+        for (int i = 0; i < splitAt; i++) side[subNodes[sortedIdx[i]]] = sideAVal;
+        for (int i = splitAt; i < n; i++) side[subNodes[sortedIdx[i]]] = sideBVal;
 
-        // Count boundary nodes on each side separately.
-        // Use local arrays to avoid allocating boolean[] per call.
+        final int[] data = adjData;
+        final int[] off  = adjOffset;
+
         int boundaryACount = 0, boundaryBCount = 0;
-        // We need to track which nodes are boundary. Reuse a generation-stamped approach
-        // to avoid allocating boolean arrays.
         int[] boundaryMark = scratchBoundary;
-        int gen = nextBoundaryGen();
+        int bgen = nextBoundaryGen();
 
         for (int idx = 0; idx < n; idx++) {
             int node = subNodes[idx];
             int mySide = side[node];
-            for (int w : adj[node]) {
-                if (!isInSubGraph(w)) continue;
-                if (side[w] != 0 && side[w] != mySide) {
-                    if (boundaryMark[node] != gen) {
-                        boundaryMark[node] = gen;
-                        if (mySide == 1) boundaryACount++;
+            int otherSide = (mySide == sideAVal) ? sideBVal : sideAVal;
+            for (int ei = off[node], eiEnd = off[node + 1]; ei < eiEnd; ei++) {
+                if (side[data[ei]] == otherSide) {
+                    if (boundaryMark[node] != bgen) {
+                        boundaryMark[node] = bgen;
+                        if (mySide == sideAVal) boundaryACount++;
                         else boundaryBCount++;
                     }
                     break;
@@ -1576,74 +1414,66 @@ public class InertialFlowCutter {
 
         if (boundaryACount == 0 && boundaryBCount == 0) return null;
 
-        // Try BOTH sides as separator and return the better one after thinning.
-        int[][] bestSideResult = null;
-        long bestSideScore = Long.MAX_VALUE;
+        // Pick the better separator side using precomputed counts (no extra loop).
+        // sepSide A: sep = boundary-A nodes, pA = non-boundary A, pB = all B
+        // sepSide B: sep = boundary-B nodes, pA = all A,          pB = non-boundary B
+        int pACountA = splitAt - boundaryACount;
+        int pBCountA = n - splitAt;
+        long scoreA = (boundaryACount > 0 && boundaryACount < n - 1
+                       && pACountA > 0 && pBCountA > 0)
+                      ? boundaryACount * 256L + Math.abs(pACountA - pBCountA)
+                      : Long.MAX_VALUE;
 
-        for (int sepSide : new int[]{1, 2}) {
-            int sepCount = (sepSide == 1) ? boundaryACount : boundaryBCount;
-            if (sepCount == 0 || sepCount >= n - 1) continue;
+        int pACountB = splitAt;
+        int pBCountB = n - splitAt - boundaryBCount;
+        long scoreB = (boundaryBCount > 0 && boundaryBCount < n - 1
+                       && pACountB > 0 && pBCountB > 0)
+                      ? boundaryBCount * 256L + Math.abs(pACountB - pBCountB)
+                      : Long.MAX_VALUE;
 
-            int countA = 0, countB = 0;
-            for (int idx = 0; idx < n; idx++) {
-                int node = subNodes[idx];
-                boolean isSep = (boundaryMark[node] == gen && side[node] == sepSide);
-                if (isSep) continue;
-                if (side[node] == 1) countA++;
-                else countB++;
-            }
-            if (countA == 0 || countB == 0) continue;
+        if (scoreA == Long.MAX_VALUE && scoreB == Long.MAX_VALUE) return null;
 
-            int[] pA = new int[countA];
-            int[] sep = new int[sepCount];
-            int[] pB = new int[countB];
-            int ia2 = 0, is2 = 0, ib2 = 0;
-            for (int idx = 0; idx < n; idx++) {
-                int node = subNodes[idx];
-                boolean isSep = (boundaryMark[node] == gen && side[node] == sepSide);
-                if (isSep) {
-                    sep[is2++] = node;
-                } else if (side[node] == 1) {
-                    pA[ia2++] = node;
-                } else {
-                    pB[ib2++] = node;
-                }
-            }
+        int sepSideVal;
+        int sepCount, countA, countB;
+        if (scoreA <= scoreB) {
+            sepSideVal = sideAVal;
+            sepCount = boundaryACount;  countA = pACountA;  countB = pBCountA;
+        } else {
+            sepSideVal = sideBVal;
+            sepCount = boundaryBCount;  countA = pACountB;  countB = pBCountB;
+        }
 
-            // Apply thinning
-            int[][] candidate = new int[][]{pA, sep, pB};
-            if (sep.length > 1) {
-                candidate = thinSeparator(candidate, adj);
-            }
-
-            int thinnedSepSize = candidate[1].length;
-            int thinnedBalance = Math.abs(candidate[0].length - candidate[2].length);
-            long thinnedScore = thinnedSepSize * 256L + thinnedBalance;
-
-            if (thinnedScore < bestSideScore) {
-                bestSideScore = thinnedScore;
-                bestSideResult = candidate;
+        // Build partition arrays in a single pass
+        int[] pA  = new int[countA];
+        int[] sep = new int[sepCount];
+        int[] pB  = new int[countB];
+        int ia = 0, is = 0, ib = 0;
+        for (int idx = 0; idx < n; idx++) {
+            int node = subNodes[idx];
+            if (boundaryMark[node] == bgen && side[node] == sepSideVal) {
+                sep[is++] = node;
+            } else if (side[node] == sideAVal) {
+                pA[ia++] = node;
+            } else {
+                pB[ib++] = node;
             }
         }
 
-        return bestSideResult;
+        return new int[][]{pA, sep, pB};
     }
 
     /**
-     * Greedy separator thinning with iterative passes.
-     *
-     * <p>A separator node s can be safely removed (moved to P2) if NONE of its
-     * neighbors are in P1  --  it does not block any P1->P2 path.
-     *
-     * <p>Runs multiple passes: after removing some separator nodes, their former
-     * separator neighbors may become removable too.  Iterates until fixpoint.
+     * Greedy separator thinning: removes separator nodes not adjacent to partA.
      */
-    private int[][] thinSeparator(int[][] result, int[][] adj) {
+    private int[][] thinSeparator(int[][] result) {
         int[] partA = result[0];
         int[] separator = result[1];
         int[] partB = result[2];
 
         if (separator.length <= 1) return result;
+
+        final int[] data = adjData;
+        final int[] off  = adjOffset;
 
         boolean changed = true;
         while (changed && separator.length > 1) {
@@ -1651,7 +1481,6 @@ public class InertialFlowCutter {
 
             int genP1 = nextBoundaryGen();
             int[] mark = scratchBoundary;
-
             for (int n : partA) mark[n] = genP1;
 
             boolean[] removable = new boolean[separator.length];
@@ -1660,8 +1489,8 @@ public class InertialFlowCutter {
             for (int i = 0; i < separator.length; i++) {
                 int s = separator[i];
                 boolean hasP1Neighbor = false;
-                for (int w : adj[s]) {
-                    if (mark[w] == genP1) {
+                for (int ei = off[s], eiEnd = off[s + 1]; ei < eiEnd; ei++) {
+                    if (mark[data[ei]] == genP1) {
                         hasP1Neighbor = true;
                         break;
                     }
@@ -1673,9 +1502,8 @@ public class InertialFlowCutter {
             }
 
             if (removeCount == 0) break;
-            if (removeCount == separator.length) break; // keep all  --  degenerate
+            if (removeCount == separator.length) break;
 
-            // Rebuild: removed separator nodes go to P2
             int[] newSep = new int[separator.length - removeCount];
             int[] newPartB = new int[partB.length + removeCount];
             System.arraycopy(partB, 0, newPartB, 0, partB.length);
@@ -1698,19 +1526,18 @@ public class InertialFlowCutter {
 
     /**
      * Sort indices [0..n) by the corresponding projection values.
-     * Uses a merge-sort on primitive int[] to avoid boxing overhead.
+     * Uses per-thread scratch buffers ({@link #TL_SORT_IDX}, {@link #TL_SORT_TMP}).
      */
     private static int[] sortByProjection(double[] projections, int n) {
-        int[] idx = new int[n];
+        int[] idx = ensureCapInt(TL_SORT_IDX, n);
         for (int i = 0; i < n; i++) idx[i] = i;
-        int[] tmp = new int[n];
+        int[] tmp = ensureCapInt(TL_SORT_TMP, n);
         mergeSort(idx, tmp, projections, 0, n);
         return idx;
     }
 
     private static void mergeSort(int[] arr, int[] tmp, double[] keys, int lo, int hi) {
         if (hi - lo <= 16) {
-            // Insertion sort for small ranges
             for (int i = lo + 1; i < hi; i++) {
                 int t = arr[i];
                 double k = keys[t];
@@ -1727,7 +1554,6 @@ public class InertialFlowCutter {
         mergeSort(arr, tmp, keys, lo, mid);
         mergeSort(arr, tmp, keys, mid, hi);
 
-        // Merge
         System.arraycopy(arr, lo, tmp, lo, hi - lo);
         int i = lo, j = mid, k = lo;
         while (i < mid && j < hi) {
@@ -1755,65 +1581,67 @@ public class InertialFlowCutter {
     }
 
     /**
-     * Build symmetric (undirected) adjacency lists from the directed SpeedyGraph.
-     * Uses generation-stamped dedup (O(d) per node) instead of sort-based dedup
-     * (O(d log d) per node) for faster adjacency construction.
+     * Build the symmetric (undirected) CSR adjacency from the directed SpeedyGraph.
+     * Results are stored in {@link #adjData} and {@link #adjOffset}.
+     *
+     * <p>Deduplication works in-place: because the unique neighbor count never
+     * exceeds the degree, the write pointer never overtakes the read pointer.
      */
-    private int[][] buildSymmetricAdjacency() {
+    private void buildSymmetricAdjacency() {
         int n = graph.nodeCount;
 
-        // Count neighbors
         int[] degree = new int[n];
         SpeedyGraph.LinkIterator outLI = graph.getOutLinkIterator();
+        // getToNodeIndex() always returns a valid index in [0, nodeCount) because
+        // SpeedyGraph only stores links whose endpoints are registered nodes.
         for (int node = 0; node < n; node++) {
             outLI.reset(node);
             while (outLI.next()) {
-                int to = outLI.getToNodeIndex();
                 degree[node]++;
-                degree[to]++;
+                degree[outLI.getToNodeIndex()]++;
             }
         }
 
-        // Allocate
-        int[][] adj = new int[n][];
-        int[] pos = new int[n];
-        for (int i = 0; i < n; i++) {
-            adj[i] = new int[degree[i]];
-        }
+        int[] initOffset = new int[n + 1];
+        for (int i = 0; i < n; i++) initOffset[i + 1] = initOffset[i] + degree[i];
 
-        // Fill
+        int totalEdges = initOffset[n];
+        int[] data = new int[totalEdges];
+
+        int[] fillPos = Arrays.copyOf(initOffset, n);
         for (int node = 0; node < n; node++) {
             outLI.reset(node);
             while (outLI.next()) {
                 int to = outLI.getToNodeIndex();
-                adj[node][pos[node]++] = to;
-                adj[to][pos[to]++] = node;
+                data[fillPos[node]++] = to;
+                data[fillPos[to]++] = node;
             }
         }
 
-        // Deduplicate using generation-stamped approach: O(d) per node instead of O(d log d).
-        // For each node, scan its neighbors and keep only the first occurrence of each.
+        // Deduplicate in-place using generation stamps (O(d) per node).
+        // writePos <= initOffset[i] for every node i being processed,
+        // so the write pointer never overtakes the read pointer.
         int[] dedupGen = new int[n];
         int dedupGeneration = 0;
+        int[] newOffset = new int[n + 1];
+        int writePos = 0;
+
         for (int i = 0; i < n; i++) {
-            if (pos[i] == 0) {
-                adj[i] = new int[0];
-                continue;
-            }
+            newOffset[i] = writePos;
+            int end = initOffset[i + 1];
+            if (initOffset[i] == end) continue;
             dedupGeneration++;
-            int unique = 0;
-            for (int j = 0; j < pos[i]; j++) {
-                int neighbor = adj[i][j];
-                if (dedupGen[neighbor] != dedupGeneration) {
-                    dedupGen[neighbor] = dedupGeneration;
-                    adj[i][unique++] = neighbor;
+            for (int j = initOffset[i]; j < end; j++) {
+                int nb = data[j];
+                if (dedupGen[nb] != dedupGeneration) {
+                    dedupGen[nb] = dedupGeneration;
+                    data[writePos++] = nb;
                 }
             }
-            if (unique < adj[i].length) {
-                adj[i] = Arrays.copyOf(adj[i], unique);
-            }
         }
+        newOffset[n] = writePos;
 
-        return adj;
+        this.adjOffset = newOffset;
+        this.adjData = writePos < data.length ? Arrays.copyOf(data, writePos) : data;
     }
 }
