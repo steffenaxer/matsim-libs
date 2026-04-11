@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   <li><b>FM refinement</b>: Fiduccia&ndash;Mattheyses local search minimises
  *       the edge cut of the underlying bipartition, using a bucket linked-list
  *       for O(1) max-gain lookup.  Up to 5 passes until fixpoint.</li>
- *   <li><b>Max-flow refinement</b>: Dinic&apos;s algorithm on a node-split flow
+ *   <li><b>Max-flow refinement</b>: Dinic&rsquo;s algorithm on a node-split flow
  *       network finds the minimum vertex separator between the two partition
  *       sides.  Each internal node is split into v_in/v_out with capacity 1;
  *       original edges have capacity &infin;.</li>
@@ -1571,6 +1571,8 @@ public class InertialFlowCutter {
 
         int[] degree = new int[n];
         SpeedyGraph.LinkIterator outLI = graph.getOutLinkIterator();
+        // getToNodeIndex() always returns a valid index in [0, nodeCount) because
+        // SpeedyGraph only stores links whose endpoints are registered nodes.
         for (int node = 0; node < n; node++) {
             outLI.reset(node);
             while (outLI.next()) {
