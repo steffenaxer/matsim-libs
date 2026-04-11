@@ -79,7 +79,7 @@ public class EmptyVehicleRelocatorTest {
         Assertions.assertThat(verifyTaskContinuity(schedule));
 
 
-        EmptyVehicleRelocator relocator = new EmptyVehicleRelocator(networkAndLinks.net(), freespeedTravelTimeAndDisutility, freespeedTravelTimeAndDisutility, timer, taskFactory);
+        EmptyVehicleRelocator relocator = new EmptyVehicleRelocator(networkAndLinks.net(), freespeedTravelTimeAndDisutility, freespeedTravelTimeAndDisutility, timer, taskFactory, new SpeedyALTFactory());
 
         // Try to relocate to CD
         relocator.relocateVehicle(veh, networkAndLinks.lCD(), EmptyVehicleRelocator.RELOCATE_VEHICLE_TASK_TYPE);
@@ -183,7 +183,7 @@ public class EmptyVehicleRelocatorTest {
         Assertions.assertThat(schedule.getTasks().get(1)).isSameAs(fixedStop);
         Assertions.assertThat(verifyTaskContinuity(schedule));
 
-        EmptyVehicleRelocator relocator = new EmptyVehicleRelocator(networkAndLinks.net(), freespeedTravelTimeAndDisutility, freespeedTravelTimeAndDisutility, timer, taskFactory);
+        EmptyVehicleRelocator relocator = new EmptyVehicleRelocator(networkAndLinks.net(), freespeedTravelTimeAndDisutility, freespeedTravelTimeAndDisutility, timer, taskFactory, new SpeedyALTFactory());
 
         // Try to relocate to CD
         relocator.relocateVehicle(veh, networkAndLinks.lCD(), EmptyVehicleRelocator.RELOCATE_VEHICLE_TASK_TYPE);
@@ -294,7 +294,7 @@ public class EmptyVehicleRelocatorTest {
         Assertions.assertThat(schedule.getTasks().get(2)).isSameAs(fixedStop);
         Assertions.assertThat(verifyTaskContinuity(schedule));
 
-        EmptyVehicleRelocator relocator = new EmptyVehicleRelocator(networkAndLinks.net(), freespeedTravelTimeAndDisutility, freespeedTravelTimeAndDisutility, timer, taskFactory);
+        EmptyVehicleRelocator relocator = new EmptyVehicleRelocator(networkAndLinks.net(), freespeedTravelTimeAndDisutility, freespeedTravelTimeAndDisutility, timer, taskFactory, new SpeedyALTFactory());
 
         // Try to relocate to CD
         relocator.relocateVehicle(veh, networkAndLinks.lCD(), EmptyVehicleRelocator.RELOCATE_VEHICLE_TASK_TYPE);
@@ -396,7 +396,7 @@ public class EmptyVehicleRelocatorTest {
         Assertions.assertThat(verifyTaskContinuity(schedule));
 
 
-        EmptyVehicleRelocator relocator = new EmptyVehicleRelocator(networkAndLinks.net(), freespeedTravelTimeAndDisutility, freespeedTravelTimeAndDisutility, timer, taskFactory);
+        EmptyVehicleRelocator relocator = new EmptyVehicleRelocator(networkAndLinks.net(), freespeedTravelTimeAndDisutility, freespeedTravelTimeAndDisutility, timer, taskFactory, new SpeedyALTFactory());
 
         // Try to relocate to CD
         relocator.relocateVehicle(veh, networkAndLinks.lCD(), EmptyVehicleRelocator.RELOCATE_VEHICLE_TASK_TYPE);
@@ -490,7 +490,7 @@ public class EmptyVehicleRelocatorTest {
         Assertions.assertThat(verifyTaskContinuity(schedule));
 
 
-        EmptyVehicleRelocator relocator = new EmptyVehicleRelocator(networkAndLinks.net(), freespeedTravelTimeAndDisutility, freespeedTravelTimeAndDisutility, timer, taskFactory);
+        EmptyVehicleRelocator relocator = new EmptyVehicleRelocator(networkAndLinks.net(), freespeedTravelTimeAndDisutility, freespeedTravelTimeAndDisutility, timer, taskFactory, new SpeedyALTFactory());
 
         // Try to relocate to CD
         relocator.relocateVehicle(veh, networkAndLinks.lCD(), EmptyVehicleRelocator.RELOCATE_VEHICLE_TASK_TYPE);

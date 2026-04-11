@@ -34,7 +34,7 @@ public class LeastCostPathCalculatorModule extends AbstractModule {
     /**
      * Creates a {@link LeastCostPathCalculatorFactory} for the global
      * {@link ControllerConfigGroup.RoutingAlgorithmType} configured in the given {@link Config}.
-     * This is used by DRT and other contribs to honour the global routing config setting.
+     * This is used by DRT and other contribs to honor the global routing config setting.
      */
     public static LeastCostPathCalculatorFactory createFactory(Config config) {
         return switch (config.controller().getRoutingAlgorithmType()) {
