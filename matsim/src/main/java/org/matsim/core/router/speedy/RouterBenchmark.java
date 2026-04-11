@@ -134,20 +134,25 @@ public class RouterBenchmark {
         FreespeedTravelTimeAndDisutility tc =
                 new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
 
-        // ---- 2. Build graph with Morton Z-order spatial reordering ----
-        // Must use buildWithSpatialOrdering() here to match what CHRouterFactory
-        // does in production — SpeedyALT uses the identity-ordered graph in
-        // practice (SpeedyALTFactory calls SpeedyGraphBuilder.build()), so both
-        // routers are benchmarked on the same graph for a fair comparison,
-        // but the CH preprocessing benefits from the spatial ordering.
+        // ---- 2a. Build identity-ordered graph for SpeedyALT ----
+        // SpeedyALT uses node.getId().index() as the internal index, so it
+        // requires the default identity-ordered graph produced by
+        // SpeedyGraphBuilder.build() — exactly as SpeedyALTFactory does in
+        // production.
         System.out.println();
-        System.out.println("Building SpeedyGraph (Morton Z-order, matches CHRouterFactory) ...");
-        SpeedyGraph graph = SpeedyGraphBuilder.buildWithSpatialOrdering(network);
+        System.out.println("Building SpeedyGraph (identity order, matches SpeedyALTFactory) ...");
+        SpeedyGraph altGraph = SpeedyGraphBuilder.build(network);
 
-        // ---- 2b. Analyse network structure and auto-tune parameters ----
+        // ---- 2b. Build spatially-ordered graph for CH ----
+        // CHRouterFactory uses buildWithSpatialOrdering() for better CPU cache
+        // locality during CH preprocessing.
+        System.out.println("Building SpeedyGraph (Morton Z-order, matches CHRouterFactory) ...");
+        SpeedyGraph chGraphBase = SpeedyGraphBuilder.buildWithSpatialOrdering(network);
+
+        // ---- 2c. Analyse network structure and auto-tune parameters ----
         System.out.println();
         System.out.println("Analysing network structure ...");
-        NetworkProfile profile = NetworkAnalyzer.analyze(graph);
+        NetworkProfile profile = NetworkAnalyzer.analyze(chGraphBase);
         System.out.println("  " + profile.toSummaryString());
 
         CHBuilderParams chParams = RoutingParameterTuner.tuneCHParams(profile);
@@ -163,7 +168,7 @@ public class RouterBenchmark {
         System.out.println();
         System.out.println("Computing InertialFlowCutter ND order (auto-tuned) ...");
         long t0 = System.nanoTime();
-        InertialFlowCutter.NDOrderResult order = new InertialFlowCutter(graph, ifcParams).computeOrderWithBatches();
+        InertialFlowCutter.NDOrderResult order = new InertialFlowCutter(chGraphBase, ifcParams).computeOrderWithBatches();
         long orderMs = (System.nanoTime() - t0) / 1_000_000;
         System.out.printf("  ND Order:  %,6d ms%n", orderMs);
 
@@ -171,21 +176,21 @@ public class RouterBenchmark {
         System.out.println();
         System.out.println("Building CH (auto-tuned) ...");
         long t1 = System.nanoTime();
-        CHGraph chGraph = new CHBuilder(graph, tc, chParams).buildWithOrderParallel(order);
+        CHGraph chGraph = new CHBuilder(chGraphBase, tc, chParams).buildWithOrderParallel(order);
         new CHTTFCustomizer().customize(chGraph, tc, tc);
         long totalBuildMs = orderMs + (System.nanoTime() - t1) / 1_000_000;
         System.out.printf("  CH build:  %,6d ms  (%,d edges)%n", totalBuildMs, chGraph.totalEdgeCount);
 
-        // ---- 5. Build ALT landmarks ----
+        // ---- 5. Build ALT landmarks (on identity-ordered graph) ----
         System.out.println();
         System.out.println("Building SpeedyALT landmarks ...");
         long altStart = System.nanoTime();
-        SpeedyALTData altData = new SpeedyALTData(graph, Math.min(effectiveLandmarks, graph.nodeCount), tc, 1);
+        SpeedyALTData altData = new SpeedyALTData(altGraph, Math.min(effectiveLandmarks, altGraph.nodeCount), tc, 1);
         long altMs = (System.nanoTime() - altStart) / 1_000_000;
         System.out.printf("  ALT build: %,6d ms  (%d landmarks)%n", altMs, effectiveLandmarks);
 
         // ---- 6. Create routers ----
-        List<RouterEntry> routers = buildRouters(graph, altData, chGraph, tc);
+        List<RouterEntry> routers = buildRouters(altGraph, altData, chGraph, tc);
 
         List<Node> nodeList = new ArrayList<>(network.getNodes().values());
         int n = nodeList.size();
