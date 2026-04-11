@@ -22,7 +22,7 @@ import java.util.concurrent.Future;
  *
  * @author mrieser / Simunto, sponsored by SBB Swiss Federal Railways
  */
-class SpeedyALTData {
+public class SpeedyALTData {
 
 	private final static Logger LOG = LogManager.getLogger(SpeedyALTData.class);
 

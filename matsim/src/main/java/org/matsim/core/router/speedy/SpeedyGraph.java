@@ -82,6 +82,11 @@ public class SpeedyGraph {
 		this.nodeReorder = nodeReorder;
 	}
 
+    /** Returns the number of nodes in this graph. */
+    public int getNodeCount() {
+        return this.nodeCount;
+    }
+
     /**
      * Returns the internal (spatially ordered) node index for the given MATSim node.
      * All routing algorithms must use this method instead of {@code node.getId().index()}.

@@ -147,6 +147,11 @@ public class CHGraph {
      */
     volatile double customizationFingerprint = Double.NaN;
 
+    /** Returns the total number of edges (upward + downward) in the CH overlay graph. */
+    public int getTotalEdgeCount() {
+        return this.totalEdgeCount;
+    }
+
     private final SpeedyGraph baseGraph;
 
     CHGraph(SpeedyGraph baseGraph, int nodeCount,
