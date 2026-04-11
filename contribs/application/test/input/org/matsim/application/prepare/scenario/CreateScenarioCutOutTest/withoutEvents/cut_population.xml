@@ -1060,56 +1060,6 @@
 
 <!-- ====================================================================== -->
 
-	<person id="181">
-		<attributes>
-			<attribute name="age" class="java.lang.Integer">55</attribute>
-		</attributes>
-		<plan selected="yes">
-			<activity type="home" link="3" facility="21" x="2500.0" y="0.0" start_time="00:00:00" max_dur="08:00:00" end_time="08:00:00" >
-			</activity>
-			<leg mode="car" dep_time="08:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="work" link="82" facility="28" x="500.0" y="9000.0" start_time="08:00:00" max_dur="08:00:00" end_time="16:00:00" >
-			</activity>
-			<leg mode="car" dep_time="16:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="leisure" link="86" facility="46" x="4500.0" y="9000.0" start_time="16:00:00" max_dur="04:00:00" end_time="20:00:00" >
-			</activity>
-			<leg mode="car" dep_time="20:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="home" link="3" facility="21" x="2500.0" y="0.0" start_time="20:00:00" max_dur="04:00:00" end_time="24:00:00" >
-			</activity>
-		</plan>
-
-	</person>
-
-<!-- ====================================================================== -->
-
-	<person id="190">
-		<attributes>
-			<attribute name="age" class="java.lang.Integer">37</attribute>
-		</attributes>
-		<plan selected="yes">
-			<activity type="home" link="4" facility="22" x="3500.0" y="0.0" start_time="00:00:00" max_dur="08:00:00" end_time="08:00:00" >
-			</activity>
-			<leg mode="car" dep_time="08:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="work" link="82" facility="28" x="500.0" y="9000.0" start_time="08:00:00" max_dur="08:00:00" end_time="16:00:00" >
-			</activity>
-			<leg mode="car" dep_time="16:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="leisure" link="86" facility="46" x="4500.0" y="9000.0" start_time="16:00:00" max_dur="04:00:00" end_time="20:00:00" >
-			</activity>
-			<leg mode="car" dep_time="20:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="home" link="4" facility="22" x="3500.0" y="0.0" start_time="20:00:00" max_dur="04:00:00" end_time="24:00:00" >
-			</activity>
-		</plan>
-
-	</person>
-
-<!-- ====================================================================== -->
-
 	<person id="199">
 		<attributes>
 			<attribute name="age" class="java.lang.Integer">58</attribute>
@@ -1160,12 +1110,12 @@
 
 <!-- ====================================================================== -->
 
-	<person id="208">
+	<person id="217">
 		<attributes>
-			<attribute name="age" class="java.lang.Integer">56</attribute>
+			<attribute name="age" class="java.lang.Integer">48</attribute>
 		</attributes>
 		<plan selected="yes">
-			<activity type="home" link="6" facility="24" x="5500.0" y="0.0" start_time="00:00:00" max_dur="08:00:00" end_time="08:00:00" >
+			<activity type="home" link="7" facility="25" x="6500.0" y="0.0" start_time="00:00:00" max_dur="08:00:00" end_time="08:00:00" >
 			</activity>
 			<leg mode="car" dep_time="08:00:00" trav_time="00:00:00">
 			</leg>
@@ -1173,11 +1123,11 @@
 			</activity>
 			<leg mode="car" dep_time="16:00:00" trav_time="00:00:00">
 			</leg>
-			<activity type="leisure" link="50" facility="42" x="4500.0" y="1000.0" start_time="16:00:00" max_dur="04:00:00" end_time="20:00:00" >
+			<activity type="leisure" link="86" facility="46" x="4500.0" y="9000.0" start_time="16:00:00" max_dur="04:00:00" end_time="20:00:00" >
 			</activity>
 			<leg mode="car" dep_time="20:00:00" trav_time="00:00:00">
 			</leg>
-			<activity type="home" link="6" facility="24" x="5500.0" y="0.0" start_time="20:00:00" max_dur="04:00:00" end_time="24:00:00" >
+			<activity type="home" link="7" facility="25" x="6500.0" y="0.0" start_time="20:00:00" max_dur="04:00:00" end_time="24:00:00" >
 			</activity>
 		</plan>
 
@@ -1224,31 +1174,6 @@
 			<leg mode="car" dep_time="16:00:00" trav_time="00:00:00">
 			</leg>
 			<activity type="shopping" link="41" facility="41" x="4500.0" y="8000.0" start_time="16:00:00" max_dur="04:00:00" end_time="20:00:00" >
-			</activity>
-			<leg mode="car" dep_time="20:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="home" link="82" facility="28" x="500.0" y="9000.0" start_time="20:00:00" max_dur="04:00:00" end_time="24:00:00" >
-			</activity>
-		</plan>
-
-	</person>
-
-<!-- ====================================================================== -->
-
-	<person id="252">
-		<attributes>
-			<attribute name="age" class="java.lang.Integer">38</attribute>
-		</attributes>
-		<plan selected="yes">
-			<activity type="home" link="82" facility="28" x="500.0" y="9000.0" start_time="00:00:00" max_dur="08:00:00" end_time="08:00:00" >
-			</activity>
-			<leg mode="car" dep_time="08:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="work" link="9" facility="27" x="8500.0" y="0.0" start_time="08:00:00" max_dur="08:00:00" end_time="16:00:00" >
-			</activity>
-			<leg mode="car" dep_time="16:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="leisure" link="50" facility="42" x="4500.0" y="1000.0" start_time="16:00:00" max_dur="04:00:00" end_time="20:00:00" >
 			</activity>
 			<leg mode="car" dep_time="20:00:00" trav_time="00:00:00">
 			</leg>
@@ -1860,31 +1785,6 @@
 
 <!-- ====================================================================== -->
 
-	<person id="73">
-		<attributes>
-			<attribute name="age" class="java.lang.Integer">24</attribute>
-		</attributes>
-		<plan selected="yes">
-			<activity type="home" link="99" facility="9" x="0.0" y="8500.0" start_time="00:00:00" max_dur="08:00:00" end_time="08:00:00" >
-			</activity>
-			<leg mode="car" dep_time="08:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="work" link="172" facility="10" x="9000.0" y="500.0" start_time="08:00:00" max_dur="08:00:00" end_time="16:00:00" >
-			</activity>
-			<leg mode="car" dep_time="16:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="leisure" link="77" facility="45" x="4500.0" y="7000.0" start_time="16:00:00" max_dur="04:00:00" end_time="20:00:00" >
-			</activity>
-			<leg mode="car" dep_time="20:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="home" link="99" facility="9" x="0.0" y="8500.0" start_time="20:00:00" max_dur="04:00:00" end_time="24:00:00" >
-			</activity>
-		</plan>
-
-	</person>
-
-<!-- ====================================================================== -->
-
 	<person id="8">
 		<attributes>
 			<attribute name="age" class="java.lang.Integer">43</attribute>
@@ -1903,31 +1803,6 @@
 			<leg mode="car" dep_time="20:00:00" trav_time="00:00:00">
 			</leg>
 			<activity type="home" link="91" facility="1" x="0.0" y="500.0" start_time="20:00:00" max_dur="04:00:00" end_time="24:00:00" >
-			</activity>
-		</plan>
-
-	</person>
-
-<!-- ====================================================================== -->
-
-	<person id="80">
-		<attributes>
-			<attribute name="age" class="java.lang.Integer">30</attribute>
-		</attributes>
-		<plan selected="yes">
-			<activity type="home" link="99" facility="9" x="0.0" y="8500.0" start_time="00:00:00" max_dur="08:00:00" end_time="08:00:00" >
-			</activity>
-			<leg mode="car" dep_time="08:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="work" link="179" facility="17" x="9000.0" y="7500.0" start_time="08:00:00" max_dur="08:00:00" end_time="16:00:00" >
-			</activity>
-			<leg mode="car" dep_time="16:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="shopping" link="5" facility="37" x="4500.0" y="0.0" start_time="16:00:00" max_dur="04:00:00" end_time="20:00:00" >
-			</activity>
-			<leg mode="car" dep_time="20:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="home" link="99" facility="9" x="0.0" y="8500.0" start_time="20:00:00" max_dur="04:00:00" end_time="24:00:00" >
 			</activity>
 		</plan>
 
@@ -2035,6 +1910,31 @@
 
 <!-- ====================================================================== -->
 
+	<person id="86">
+		<attributes>
+			<attribute name="age" class="java.lang.Integer">17</attribute>
+		</attributes>
+		<plan selected="yes">
+			<activity type="home" link="172" facility="10" x="9000.0" y="500.0" start_time="00:00:00" max_dur="08:00:00" end_time="08:00:00" >
+			</activity>
+			<leg mode="car" dep_time="08:00:00" trav_time="00:00:00">
+			</leg>
+			<activity type="work" link="95" facility="5" x="0.0" y="4500.0" start_time="08:00:00" max_dur="08:00:00" end_time="16:00:00" >
+			</activity>
+			<leg mode="car" dep_time="16:00:00" trav_time="00:00:00">
+			</leg>
+			<activity type="leisure" link="59" facility="43" x="4500.0" y="3000.0" start_time="16:00:00" max_dur="04:00:00" end_time="20:00:00" >
+			</activity>
+			<leg mode="car" dep_time="20:00:00" trav_time="00:00:00">
+			</leg>
+			<activity type="home" link="172" facility="10" x="9000.0" y="500.0" start_time="20:00:00" max_dur="04:00:00" end_time="24:00:00" >
+			</activity>
+		</plan>
+
+	</person>
+
+<!-- ====================================================================== -->
+
 	<person id="87">
 		<attributes>
 			<attribute name="age" class="java.lang.Integer">68</attribute>
@@ -2103,31 +2003,6 @@
 			<leg mode="car" dep_time="20:00:00" trav_time="00:00:00">
 			</leg>
 			<activity type="home" link="91" facility="1" x="0.0" y="500.0" start_time="20:00:00" max_dur="04:00:00" end_time="24:00:00" >
-			</activity>
-		</plan>
-
-	</person>
-
-<!-- ====================================================================== -->
-
-	<person id="90">
-		<attributes>
-			<attribute name="age" class="java.lang.Integer">12</attribute>
-		</attributes>
-		<plan selected="yes">
-			<activity type="home" link="172" facility="10" x="9000.0" y="500.0" start_time="00:00:00" max_dur="08:00:00" end_time="08:00:00" >
-			</activity>
-			<leg mode="car" dep_time="08:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="work" link="99" facility="9" x="0.0" y="8500.0" start_time="08:00:00" max_dur="08:00:00" end_time="16:00:00" >
-			</activity>
-			<leg mode="car" dep_time="16:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="shopping" link="14" facility="38" x="4500.0" y="2000.0" start_time="16:00:00" max_dur="04:00:00" end_time="20:00:00" >
-			</activity>
-			<leg mode="car" dep_time="20:00:00" trav_time="00:00:00">
-			</leg>
-			<activity type="home" link="172" facility="10" x="9000.0" y="500.0" start_time="20:00:00" max_dur="04:00:00" end_time="24:00:00" >
 			</activity>
 		</plan>
 
