@@ -167,10 +167,18 @@ public class CHRouter implements LeastCostPathCalculator {
         bwdPQ.clear();
         bwdPQ.insert(endIdx, 0.0);
 
+        // Seed colored copies for turn restrictions.
+        // Colored nodes duplicate real nodes to model forbidden turn sequences.
+        // We must seed all colored copies of start/end so the bidirectional
+        // search can find paths that traverse these colored subgraphs.
+        // IMPORTANT: cn.index() is an EXTERNAL index from TurnRestrictionsContext;
+        // it must be mapped to the internal (spatially reordered) index via
+        // getInternalIndex() before accessing any CH array or priority queue.
         if (turnRestrictions != null) {
             for (TurnRestrictionsContext.ColoredNode cn : turnRestrictions.coloredNodes) {
                 int origIdx = baseGraph.getNodeIndex(cn.node());
-                int coloredIdx = cn.index();
+                int coloredIdx = baseGraph.getInternalIndex(cn.index());
+                if (coloredIdx < 0) continue; // unmapped node (should not happen)
                 if (origIdx == endIdx && coloredIdx != endIdx) {
                     setBwd(coloredIdx, 0.0, -1, -1);
                     bwdPQ.insert(coloredIdx, 0.0);
