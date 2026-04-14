@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CH Router Visualization — iteratively.io</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header ──────────────────────────────────────────────── */
+#header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 20px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  flex-shrink: 0;
+  height: 48px;
+}
+#header h1 { font-size: 15px; font-weight: 600; color: #e6edf3; letter-spacing: 0.02em; }
+#header .subtitle { font-size: 12px; color: #8b949e; margin-top: 1px; }
+
+#od-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #8b949e;
+}
+#od-selector select {
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ── Canvas area ──────────────────────────────────────────── */
+#canvas-row {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  min-width: 0;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  background: #161b22;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+}
+.panel-title { font-size: 13px; font-weight: 600; }
+.panel-counter {
+  font-size: 12px;
+  color: #8b949e;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-dijkstra .panel-title { color: #da3633; }
+.panel-ch       .panel-title { color: #58a6ff; }
+
+.divider {
+  width: 2px;
+  background: #21262d;
+  flex-shrink: 0;
+}
+
+canvas.main-canvas {
+  display: block;
+  flex: 1;
+  width: 100%;
+  cursor: crosshair;
+}
+
+/* ── Overlays ─────────────────────────────────────────────── */
+.info-box {
+  position: absolute;
+  bottom: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(13,17,23,0.92);
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 12px;
+  color: #8b949e;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  max-width: 260px;
+  white-space: normal;
+}
+.info-box.visible { opacity: 1; }
+.info-box strong { color: #c9d1d9; }
+
+#final-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(13,17,23,0.85);
+  z-index: 100;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.6s ease;
+}
+#final-overlay.visible { opacity: 1; pointer-events: auto; }
+#final-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 32px 40px;
+  text-align: center;
+  max-width: 500px;
+}
+#final-card h2 { font-size: 20px; color: #e6edf3; margin-bottom: 8px; }
+#final-card .saving {
+  font-size: 36px;
+  font-weight: 700;
+  color: #3fb950;
+  margin: 16px 0;
+}
+#final-card .details { font-size: 14px; color: #8b949e; }
+#final-card .details span { color: #c9d1d9; }
+#final-close {
+  margin-top: 20px;
+  padding: 8px 24px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #c9d1d9;
+  font-size: 13px;
+  cursor: pointer;
+}
+#final-close:hover { background: #30363d; }
+
+/* ── Controls ─────────────────────────────────────────────── */
+#controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  background: #161b22;
+  border-top: 1px solid #30363d;
+  flex-shrink: 0;
+  height: 48px;
+  transition: opacity 0.3s ease;
+}
+#controls.cinema-mode { opacity: 0; pointer-events: none; }
+
+.btn {
+  padding: 5px 12px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #c9d1d9;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.btn:hover { background: #30363d; }
+.btn.primary { background: #1f6feb; border-color: #388bfd; color: #fff; }
+.btn.primary:hover { background: #388bfd; }
+.btn.danger  { background: #da3633; border-color: #f85149; color: #fff; }
+.btn.danger:hover  { background: #f85149; }
+.btn.record-active { background: #da3633; border-color: #f85149; animation: pulse-rec 1s infinite; }
+
+@keyframes pulse-rec {
+  0%,100% { box-shadow: 0 0 0 0 rgba(218,54,51,0.4); }
+  50%      { box-shadow: 0 0 0 6px rgba(218,54,51,0); }
+}
+
+#progress-bar-wrap {
+  flex: 1;
+  height: 4px;
+  background: #21262d;
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+}
+#progress-bar {
+  height: 100%;
+  background: #388bfd;
+  border-radius: 2px;
+  width: 0%;
+  pointer-events: none;
+  transition: width 0.1s linear;
+}
+
+.speed-label { font-size: 11px; color: #8b949e; }
+#speed-slider {
+  width: 80px;
+  accent-color: #388bfd;
+}
+
+/* ── Watermark ────────────────────────────────────────────── */
+.watermark {
+  position: absolute;
+  bottom: 10px;
+  right: 14px;
+  font-size: 11px;
+  color: rgba(139,148,158,0.35);
+  pointer-events: none;
+  letter-spacing: 0.03em;
+}
+
+/* ── Loading state ────────────────────────────────────────── */
+#loading {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #0d1117;
+  z-index: 200;
+  gap: 16px;
+}
+#loading h2 { font-size: 18px; color: #e6edf3; }
+#loading p  { font-size: 13px; color: #8b949e; text-align: center; max-width: 400px; line-height: 1.6; }
+.spinner {
+  width: 36px; height: 36px;
+  border: 3px solid #21262d;
+  border-top-color: #388bfd;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── 2.5D toggle label ────────────────────────────────────── */
+.toggle-wrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #8b949e; }
+.toggle-wrap input[type=checkbox] { accent-color: #388bfd; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loading">
+  <div class="spinner"></div>
+  <h2>Loading CH Router Visualization</h2>
+  <p id="loading-msg">Fetching <code>ch-query-data.json</code>…<br>
+  Run <code>CHQueryExporter</code> to generate the data file.</p>
+</div>
+
+<!-- Header -->
+<div id="header">
+  <div>
+    <div id="header-title">
+      <h1>Contraction Hierarchies vs Dijkstra — Berlin Network</h1>
+    </div>
+    <div class="subtitle">How CH routing dramatically reduces the search space</div>
+  </div>
+  <div id="od-selector">
+    <span>Route:</span>
+    <select id="od-select"></select>
+  </div>
+</div>
+
+<!-- Canvas row -->
+<div id="canvas-row">
+  <!-- Left: Dijkstra -->
+  <div class="panel panel-dijkstra" id="panel-left">
+    <div class="panel-header">
+      <span class="panel-title">Dijkstra</span>
+      <span class="panel-counter" id="dij-counter">Settled: 0</span>
+    </div>
+    <canvas class="main-canvas" id="canvas-dij"></canvas>
+    <div class="info-box" id="info-dij"></div>
+    <div class="watermark">iteratively.io</div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Right: CH -->
+  <div class="panel panel-ch" id="panel-right">
+    <div class="panel-header">
+      <span class="panel-title">Contraction Hierarchies</span>
+      <span class="panel-counter" id="ch-counter">Fwd: 0 / Bwd: 0</span>
+    </div>
+    <canvas class="main-canvas" id="canvas-ch"></canvas>
+    <div class="info-box" id="info-ch"></div>
+  </div>
+</div>
+
+<!-- Controls -->
+<div id="controls">
+  <button class="btn primary" id="btn-play">▶ Play</button>
+  <button class="btn" id="btn-step">Step</button>
+  <button class="btn" id="btn-reset">↺ Reset</button>
+  <div id="progress-bar-wrap" title="Click to seek">
+    <div id="progress-bar"></div>
+  </div>
+  <span class="speed-label">Speed:</span>
+  <input type="range" id="speed-slider" min="1" max="50" value="10" title="Events per frame">
+  <span id="speed-val" class="speed-label">10×</span>
+  <label class="toggle-wrap">
+    <input type="checkbox" id="toggle-2-5d"> 2.5D
+  </label>
+  <button class="btn" id="btn-cinema">🎬 Cinema</button>
+  <button class="btn danger" id="btn-record">⏺ Record</button>
+</div>
+
+<!-- Final comparison overlay -->
+<div id="final-overlay">
+  <div id="final-card">
+    <h2>Search Space Comparison</h2>
+    <div class="saving" id="saving-pct">-</div>
+    <div class="details">
+      Dijkstra settled: <span id="dij-total">-</span> nodes<br>
+      CH settled: <span id="ch-total">-</span> nodes<br>
+      <span style="color:#3fb950;margin-top:6px;display:block">CH is <span id="ch-times">-</span>× more efficient</span>
+    </div>
+    <button id="final-close" class="btn">Close</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// Constants & colour palette
+// ═══════════════════════════════════════════════════════════════════════════
+const C = {
+  bg:       '#0d1117',
+  net:      '#1e2937',
+  fwd:      '#58a6ff',
+  bwd:      '#f78166',
+  dij:      '#da3633',
+  path:     '#3fb950',
+  meeting:  '#d29922',
+  stall:    '#8b949e',
+  start:    '#3fb950',
+  end:      '#f0883e',
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════════════════
+let data        = null;   // loaded JSON
+let queryIdx    = 0;      // current OD pair
+let query       = null;   // shorthand for data.queries[queryIdx]
+
+let playing     = false;
+let cinemaMode  = false;
+let recording   = false;
+let mediaRec    = null;
+let recChunks   = [];
+
+let chStep      = 0;      // how many CH events rendered
+let dijStep     = 0;      // how many Dijkstra events rendered
+let phase       = 0;      // 0=search, 1=path, 2=done
+let animHandle  = null;
+
+// Per-frame settle tracking
+const settledDij  = new Map();  // nodeIdx → {cost, parent}
+const settledFwd  = new Map();
+const settledBwd  = new Map();
+let   meetingNode = -1;
+let   pathDash    = 0;    // animated dash offset
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Canvas setup
+// ═══════════════════════════════════════════════════════════════════════════
+const dijCanvas  = document.getElementById('canvas-dij');
+const chCanvas   = document.getElementById('canvas-ch');
+const dijCtx     = dijCanvas.getContext('2d');
+const chCtx      = chCanvas.getContext('2d');
+
+// Off-screen canvases: base map layer (rendered once)
+let baseMapDij   = null;
+let baseMapCH    = null;
+
+// Off-screen composite canvas for recording
+let compCanvas   = null;
+let compCtx      = null;
+
+// Projection state
+let proj         = null;   // { scale, tx, ty }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Resize handling
+// ═══════════════════════════════════════════════════════════════════════════
+function resizeCanvases() {
+  const rect = dijCanvas.getBoundingClientRect();
+  const W = Math.floor(rect.width), H = Math.floor(rect.height);
+  if (dijCanvas.width === W && dijCanvas.height === H) return;
+  dijCanvas.width = chCanvas.width = W;
+  dijCanvas.height = chCanvas.height = H;
+  if (data) {
+    buildProjection(W, H);
+    renderBaseMaps();
+    redrawAll();
+  }
+}
+const resizeObs = new ResizeObserver(resizeCanvases);
+resizeObs.observe(dijCanvas);
+resizeObs.observe(chCanvas);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Projection (Mercator for WGS84 lon/lat → canvas px)
+// ═══════════════════════════════════════════════════════════════════════════
+function mercatorY(lat) {
+  const rad = lat * Math.PI / 180;
+  return Math.log(Math.tan(Math.PI / 4 + rad / 2));
+}
+
+function buildProjection(W, H) {
+  if (!data || !data.nodes.length) return;
+  const ns = data.nodes;
+  let minLon = Infinity, maxLon = -Infinity, minMY = Infinity, maxMY = -Infinity;
+  for (const n of ns) {
+    if (n.lon < minLon) minLon = n.lon;
+    if (n.lon > maxLon) maxLon = n.lon;
+    const my = mercatorY(n.lat);
+    if (my < minMY) minMY = my;
+    if (my > maxMY) maxMY = my;
+  }
+  const pad  = 32;
+  const scaleX = (W - pad * 2) / (maxLon - minLon);
+  const scaleY = (H - pad * 2) / (maxMY  - minMY);
+  const scale  = Math.min(scaleX, scaleY);
+  proj = {
+    scale,
+    tx: pad + (W - pad * 2 - (maxLon - minLon) * scale) / 2 - minLon * scale,
+    ty: pad + (H - pad * 2 - (maxMY  - minMY)  * scale) / 2 + maxMY  * scale,
+  };
+}
+
+function project(lon, lat) {
+  return [
+    proj.tx + lon * proj.scale,
+    proj.ty - mercatorY(lat) * proj.scale,
+  ];
+}
+
+function nodeXY(idx) {
+  const n = data.nodes[idx];
+  return project(n.lon, n.lat);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Base-map rendering (once per resize/data-load)
+// ═══════════════════════════════════════════════════════════════════════════
+function renderBaseMaps() {
+  const W = dijCanvas.width, H = dijCanvas.height;
+  baseMapDij = document.createElement('canvas');
+  baseMapCH  = document.createElement('canvas');
+  baseMapDij.width = baseMapCH.width = W;
+  baseMapDij.height = baseMapCH.height = H;
+  const c1 = baseMapDij.getContext('2d');
+  const c2 = baseMapCH.getContext('2d');
+  for (const ctx of [c1, c2]) {
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = C.net;
+    ctx.lineWidth = 0.6;
+    ctx.beginPath();
+    for (const e of data.edges) {
+      const [x1,y1] = nodeXY(e.from);
+      const [x2,y2] = nodeXY(e.to);
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+    }
+    ctx.stroke();
+    // Start / End markers
+    drawODMarkers(ctx);
+  }
+}
+
+function drawODMarkers(ctx) {
+  if (!query) return;
+  const [sx, sy] = nodeXY(query.startNode);
+  const [ex, ey] = nodeXY(query.endNode);
+  ctx.fillStyle = C.start;
+  ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = C.end;
+  ctx.beginPath(); ctx.arc(ex, ey, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.font = 'bold 10px system-ui';
+  ctx.fillStyle = C.start;
+  ctx.fillText('S', sx + 7, sy + 4);
+  ctx.fillStyle = C.end;
+  ctx.fillText('E', ex + 7, ey + 4);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Full redraw (called after reset or resize)
+// ═══════════════════════════════════════════════════════════════════════════
+function redrawAll() {
+  drawDijkstraCanvas();
+  drawCHCanvas();
+  updateCounters();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Dijkstra canvas draw
+// ═══════════════════════════════════════════════════════════════════════════
+function drawDijkstraCanvas() {
+  const W = dijCanvas.width, H = dijCanvas.height;
+  dijCtx.clearRect(0, 0, W, H);
+  if (baseMapDij) dijCtx.drawImage(baseMapDij, 0, 0);
+
+  // Settled edges (parent lines)
+  dijCtx.strokeStyle = C.dij + '55';
+  dijCtx.lineWidth = 0.8;
+  dijCtx.beginPath();
+  for (const [node, st] of settledDij) {
+    if (st.parent < 0) continue;
+    const [x1,y1] = nodeXY(node);
+    const [x2,y2] = nodeXY(st.parent);
+    dijCtx.moveTo(x1,y1);
+    dijCtx.lineTo(x2,y2);
+  }
+  dijCtx.stroke();
+
+  // Settled nodes
+  for (const [node, st] of settledDij) {
+    const [x,y] = nodeXY(node);
+    const r = 2;
+    dijCtx.beginPath();
+    dijCtx.arc(x, y, r, 0, Math.PI * 2);
+    dijCtx.fillStyle = C.dij;
+    dijCtx.fill();
+  }
+
+  // Path (phase 1+)
+  if (phase >= 1 && query.path && query.path.length > 1) {
+    drawAnimatedPath(dijCtx, query.path);
+  }
+
+  // 2.5D
+  if (document.getElementById('toggle-2-5d').checked) apply2_5D(dijCtx, settledDij, 'dij');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CH canvas draw
+// ═══════════════════════════════════════════════════════════════════════════
+function drawCHCanvas() {
+  const W = chCanvas.width, H = chCanvas.height;
+  chCtx.clearRect(0, 0, W, H);
+  if (baseMapCH) chCtx.drawImage(baseMapCH, 0, 0);
+
+  // Forward edges
+  chCtx.strokeStyle = C.fwd + '55';
+  chCtx.lineWidth = 0.8;
+  chCtx.beginPath();
+  for (const [node, st] of settledFwd) {
+    if (st.parent < 0) continue;
+    const [x1,y1] = nodeXY(node);
+    const [x2,y2] = nodeXY(st.parent);
+    chCtx.moveTo(x1,y1); chCtx.lineTo(x2,y2);
+  }
+  chCtx.stroke();
+
+  // Backward edges
+  chCtx.strokeStyle = C.bwd + '55';
+  chCtx.beginPath();
+  for (const [node, st] of settledBwd) {
+    if (st.parent < 0) continue;
+    const [x1,y1] = nodeXY(node);
+    const [x2,y2] = nodeXY(st.parent);
+    chCtx.moveTo(x1,y1); chCtx.lineTo(x2,y2);
+  }
+  chCtx.stroke();
+
+  // Forward nodes
+  for (const [node, st] of settledFwd) {
+    const [x,y] = nodeXY(node);
+    const lv    = data.nodes[node].level;
+    const r     = st.stalled ? 1.5 : Math.min(1.5 + lv / 2000, 4);
+    chCtx.beginPath();
+    chCtx.arc(x, y, r, 0, Math.PI * 2);
+    chCtx.fillStyle = st.stalled ? C.stall : C.fwd;
+    chCtx.fill();
+  }
+
+  // Backward nodes
+  for (const [node, st] of settledBwd) {
+    const [x,y] = nodeXY(node);
+    const lv    = data.nodes[node].level;
+    const r     = st.stalled ? 1.5 : Math.min(1.5 + lv / 2000, 4);
+    chCtx.beginPath();
+    chCtx.arc(x, y, r, 0, Math.PI * 2);
+    chCtx.fillStyle = st.stalled ? C.stall : C.bwd;
+    chCtx.fill();
+  }
+
+  // Meeting node glow
+  if (meetingNode >= 0) {
+    const [x,y] = nodeXY(meetingNode);
+    const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 200);
+    const r     = 6 + pulse * 4;
+    const grd   = chCtx.createRadialGradient(x,y,1,x,y,r);
+    grd.addColorStop(0, C.meeting);
+    grd.addColorStop(1, C.meeting + '00');
+    chCtx.beginPath();
+    chCtx.arc(x, y, r, 0, Math.PI * 2);
+    chCtx.fillStyle = grd;
+    chCtx.fill();
+    chCtx.beginPath();
+    chCtx.arc(x, y, 4, 0, Math.PI * 2);
+    chCtx.fillStyle = C.meeting;
+    chCtx.fill();
+  }
+
+  // Path
+  if (phase >= 1 && query.path && query.path.length > 1) {
+    drawAnimatedPath(chCtx, query.path);
+  }
+
+  // 2.5D
+  if (document.getElementById('toggle-2-5d').checked) apply2_5D(chCtx, settledFwd, 'ch-fwd');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Animated dashed path
+// ═══════════════════════════════════════════════════════════════════════════
+function drawAnimatedPath(ctx, pathNodes) {
+  if (pathNodes.length < 2) return;
+  pathDash = (pathDash + 0.3) % 20;
+  ctx.save();
+  ctx.setLineDash([10, 10]);
+  ctx.lineDashOffset = -pathDash;
+  ctx.strokeStyle = C.path;
+  ctx.lineWidth = 2.5;
+  ctx.shadowColor = C.path;
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  const [x0,y0] = nodeXY(pathNodes[0]);
+  ctx.moveTo(x0, y0);
+  for (let i = 1; i < pathNodes.length; i++) {
+    const [xi,yi] = nodeXY(pathNodes[i]);
+    ctx.lineTo(xi, yi);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2.5D effect: shift node Y based on CH level
+// ═══════════════════════════════════════════════════════════════════════════
+function apply2_5D(ctx, settled, type) {
+  if (!data) return;
+  const maxLevel = data.nodes.length;
+  for (const [node] of settled) {
+    const lv    = data.nodes[node].level;
+    const [x,y] = nodeXY(node);
+    const lift  = (lv / maxLevel) * 40;
+    ctx.beginPath();
+    ctx.arc(x, y - lift, 2, 0, Math.PI * 2);
+    ctx.fillStyle = type === 'ch-fwd' ? C.fwd + 'aa' : C.dij + 'aa';
+    ctx.fill();
+    ctx.strokeStyle = type === 'ch-fwd' ? C.fwd + '33' : C.dij + '33';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y - lift);
+    ctx.stroke();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Counters
+// ═══════════════════════════════════════════════════════════════════════════
+function updateCounters() {
+  if (!query) return;
+  const total = query.dijkstraEvents.length;
+  document.getElementById('dij-counter').textContent =
+      `Settled: ${settledDij.size} (${total ? Math.round(settledDij.size/total*100) : 0}%)`;
+
+  const fwdN = settledFwd.size, bwdN = settledBwd.size;
+  document.getElementById('ch-counter').textContent =
+      `Fwd: ${fwdN} / Bwd: ${bwdN}`;
+
+  const totalEvents = query.chEvents.length + query.dijkstraEvents.length;
+  const done        = chStep + dijStep;
+  document.getElementById('progress-bar').style.width =
+      (totalEvents ? Math.round(done / totalEvents * 100) : 0) + '%';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase info boxes
+// ═══════════════════════════════════════════════════════════════════════════
+const phaseMessages = {
+  dij: [
+    { trigger: 0,    msg: '→ Dijkstra expands <strong>all</strong> reachable nodes in order of cost' },
+    { trigger: 0.5,  msg: '→ The search "cloud" grows radially from the source…' },
+    { trigger: 0.9,  msg: '→ Approaching destination — almost the entire network was scanned' },
+  ],
+  ch: [
+    { trigger: 0,    msg: '→ CH forward search expands <strong>upward</strong> in the hierarchy' },
+    { trigger: 0.2,  msg: '→ Backward search expands <strong>downward</strong> toward source' },
+    { trigger: 0.6,  msg: '→ Stalled nodes (gray) are pruned — they cannot be on a shortest path' },
+    { trigger: 0.9,  msg: '→ <strong>Meeting point</strong> found — bidirectional paths merge here' },
+  ]
+};
+
+let lastInfoTriggerDij = -1;
+let lastInfoTriggerCH  = -1;
+
+function updateInfoBoxes() {
+  if (!query) return;
+  const dijFrac = query.dijkstraEvents.length ? dijStep / query.dijkstraEvents.length : 0;
+  const chFrac  = query.chEvents.length      ? chStep  / query.chEvents.length      : 0;
+
+  updateInfoBox('info-dij', phaseMessages.dij, dijFrac, 'lastDijTrig');
+  updateInfoBox('info-ch',  phaseMessages.ch,  chFrac,  'lastCHTrig');
+}
+
+function updateInfoBox(id, messages, frac, trigKey) {
+  const box = document.getElementById(id);
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (frac >= messages[i].trigger) {
+      if (box._lastMsg !== messages[i].msg) {
+        box._lastMsg = messages[i].msg;
+        box.innerHTML = messages[i].msg;
+        box.classList.add('visible');
+        clearTimeout(box._hideTimer);
+        box._hideTimer = setTimeout(() => box.classList.remove('visible'), 3500);
+      }
+      break;
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Animation loop
+// ═══════════════════════════════════════════════════════════════════════════
+let lastFrameTime = 0;
+function animFrame(ts) {
+  if (!playing) { animHandle = null; return; }
+  animHandle = requestAnimationFrame(animFrame);
+
+  const speed = parseInt(document.getElementById('speed-slider').value, 10);
+  const dijEvents = query.dijkstraEvents;
+  const chEvents  = query.chEvents;
+
+  // Interleave CH and Dijkstra steps proportionally
+  const totalSteps = chEvents.length + dijEvents.length;
+  if (totalSteps === 0) { stopPlayback(); return; }
+
+  let stepsLeft = speed;
+
+  while (stepsLeft > 0 && (chStep < chEvents.length || dijStep < dijEvents.length)) {
+    const chRatio  = chEvents.length  ? chStep  / chEvents.length  : 1;
+    const dijRatio = dijEvents.length ? dijStep / dijEvents.length : 1;
+
+    // Advance whichever is behind
+    if (chStep < chEvents.length && chRatio <= dijRatio) {
+      const ev = chEvents[chStep++];
+      processCHEvent(ev);
+    } else if (dijStep < dijEvents.length) {
+      const ev = dijEvents[dijStep++];
+      processDijEvent(ev);
+    } else if (chStep < chEvents.length) {
+      const ev = chEvents[chStep++];
+      processCHEvent(ev);
+    }
+    stepsLeft--;
+  }
+
+  if (chStep >= chEvents.length && dijStep >= dijEvents.length) {
+    phase = 1;
+    showFinalOverlay();
+    if (recording) stopRecording();
+    stopPlayback();
+  }
+
+  redrawAll();
+  updateCounters();
+  updateInfoBoxes();
+  bumpRecordFrame();
+}
+
+function processCHEvent(ev) {
+  if (ev.dir === 'fwd') {
+    settledFwd.set(ev.node, { cost: ev.cost, parent: ev.parent, stalled: ev.stalled });
+  } else {
+    settledBwd.set(ev.node, { cost: ev.cost, parent: ev.parent, stalled: ev.stalled });
+  }
+  if (ev.meeting) meetingNode = ev.node;
+}
+
+function processDijEvent(ev) {
+  settledDij.set(ev.node, { cost: ev.cost, parent: ev.parent ?? -1 });
+}
+
+function showFinalOverlay() {
+  const dijN = settledDij.size;
+  const chN  = settledFwd.size + settledBwd.size;
+  const pct  = dijN > 0 ? Math.round((1 - chN / dijN) * 100) : 0;
+  const times = dijN > 0 ? (dijN / Math.max(1, chN)).toFixed(1) : '-';
+  document.getElementById('saving-pct').textContent = pct + '% less search space';
+  document.getElementById('dij-total').textContent  = dijN.toLocaleString();
+  document.getElementById('ch-total').textContent   = chN.toLocaleString();
+  document.getElementById('ch-times').textContent   = times;
+  document.getElementById('final-overlay').classList.add('visible');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Playback controls
+// ═══════════════════════════════════════════════════════════════════════════
+function startPlayback() {
+  playing = true;
+  document.getElementById('btn-play').textContent = '⏸ Pause';
+  if (!animHandle) animHandle = requestAnimationFrame(animFrame);
+}
+
+function stopPlayback() {
+  playing = false;
+  document.getElementById('btn-play').textContent = '▶ Play';
+}
+
+function resetVisualization() {
+  stopPlayback();
+  chStep = dijStep = 0;
+  phase  = 0;
+  meetingNode = -1;
+  pathDash    = 0;
+  settledDij.clear();
+  settledFwd.clear();
+  settledBwd.clear();
+  document.getElementById('final-overlay').classList.remove('visible');
+  if (data) {
+    renderBaseMaps();
+    redrawAll();
+    updateCounters();
+  }
+}
+
+document.getElementById('btn-play').addEventListener('click', () => {
+  if (playing) stopPlayback(); else startPlayback();
+});
+
+document.getElementById('btn-step').addEventListener('click', () => {
+  if (!query) return;
+  const chEv  = query.chEvents;
+  const dijEv = query.dijkstraEvents;
+  const chR   = chEv.length  ? chStep  / chEv.length  : 1;
+  const dijR  = dijEv.length ? dijStep / dijEv.length : 1;
+  if (chStep < chEv.length && chR <= dijR) {
+    processCHEvent(chEv[chStep++]);
+  } else if (dijStep < dijEv.length) {
+    processDijEvent(dijEv[dijStep++]);
+  } else if (chStep < chEv.length) {
+    processCHEvent(chEv[chStep++]);
+  }
+  redrawAll(); updateCounters();
+});
+
+document.getElementById('btn-reset').addEventListener('click', resetVisualization);
+
+document.getElementById('speed-slider').addEventListener('input', function() {
+  document.getElementById('speed-val').textContent = this.value + '×';
+});
+
+document.getElementById('toggle-2-5d').addEventListener('change', redrawAll);
+
+document.getElementById('final-close').addEventListener('click', () => {
+  document.getElementById('final-overlay').classList.remove('visible');
+});
+
+// Progress bar seek
+document.getElementById('progress-bar-wrap').addEventListener('click', function(e) {
+  if (!query) return;
+  const rect = this.getBoundingClientRect();
+  const frac = (e.clientX - rect.left) / rect.width;
+  const total = query.chEvents.length + query.dijkstraEvents.length;
+  seekTo(Math.round(frac * total));
+});
+
+function seekTo(targetTotal) {
+  resetVisualization();
+  if (!query) return;
+  let t = 0;
+  const chEv  = query.chEvents;
+  const dijEv = query.dijkstraEvents;
+  while (t < targetTotal && (chStep < chEv.length || dijStep < dijEv.length)) {
+    const chR   = chEv.length  ? chStep  / chEv.length  : 1;
+    const dijR  = dijEv.length ? dijStep / dijEv.length : 1;
+    if (chStep < chEv.length && chR <= dijR) processCHEvent(chEv[chStep++]);
+    else if (dijStep < dijEv.length) processDijEvent(dijEv[dijStep++]);
+    else if (chStep < chEv.length) processCHEvent(chEv[chStep++]);
+    t++;
+  }
+  redrawAll(); updateCounters();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Cinema mode
+// ═══════════════════════════════════════════════════════════════════════════
+document.getElementById('btn-cinema').addEventListener('click', () => {
+  cinemaMode = !cinemaMode;
+  const c = document.getElementById('controls');
+  if (cinemaMode) {
+    c.classList.add('cinema-mode');
+    document.getElementById('btn-cinema').textContent = '🎬 Exit Cinema';
+    resetVisualization();
+    startPlayback();
+  } else {
+    c.classList.remove('cinema-mode');
+    document.getElementById('btn-cinema').textContent = '🎬 Cinema';
+    stopPlayback();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Video recording (MediaRecorder + captureStream)
+// ═══════════════════════════════════════════════════════════════════════════
+function setupCompositeCanvas() {
+  const W = dijCanvas.width, H = dijCanvas.height;
+  compCanvas = document.createElement('canvas');
+  compCanvas.width  = W * 2;
+  compCanvas.height = H;
+  compCtx = compCanvas.getContext('2d');
+}
+
+function bumpRecordFrame() {
+  if (!recording || !compCtx) return;
+  compCtx.drawImage(dijCanvas, 0, 0);
+  compCtx.drawImage(chCanvas, dijCanvas.width, 0);
+}
+
+document.getElementById('btn-record').addEventListener('click', () => {
+  if (recording) { stopRecording(); return; }
+  startRecording();
+});
+
+function startRecording() {
+  setupCompositeCanvas();
+  const stream = compCanvas.captureStream(60);
+  const mime   = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9' : 'video/webm';
+  mediaRec  = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+  recChunks = [];
+  mediaRec.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
+  mediaRec.onstop = () => {
+    const blob = new Blob(recChunks, { type: mime });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'ch-router-berlin.webm'; a.click();
+    URL.revokeObjectURL(url);
+  };
+  mediaRec.start(100);
+  recording = true;
+  const btn = document.getElementById('btn-record');
+  btn.textContent = '⏹ Stop';
+  btn.classList.add('record-active');
+  resetVisualization();
+  startPlayback();
+}
+
+function stopRecording() {
+  if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
+  recording = false;
+  const btn = document.getElementById('btn-record');
+  btn.textContent = '⏺ Record';
+  btn.classList.remove('record-active');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OD selector
+// ═══════════════════════════════════════════════════════════════════════════
+document.getElementById('od-select').addEventListener('change', function() {
+  queryIdx = parseInt(this.value, 10);
+  query = data.queries[queryIdx];
+  resetVisualization();
+});
+
+function populateODSelector(odPairs) {
+  const sel = document.getElementById('od-select');
+  sel.innerHTML = '';
+  odPairs.forEach((od, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = od.name;
+    sel.appendChild(opt);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Data loading
+// ═══════════════════════════════════════════════════════════════════════════
+function loadData(json) {
+  data = json;
+  query = data.queries[0];
+  queryIdx = 0;
+
+  populateODSelector(data.odPairs);
+
+  const W = dijCanvas.getBoundingClientRect().width;
+  const H = dijCanvas.getBoundingClientRect().height;
+  dijCanvas.width = chCanvas.width = Math.floor(W) || 800;
+  dijCanvas.height = chCanvas.height = Math.floor(H) || 500;
+
+  buildProjection(dijCanvas.width, dijCanvas.height);
+  renderBaseMaps();
+  resetVisualization();
+
+  document.getElementById('loading').style.display = 'none';
+}
+
+// ── fetch ch-query-data.json ──
+fetch('ch-query-data.json')
+  .then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then(json => loadData(json))
+  .catch(err => {
+    const msg = document.getElementById('loading-msg');
+    msg.innerHTML = `
+      <strong style="color:#f85149">Could not load ch-query-data.json</strong><br><br>
+      Run the Java exporter first:<br>
+      <code style="font-size:11px;background:#21262d;padding:2px 6px;border-radius:4px">
+        cd matsim-libs &amp;&amp; mvn exec:java -pl matsim \\<br>
+        &nbsp;&nbsp;-Dexec.mainClass=org.matsim.core.router.speedy.CHQueryExporter
+      </code><br><br>
+      Then open this HTML file from the <code>matsim/tools/ch-viz/</code> directory<br>
+      (or via a local web server).
+    `;
+    console.error('Failed to load ch-query-data.json:', err);
+  });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Keyboard shortcuts
+// ═══════════════════════════════════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (e.key === ' ') { e.preventDefault(); document.getElementById('btn-play').click(); }
+  if (e.key === 'r') resetVisualization();
+  if (e.key === 'ArrowRight') document.getElementById('btn-step').click();
+});
+</script>
+</body>
+</html>
