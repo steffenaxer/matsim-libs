@@ -81,23 +81,23 @@ public class CHQueryExporter {
     private static final Logger LOG = LogManager.getLogger(CHQueryExporter.class);
 
     // OD pairs defined as GK4 coordinates [startX, startY, endX, endY]
-    // These approximate well-known Berlin locations in the GK4 coordinate system.
+    // Long-distance pairs across the full Berlin network for impressive visualizations.
     private static final double[][] OD_COORDS_GK4 = {
-        // Kreuzberg (Mehringdamm) → Charlottenburg (Schloss)
-        {4595200, 5816500, 4585800, 5822500},
-        // Mitte (Alexanderplatz) → Neukölln
-        {4600000, 5822000, 4598000, 5812000},
-        // Spandau → Lichtenberg (long cross-city)
-        {4578000, 5822000, 4608000, 5821000},
-        // Prenzlauer Berg → Tempelhof (north-south)
-        {4601000, 5826000, 4598000, 5810000},
+        // Spandau (west) → Marzahn-Hellersdorf (east) — full cross-city
+        {4576000, 5822000, 4615000, 5821000},
+        // Frohnau (north) → Lichtenrade (south) — full north-south traverse
+        {4596000, 5837000, 4600000, 5803000},
+        // Wannsee (southwest) → Karow (northeast) — diagonal across Berlin
+        {4573000, 5810000, 4609000, 5837000},
+        // Tegel (northwest) → Adlershof (southeast) — long diagonal
+        {4582000, 5831000, 4610000, 5808000},
     };
 
     private static final String[] OD_NAMES = {
-        "Kreuzberg → Charlottenburg",
-        "Mitte → Neukölln",
-        "Spandau → Lichtenberg",
-        "Prenzlauer Berg → Tempelhof",
+        "Spandau → Marzahn (West-East)",
+        "Frohnau → Lichtenrade (North-South)",
+        "Wannsee → Karow (SW-NE Diagonal)",
+        "Tegel → Adlershof (NW-SE Diagonal)",
     };
 
     public static void main(String[] args) throws Exception {
