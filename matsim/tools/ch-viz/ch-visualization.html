@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>CH Router Visualization — iteratively.io</title>
+<title>CH vs SpeedyALT Visualization — iteratively.io</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -135,7 +135,7 @@ body {
   font-weight: 500;
 }
 
-.panel-dijkstra .panel-title { color: var(--dij); }
+.panel-alt      .panel-title { color: var(--dij); }
 .panel-ch       .panel-title { color: var(--fwd); }
 
 .divider {
@@ -395,7 +395,7 @@ body {
 <!-- Header -->
 <div id="header">
   <div>
-    <h1>Contraction Hierarchies vs Dijkstra</h1>
+    <h1>Contraction Hierarchies vs SpeedyALT</h1>
     <div class="subtitle">Berlin Network — Search Space Comparison</div>
   </div>
   <div id="od-selector">
@@ -406,16 +406,16 @@ body {
 
 <!-- Map row -->
 <div id="canvas-row">
-  <!-- Left: Dijkstra -->
-  <div class="panel panel-dijkstra" id="panel-left">
+  <!-- Left: SpeedyALT -->
+  <div class="panel panel-alt" id="panel-left">
     <div class="panel-header">
-      <span class="panel-title">Dijkstra</span>
-      <span class="panel-counter" id="dij-counter">Settled: 0</span>
+      <span class="panel-title">SpeedyALT</span>
+      <span class="panel-counter" id="alt-counter">Settled: 0</span>
     </div>
     <div class="map-wrap">
       <div id="map-dij"></div>
       <canvas id="canvas-dij"></canvas>
-      <div class="info-box" id="info-dij"></div>
+      <div class="info-box" id="info-alt"></div>
       <div class="watermark">iteratively.io</div>
     </div>
   </div>
@@ -465,7 +465,7 @@ body {
     <h2>Search Space Comparison</h2>
     <div class="saving" id="saving-pct">-</div>
     <div class="details">
-      Dijkstra settled: <span id="dij-total">-</span> nodes<br>
+      SpeedyALT settled: <span id="alt-total">-</span> nodes<br>
       CH settled: <span id="ch-total">-</span> nodes<br>
       <span style="color:var(--path);margin-top:8px;display:block;font-weight:600">CH is <span id="ch-times">-</span>× more efficient</span>
     </div>
@@ -504,14 +504,16 @@ let mediaRec    = null;
 let recChunks   = [];
 
 let chStep      = 0;
-let dijStep     = 0;
-let phase       = 0;       // 0=search, 1=path/done
+let altStep     = 0;
+let phase       = 0;       // 0=search, 1=path reveal, 2=final overlay
 let animHandle  = null;
+let pathRevealStart  = 0;  // timestamp when route path first appears
+let finalOverlayStart = 0; // timestamp when final overlay appears
 
 // History for backward stepping: array of {type, idx} recording processing order
 let stepHistory = [];
 
-const settledDij  = new Map();
+const settledAlt  = new Map();
 const settledFwd  = new Map();
 const settledBwd  = new Map();
 let   meetingNode = -1;
@@ -524,7 +526,7 @@ const TILT_CSS = 'perspective(1200px) rotateX(35deg) scale(0.92)';
 // ═══════════════════════════════════════════════════════════════════════════
 // Leaflet maps (WGS84 tile background)
 // ═══════════════════════════════════════════════════════════════════════════
-let mapDij = null;
+let mapAlt = null;
 let mapCH  = null;
 let syncing = false;  // guard against recursive sync
 
@@ -537,13 +539,13 @@ function initMaps() {
     maxZoom: 18,
     minZoom: 8,
   };
-  mapDij = L.map('map-dij', opts);
+  mapAlt = L.map('map-dij', opts);
   mapCH  = L.map('map-ch', opts);
 
   // CartoDB Dark Matter — natively dark tiles, no CSS filter hack needed
   const tileUrl = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
   const tileOpts = { attribution: '', maxZoom: 20, subdomains: 'abcd', crossOrigin: 'anonymous' };
-  L.tileLayer(tileUrl, tileOpts).addTo(mapDij);
+  L.tileLayer(tileUrl, tileOpts).addTo(mapAlt);
   L.tileLayer(tileUrl, tileOpts).addTo(mapCH);
 
   // Synchronized pan/zoom
@@ -554,23 +556,23 @@ function initMaps() {
     syncing = false;
     repositionCanvases();
   }
-  mapDij.on('move zoom', () => syncMap(mapDij, mapCH));
-  mapCH.on('move zoom',  () => syncMap(mapCH, mapDij));
-  mapDij.on('moveend zoomend', () => { repositionCanvases(); redrawAll(); });
+  mapAlt.on('move zoom', () => syncMap(mapAlt, mapCH));
+  mapCH.on('move zoom',  () => syncMap(mapCH, mapAlt));
+  mapAlt.on('moveend zoomend', () => { repositionCanvases(); redrawAll(); });
   mapCH.on('moveend zoomend',  () => { repositionCanvases(); redrawAll(); });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Canvas overlays on top of Leaflet
 // ═══════════════════════════════════════════════════════════════════════════
-const dijCanvas = document.getElementById('canvas-dij');
+const altCanvas = document.getElementById('canvas-dij');
 const chCanvas  = document.getElementById('canvas-ch');
-const dijCtx    = dijCanvas.getContext('2d');
+const altCtx    = altCanvas.getContext('2d');
 const chCtx     = chCanvas.getContext('2d');
 
 // Make canvases overlay the Leaflet maps
 (function styleCanvases() {
-  for (const c of [dijCanvas, chCanvas]) {
+  for (const c of [altCanvas, chCanvas]) {
     c.style.position = 'absolute';
     c.style.inset = '0';
     c.style.width = '100%';
@@ -584,24 +586,24 @@ let compCanvas = null;
 let compCtx    = null;
 
 function repositionCanvases() {
-  const mapWrapDij = dijCanvas.parentElement;
+  const mapWrapDij = altCanvas.parentElement;
   const mapWrapCH  = chCanvas.parentElement;
   const rD = mapWrapDij.getBoundingClientRect();
   const rC = mapWrapCH.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  dijCanvas.width  = Math.floor(rD.width * dpr);
-  dijCanvas.height = Math.floor(rD.height * dpr);
+  altCanvas.width  = Math.floor(rD.width * dpr);
+  altCanvas.height = Math.floor(rD.height * dpr);
   chCanvas.width   = Math.floor(rC.width * dpr);
   chCanvas.height  = Math.floor(rC.height * dpr);
-  dijCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  altCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   chCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Projection: WGS84 lat/lon → pixel via Leaflet
 // ═══════════════════════════════════════════════════════════════════════════
-function projectDij(lon, lat) {
-  const pt = mapDij.latLngToContainerPoint([lat, lon]);
+function projectAlt(lon, lat) {
+  const pt = mapAlt.latLngToContainerPoint([lat, lon]);
   return [pt.x, pt.y];
 }
 function projectCH(lon, lat) {
@@ -609,9 +611,9 @@ function projectCH(lon, lat) {
   return [pt.x, pt.y];
 }
 
-function nodeXY_dij(idx) {
+function nodeXY_alt(idx) {
   const n = data.nodes[idx];
-  return projectDij(n.lon, n.lat);
+  return projectAlt(n.lon, n.lat);
 }
 function nodeXY_ch(idx) {
   const n = data.nodes[idx];
@@ -634,7 +636,7 @@ function fitToQuery() {
     }
   }
   // Generous padding so the search space expansion is visible
-  mapDij.fitBounds(bounds.pad(0.5));
+  mapAlt.fitBounds(bounds.pad(0.5));
   // CH map syncs automatically
 }
 
@@ -680,48 +682,48 @@ function drawODMarkers(ctx, nodeXY) {
 // Full redraw
 // ═══════════════════════════════════════════════════════════════════════════
 function redrawAll() {
-  drawDijkstraCanvas();
+  drawAltCanvas();
   drawCHCanvas();
   updateCounters();
 }
 
-function drawDijkstraCanvas() {
-  const W = dijCanvas.width / (window.devicePixelRatio || 1);
-  const H = dijCanvas.height / (window.devicePixelRatio || 1);
-  dijCtx.clearRect(0, 0, W, H);
+function drawAltCanvas() {
+  const W = altCanvas.width / (window.devicePixelRatio || 1);
+  const H = altCanvas.height / (window.devicePixelRatio || 1);
+  altCtx.clearRect(0, 0, W, H);
   if (!data) return;
 
-  drawNetworkEdges(dijCtx, nodeXY_dij);
+  drawNetworkEdges(altCtx, nodeXY_alt);
 
   // Settled edges
-  dijCtx.strokeStyle = C.dij + '55';
-  dijCtx.lineWidth = 0.8;
-  dijCtx.beginPath();
-  for (const [node, st] of settledDij) {
+  altCtx.strokeStyle = C.dij + '55';
+  altCtx.lineWidth = 0.8;
+  altCtx.beginPath();
+  for (const [node, st] of settledAlt) {
     if (st.parent < 0) continue;
-    const [x1,y1] = nodeXY_dij(node);
-    const [x2,y2] = nodeXY_dij(st.parent);
-    dijCtx.moveTo(x1,y1); dijCtx.lineTo(x2,y2);
+    const [x1,y1] = nodeXY_alt(node);
+    const [x2,y2] = nodeXY_alt(st.parent);
+    altCtx.moveTo(x1,y1); altCtx.lineTo(x2,y2);
   }
-  dijCtx.stroke();
+  altCtx.stroke();
 
   // Settled nodes
-  for (const [node] of settledDij) {
-    const [x,y] = nodeXY_dij(node);
-    dijCtx.beginPath();
-    dijCtx.arc(x, y, 2, 0, Math.PI * 2);
-    dijCtx.fillStyle = C.dij;
-    dijCtx.fill();
+  for (const [node] of settledAlt) {
+    const [x,y] = nodeXY_alt(node);
+    altCtx.beginPath();
+    altCtx.arc(x, y, 2, 0, Math.PI * 2);
+    altCtx.fillStyle = C.dij;
+    altCtx.fill();
   }
 
   // Path
   if (phase >= 1 && query.path && query.path.length > 1) {
-    drawAnimatedPath(dijCtx, query.path, nodeXY_dij);
+    drawAnimatedPath(altCtx, query.path, nodeXY_alt);
   }
 
-  drawODMarkers(dijCtx, nodeXY_dij);
+  drawODMarkers(altCtx, nodeXY_alt);
 
-  if (is2_5D) apply2_5D(dijCtx, settledDij, 'dij', nodeXY_dij);
+  if (is2_5D) apply2_5D(altCtx, settledAlt, 'dij', nodeXY_alt);
 }
 
 function drawCHCanvas() {
@@ -868,17 +870,17 @@ function toggle2_5D(on) {
 const stepSlider = document.getElementById('step-slider');
 
 function totalEvents() {
-  return query ? query.chEvents.length + query.dijkstraEvents.length : 0;
+  return query ? query.chEvents.length + (query.speedyALTEvents || query.dijkstraEvents).length : 0;
 }
 function currentTotal() {
-  return chStep + dijStep;
+  return chStep + altStep;
 }
 
 function updateCounters() {
   if (!query) return;
-  const total = query.dijkstraEvents.length;
-  document.getElementById('dij-counter').textContent =
-      `Settled: ${settledDij.size} (${total ? Math.round(settledDij.size/total*100) : 0}%)`;
+  const total = (query.speedyALTEvents || query.dijkstraEvents).length;
+  document.getElementById('alt-counter').textContent =
+      `Settled: ${settledAlt.size} (${total ? Math.round(settledAlt.size/total*100) : 0}%)`;
 
   document.getElementById('ch-counter').textContent =
       `Fwd: ${settledFwd.size} / Bwd: ${settledBwd.size}`;
@@ -894,8 +896,8 @@ function updateCounters() {
 // Phase info boxes
 // ═══════════════════════════════════════════════════════════════════════════
 const phaseMessages = {
-  dij: [
-    { trigger: 0,    msg: '→ Dijkstra expands <strong>all</strong> reachable nodes in order of cost' },
+  alt: [
+    { trigger: 0,    msg: '→ SpeedyALT uses <strong>landmarks</strong> to estimate distance — A* with ALT heuristic' },
     { trigger: 0.5,  msg: '→ The search cloud grows radially from the source...' },
     { trigger: 0.9,  msg: '→ Approaching destination — almost the entire network was scanned' },
   ],
@@ -909,9 +911,9 @@ const phaseMessages = {
 
 function updateInfoBoxes() {
   if (!query) return;
-  const dijFrac = query.dijkstraEvents.length ? dijStep / query.dijkstraEvents.length : 0;
+  const dijFrac = (query.speedyALTEvents || query.dijkstraEvents).length ? altStep / (query.speedyALTEvents || query.dijkstraEvents).length : 0;
   const chFrac  = query.chEvents.length      ? chStep  / query.chEvents.length      : 0;
-  updateInfoBox('info-dij', phaseMessages.dij, dijFrac);
+  updateInfoBox('info-alt', phaseMessages.alt, dijFrac);
   updateInfoBox('info-ch',  phaseMessages.ch,  chFrac);
 }
 
@@ -943,30 +945,30 @@ function processCHEvent(ev) {
   if (ev.meeting) meetingNode = ev.node;
 }
 
-function processDijEvent(ev) {
-  settledDij.set(ev.node, { cost: ev.cost, parent: ev.parent ?? -1 });
+function processAltEvent(ev) {
+  settledAlt.set(ev.node, { cost: ev.cost, parent: ev.parent ?? -1 });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Step forward one event (interleaved CH/Dijkstra)
+// Step forward one event (interleaved CH/SpeedyALT)
 // ═══════════════════════════════════════════════════════════════════════════
 function stepForward() {
   if (!query) return false;
   const chEv  = query.chEvents;
-  const dijEv = query.dijkstraEvents;
-  if (chStep >= chEv.length && dijStep >= dijEv.length) return false;
+  const dijEv = query.speedyALTEvents || query.dijkstraEvents;
+  if (chStep >= chEv.length && altStep >= dijEv.length) return false;
 
   const chR  = chEv.length  ? chStep  / chEv.length  : 1;
-  const dijR = dijEv.length ? dijStep / dijEv.length : 1;
+  const dijR = dijEv.length ? altStep / dijEv.length : 1;
 
   if (chStep < chEv.length && chR <= dijR) {
     processCHEvent(chEv[chStep]);
     stepHistory.push({ type: 'ch', idx: chStep });
     chStep++;
-  } else if (dijStep < dijEv.length) {
-    processDijEvent(dijEv[dijStep]);
-    stepHistory.push({ type: 'dij', idx: dijStep });
-    dijStep++;
+  } else if (altStep < dijEv.length) {
+    processAltEvent(dijEv[altStep]);
+    stepHistory.push({ type: 'dij', idx: altStep });
+    altStep++;
   } else if (chStep < chEv.length) {
     processCHEvent(chEv[chStep]);
     stepHistory.push({ type: 'ch', idx: chStep });
@@ -989,11 +991,13 @@ function stepBackward() {
 // ═══════════════════════════════════════════════════════════════════════════
 function seekTo(targetTotal) {
   // Reset state without touching maps
-  chStep = dijStep = 0;
+  chStep = altStep = 0;
   phase  = 0;
   meetingNode = -1;
   pathDash    = 0;
-  settledDij.clear();
+  pathRevealStart   = 0;
+  finalOverlayStart = 0;
+  settledAlt.clear();
   settledFwd.clear();
   settledBwd.clear();
   stepHistory = [];
@@ -1006,7 +1010,7 @@ function seekTo(targetTotal) {
     t++;
   }
 
-  if (chStep >= query.chEvents.length && dijStep >= query.dijkstraEvents.length) {
+  if (chStep >= query.chEvents.length && altStep >= (query.speedyALTEvents || query.dijkstraEvents).length) {
     phase = 1;
   }
 
@@ -1029,10 +1033,27 @@ function animFrame() {
     stepsLeft--;
   }
 
-  if (chStep >= query.chEvents.length && dijStep >= query.dijkstraEvents.length) {
-    phase = 1;
+  if (chStep >= query.chEvents.length && altStep >= (query.speedyALTEvents || query.dijkstraEvents).length && phase === 0) {
+    phase = 1;  // Path now renders on both canvases
+    // Continue animating for ~2 seconds so the route is visible before showing final stats
+    pathRevealStart = Date.now();
+  }
+
+  // After 2 seconds of showing the path, display final overlay
+  if (phase === 1 && pathRevealStart > 0 && Date.now() - pathRevealStart > 2000 && phase < 2) {
+    phase = 2;
     showFinalOverlay();
-    if (recording) stopRecording();
+    // Keep recording for 3 more seconds to capture the final overlay
+    if (recording) {
+      finalOverlayStart = Date.now();
+    } else {
+      stopPlayback();
+    }
+  }
+
+  // Stop recording 3s after final overlay appears
+  if (recording && phase === 2 && finalOverlayStart > 0 && Date.now() - finalOverlayStart > 3000) {
+    stopRecording();
     stopPlayback();
   }
 
@@ -1043,12 +1064,12 @@ function animFrame() {
 }
 
 function showFinalOverlay() {
-  const dijN  = settledDij.size;
+  const dijN  = settledAlt.size;
   const chN   = settledFwd.size + settledBwd.size;
   const pct   = dijN > 0 ? Math.round((1 - chN / dijN) * 100) : 0;
   const times = dijN > 0 ? (dijN / Math.max(1, chN)).toFixed(1) : '-';
   document.getElementById('saving-pct').textContent  = pct + '% less search space';
-  document.getElementById('dij-total').textContent   = dijN.toLocaleString();
+  document.getElementById('alt-total').textContent   = dijN.toLocaleString();
   document.getElementById('ch-total').textContent    = chN.toLocaleString();
   document.getElementById('ch-times').textContent    = times;
   document.getElementById('final-overlay').classList.add('visible');
@@ -1130,7 +1151,7 @@ document.getElementById('btn-cinema').addEventListener('click', () => {
 // Video recording — composites map tiles + canvas overlays + labels
 // ═══════════════════════════════════════════════════════════════════════════
 function setupCompositeCanvas() {
-  const mapWrapDij = dijCanvas.parentElement;
+  const mapWrapDij = altCanvas.parentElement;
   const rD = mapWrapDij.getBoundingClientRect();
   const W = Math.floor(rD.width);
   const H = Math.floor(rD.height);
@@ -1186,7 +1207,7 @@ function drawFinalOverlayToCanvas(ctx, W, H) {
   ctx.fillText(document.getElementById('saving-pct').textContent, W / 2, cy + 95);
   ctx.font = '500 13px Inter, system-ui';
   ctx.fillStyle = '#cbd5e1';
-  ctx.fillText('Dijkstra settled: ' + document.getElementById('dij-total').textContent + ' nodes', W / 2, cy + 130);
+  ctx.fillText('SpeedyALT settled: ' + document.getElementById('alt-total').textContent + ' nodes', W / 2, cy + 130);
   ctx.fillText('CH settled: ' + document.getElementById('ch-total').textContent + ' nodes', W / 2, cy + 150);
   ctx.fillStyle = '#34d399';
   ctx.font = '600 13px Inter, system-ui';
@@ -1194,9 +1215,39 @@ function drawFinalOverlayToCanvas(ctx, W, H) {
   ctx.textAlign = 'start';
 }
 
+function drawInfoBoxToCanvas(ctx, boxId, offsetX, panelW, panelH) {
+  const box = document.getElementById(boxId);
+  if (!box || !box.classList.contains('visible')) return;
+  const text = box.textContent.trim();
+  if (!text) return;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur = 8;
+  // Measure text to draw a pill-shaped background
+  ctx.font = '500 12px Inter, system-ui';
+  const tw = ctx.measureText(text).width;
+  const bw = tw + 36, bh = 32;
+  const bx = offsetX + (panelW - bw) / 2;
+  const by = panelH - 24 - bh;
+  ctx.fillStyle = 'rgba(18, 21, 30, 0.92)';
+  ctx.beginPath();
+  const r = 10;
+  ctx.moveTo(bx + r, by);
+  ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
+  ctx.arcTo(bx + bw, by + bh, bx, by + bh, r);
+  ctx.arcTo(bx, by + bh, bx, by, r);
+  ctx.arcTo(bx, by, bx + bw, by, r);
+  ctx.fill();
+  ctx.fillStyle = '#cbd5e1';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, offsetX + panelW / 2, by + bh / 2 + 4);
+  ctx.textAlign = 'start';
+  ctx.restore();
+}
+
 function bumpRecordFrame() {
   if (!recording || !compCtx) return;
-  const mapWrapDij = dijCanvas.parentElement;
+  const mapWrapDij = altCanvas.parentElement;
   const rD = mapWrapDij.getBoundingClientRect();
   const W = Math.floor(rD.width);
   const H = Math.floor(rD.height);
@@ -1207,11 +1258,11 @@ function bumpRecordFrame() {
   compCtx.fillRect(0, 0, compCanvas.width, compCanvas.height);
 
   // Map tiles
-  drawMapTilesToCanvas(compCtx, mapDij, 0, 0, W, H);
+  drawMapTilesToCanvas(compCtx, mapAlt, 0, 0, W, H);
   drawMapTilesToCanvas(compCtx, mapCH, W + 1, 0, W, H);
 
   // Canvas overlays (network + search + path)
-  compCtx.drawImage(dijCanvas, 0, 0, dijCanvas.width, dijCanvas.height, 0, 0, W, H);
+  compCtx.drawImage(altCanvas, 0, 0, altCanvas.width, altCanvas.height, 0, 0, W, H);
   compCtx.drawImage(chCanvas, 0, 0, chCanvas.width, chCanvas.height, W + 1, 0, W, H);
 
   // Divider
@@ -1224,10 +1275,10 @@ function bumpRecordFrame() {
   compCtx.shadowBlur = 6;
   compCtx.font = 'bold 14px Inter, system-ui';
   compCtx.fillStyle = C.dij;
-  compCtx.fillText('Dijkstra', 12, 24);
+  compCtx.fillText('SpeedyALT', 12, 24);
   compCtx.fillStyle = '#8892a4';
   compCtx.font = '500 12px Inter, system-ui';
-  compCtx.fillText(document.getElementById('dij-counter').textContent, 12, 42);
+  compCtx.fillText(document.getElementById('alt-counter').textContent, 12, 42);
   compCtx.font = 'bold 14px Inter, system-ui';
   compCtx.fillStyle = C.fwd;
   compCtx.fillText('Contraction Hierarchies', W + 13, 24);
@@ -1235,6 +1286,10 @@ function bumpRecordFrame() {
   compCtx.font = '500 12px Inter, system-ui';
   compCtx.fillText(document.getElementById('ch-counter').textContent, W + 13, 42);
   compCtx.restore();
+
+  // Info-box overlays (explanatory text at bottom of each panel)
+  drawInfoBoxToCanvas(compCtx, 'info-alt', 0, W, H);
+  drawInfoBoxToCanvas(compCtx, 'info-ch', W + 1, W, H);
 
   // Final overlay if visible
   if (document.getElementById('final-overlay').classList.contains('visible')) {
@@ -1313,7 +1368,7 @@ function loadData(json) {
 
   // Small delay to let Leaflet measure container
   requestAnimationFrame(() => {
-    mapDij.invalidateSize();
+    mapAlt.invalidateSize();
     mapCH.invalidateSize();
     fitToQuery();
     repositionCanvases();

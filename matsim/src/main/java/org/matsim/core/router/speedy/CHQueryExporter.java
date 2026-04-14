@@ -41,9 +41,9 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Standalone tool that runs an instrumented CH query and Dijkstra query on the
+ * Standalone tool that runs an instrumented CH query and SpeedyALT query on the
  * Berlin network and exports the step-by-step search state as JSON for the
- * {@code ch-visualization.html} interactive D3.js visualization.
+ * {@code ch-visualization.html} interactive visualization.
  *
  * <h3>Output format ({@code ch-query-data.json})</h3>
  * <pre>
@@ -56,7 +56,7 @@ import java.util.Locale;
  *       "odIndex": 0,
  *       "startNode": 42, "endNode": 7,
  *       "chEvents":      [ { "step":0, "dir":"fwd", "node":42, "cost":0.0, "parent":-1, "stalled":false, "meeting":false }, ... ],
- *       "dijkstraEvents":[ { "step":0, "node":42, "cost":0.0 }, ... ],
+ *       "speedyALTEvents":[ { "step":0, "node":42, "cost":0.0, "parent":-1 }, ... ],
  *       "path":          [ nodeIdx, ... ],
  *       "pathLinks":     [ { "from": nodeIdx, "to": nodeIdx }, ... ],
  *       "shortcutTree":  { "gIdx":5, "isShortcut":true, "children":[...] }
@@ -111,10 +111,13 @@ public class CHQueryExporter {
         Network network = NetworkUtils.readNetwork(networkFile);
         LOG.info("Network loaded: {} nodes, {} links", network.getNodes().size(), network.getLinks().size());
 
-        LOG.info("Building SpeedyGraph with spatial ordering...");
-        SpeedyGraph baseGraph = SpeedyGraphBuilder.buildWithSpatialOrdering(network);
+        LOG.info("Building SpeedyGraph (identity ordering)...");
+        SpeedyGraph baseGraph = SpeedyGraphBuilder.build(network);
 
         FreespeedTravelTimeAndDisutility tc = new FreespeedTravelTimeAndDisutility(new ScoringConfigGroup());
+
+        LOG.info("Building SpeedyALTData (16 landmarks)...");
+        SpeedyALTData altData = new SpeedyALTData(baseGraph, Math.min(16, baseGraph.nodeCount), tc, 4);
 
         LOG.info("Building CHGraph (this may take a minute for the Berlin network)...");
         CHGraph chGraph = new CHBuilder(baseGraph, tc).build();
@@ -130,7 +133,7 @@ public class CHQueryExporter {
         int[][] odNodePairs = resolveODPairs(baseGraph, network, transform);
 
         LOG.info("Exporting query data to: {}", outputFile);
-        exportJSON(baseGraph, chGraph, transform, odNodePairs, outputFile);
+        exportJSON(baseGraph, chGraph, altData, transform, odNodePairs, outputFile);
         LOG.info("Done. Output: {}", outputFile);
     }
 
@@ -174,7 +177,7 @@ public class CHQueryExporter {
     // JSON export
     // -----------------------------------------------------------------------
 
-    private static void exportJSON(SpeedyGraph graph, CHGraph chGraph,
+    private static void exportJSON(SpeedyGraph graph, CHGraph chGraph, SpeedyALTData altData,
                                     CoordinateTransformation transform,
                                     int[][] odPairs, String outputFile) throws IOException {
         try (PrintWriter pw = new PrintWriter(new FileWriter(outputFile))) {
@@ -238,14 +241,14 @@ public class CHQueryExporter {
                 }
                 pw.println("  ],");
 
-                // Dijkstra query
-                DijkstraQueryResult dijResult = runInstrumentedDijkstra(graph, chGraph, startIdx, endIdx);
-                pw.println("  \"dijkstraEvents\": [");
-                for (int ei = 0; ei < dijResult.events.size(); ei++) {
-                    DijkstraEvent e = dijResult.events.get(ei);
+                // SpeedyALT query
+                SpeedyALTQueryResult altResult = runInstrumentedSpeedyALT(graph, altData, startIdx, endIdx);
+                pw.println("  \"speedyALTEvents\": [");
+                for (int ei = 0; ei < altResult.events.size(); ei++) {
+                    SettleEvent e = altResult.events.get(ei);
                     pw.printf(Locale.US, "    {\"step\":%d,\"node\":%d,\"cost\":%.4f,\"parent\":%d}%s%n",
                             e.step(), e.node(), e.cost(), e.parent(),
-                            ei < dijResult.events.size() - 1 ? "," : "");
+                            ei < altResult.events.size() - 1 ? "," : "");
                 }
                 pw.println("  ],");
 
@@ -518,27 +521,32 @@ public class CHQueryExporter {
     }
 
     // -----------------------------------------------------------------------
-    // Instrumented Dijkstra query (based on SpeedyDijkstra.calcLeastCostPathImpl)
+    // Instrumented SpeedyALT query (based on SpeedyALT.calcLeastCostPathImpl)
     // -----------------------------------------------------------------------
 
-    private static DijkstraQueryResult runInstrumentedDijkstra(SpeedyGraph graph, CHGraph chGraph,
-                                                                 int startIdx, int endIdx) {
+    private static SpeedyALTQueryResult runInstrumentedSpeedyALT(SpeedyGraph graph,
+                                                                   SpeedyALTData altData,
+                                                                   int startIdx, int endIdx) {
         int n = graph.nodeCount;
-        double[] cost        = new double[n];
-        int[]    iterIds     = new int[n];
-        int[]    comingFrom  = new int[n];
-        int[]    usedLink    = new int[n];
+        double[] cost       = new double[n];
+        int[]    iterIds    = new int[n];
+        int[]    comingFrom = new int[n];
         Arrays.fill(iterIds, 0);
 
         int iteration = 1;
         DAryMinHeap pq = new DAryMinHeap(n, 6);
 
+        int startDeadend = altData.getNodeDeadend(startIdx);
+        int endDeadend   = altData.getNodeDeadend(endIdx);
+
+        double estimation = estimateMinCost(altData, startIdx, endIdx);
+
         cost[startIdx]       = 0.0;
         comingFrom[startIdx] = -1;
         iterIds[startIdx]    = iteration;
-        pq.insert(startIdx, 0.0);
+        pq.insert(startIdx, 0.0 + estimation);
 
-        List<DijkstraEvent> events = new ArrayList<>();
+        List<SettleEvent> events = new ArrayList<>();
         int step = 0;
         SpeedyGraph.LinkIterator outLI = graph.getOutLinkIterator();
 
@@ -546,35 +554,57 @@ public class CHQueryExporter {
             int    nodeIdx  = pq.poll();
             double currCost = cost[nodeIdx];
 
-            events.add(new DijkstraEvent(step++, nodeIdx, currCost, comingFrom[nodeIdx]));
+            events.add(new SettleEvent(step++, nodeIdx, currCost, comingFrom[nodeIdx]));
 
             if (nodeIdx == endIdx) break;
 
+            // Dead-end pruning (same as SpeedyALT)
+            int deadend = altData.getNodeDeadend(nodeIdx);
+            if (deadend >= 0 && deadend != startDeadend && deadend != endDeadend) {
+                continue;
+            }
+
             outLI.reset(nodeIdx);
             while (outLI.next()) {
-                int    toNode  = outLI.getToNodeIndex();
+                int    toNode     = outLI.getToNodeIndex();
                 double travelTime = outLI.getFreespeedTravelTime();
-                double newCost = currCost + travelTime;
+                double newCost    = currCost + travelTime;
 
                 if (iterIds[toNode] == iteration) {
                     if (newCost < cost[toNode]) {
                         cost[toNode]       = newCost;
                         comingFrom[toNode] = nodeIdx;
-                        usedLink[toNode]   = outLI.getLinkIndex();
-                        pq.decreaseKey(toNode, newCost);
+                        estimation = estimateMinCost(altData, toNode, endIdx);
+                        pq.decreaseKey(toNode, newCost + estimation);
                     }
                 } else {
                     cost[toNode]       = newCost;
                     comingFrom[toNode] = nodeIdx;
-                    usedLink[toNode]   = outLI.getLinkIndex();
                     iterIds[toNode]    = iteration;
-                    pq.insert(toNode, newCost);
+                    estimation = estimateMinCost(altData, toNode, endIdx);
+                    pq.insert(toNode, newCost + estimation);
                 }
             }
         }
 
-        LOG.info("Dijkstra query {}->{}: {} events settled", startIdx, endIdx, events.size());
-        return new DijkstraQueryResult(events);
+        LOG.info("SpeedyALT query {}->{}: {} events settled", startIdx, endIdx, events.size());
+        return new SpeedyALTQueryResult(events);
+    }
+
+    /**
+     * ALT lower-bound estimation: max over all landmarks of (SL-TL) and (LT-LS).
+     */
+    private static double estimateMinCost(SpeedyALTData altData, int nodeIdx, int destinationIdx) {
+        double best = 0;
+        for (int i = 0, nL = altData.getLandmarksCount(); i < nL; i++) {
+            double sl = altData.getTravelCostToLandmark(nodeIdx, i);
+            double ls = altData.getTravelCostFromLandmark(nodeIdx, i);
+            double tl = altData.getTravelCostToLandmark(destinationIdx, i);
+            double lt = altData.getTravelCostFromLandmark(destinationIdx, i);
+            double estimate = Math.max(sl - tl, lt - ls);
+            if (estimate > best) best = estimate;
+        }
+        return best;
     }
 
     // -----------------------------------------------------------------------
@@ -607,7 +637,7 @@ public class CHQueryExporter {
     private record CHEvent(int step, String dir, int node, double cost, int parent,
                             boolean stalled, boolean meeting) {}
 
-    private record DijkstraEvent(int step, int node, double cost, int parent) {}
+    private record SettleEvent(int step, int node, double cost, int parent) {}
 
     private static class CHQueryResult {
         final List<CHEvent>   events;
@@ -624,9 +654,9 @@ public class CHQueryExporter {
         }
     }
 
-    private static class DijkstraQueryResult {
-        final List<DijkstraEvent> events;
-        DijkstraQueryResult(List<DijkstraEvent> events) { this.events = events; }
+    private static class SpeedyALTQueryResult {
+        final List<SettleEvent> events;
+        SpeedyALTQueryResult(List<SettleEvent> events) { this.events = events; }
     }
 
     // -----------------------------------------------------------------------

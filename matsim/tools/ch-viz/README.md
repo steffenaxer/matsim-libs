@@ -1,6 +1,6 @@
 # CH Router Visualization
 
-Interactive Leaflet.js and canvas visualization of the Contraction Hierarchies (CH) routing algorithm vs Dijkstra on the Berlin road network.
+Interactive Leaflet.js and canvas visualization of the Contraction Hierarchies (CH) routing algorithm vs SpeedyALT (A* with Landmarks) on the Berlin road network.
 
 Created by Steffen Axer ([iteratively.io](https://iteratively.io)) to demonstrate CH routing efficiency for LinkedIn.
 
@@ -48,7 +48,7 @@ Most browsers block `fetch()` from `file://` URLs. Use a local server as above, 
 
 ## Visualization Features
 
-- **Split-screen** Dijkstra vs CH comparison (synchronized pan/zoom via Leaflet maps)
+- **Split-screen** SpeedyALT vs CH comparison (synchronized pan/zoom via Leaflet maps)
 - **OSM tile background** — dark-themed OpenStreetMap tiles with WGS84 coordinates
 - **Play / Pause / Step** controls with speed slider (1×–50× events per frame)
 - **Step slider** — drag to seek forward/backward through events; forward (▸) and backward (◂) step buttons
@@ -68,14 +68,14 @@ Most browsers block `fetch()` from `file://` URLs. Use a local server as above, 
 | Network edges | `rgba(255,255,255,0.09)` |
 | CH forward search | `#38bdf8` (sky blue) |
 | CH backward search | `#f472b6` (pink) |
-| Dijkstra settled | `#ef4444` (red) |
+| Dijkstra/SpeedyALT settled | `#ef4444` (red) |
 | Final path | `#34d399` (emerald) |
 | Meeting point | `#fbbf24` (amber) |
 | Stalled nodes | `#64748b` (slate) |
 
 ## OD Pairs
 
-| Route | ~Dijkstra settled | ~CH settled | Savings |
+| Route | ~SpeedyALT settled | ~CH settled | Savings |
 |---|---|---|---|
 | Spandau → Marzahn (West-East) | ~8,000–12,000 | ~200–350 | ~97% |
 | Frohnau → Lichtenrade (North-South) | ~8,000–12,000 | ~200–350 | ~97% |
