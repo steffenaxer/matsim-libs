@@ -1076,6 +1076,7 @@ function showFinalOverlay() {
   document.getElementById('ch-total').textContent    = chN.toLocaleString();
   document.getElementById('ch-times').textContent    = times;
   // Route result info
+  // Route result info (routeLinks/routeCost added in latest exporter; fall back to pathLinks for older JSON)
   const links = query.routeLinks ?? (query.pathLinks ? query.pathLinks.length : '-');
   const cost  = query.routeCost != null ? query.routeCost.toFixed(1) + 's' : '-';
   document.getElementById('route-links').textContent = links.toLocaleString ? links.toLocaleString() : links;

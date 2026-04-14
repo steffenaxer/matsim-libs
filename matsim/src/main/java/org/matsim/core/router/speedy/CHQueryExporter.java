@@ -273,9 +273,14 @@ public class CHQueryExporter {
                 }
                 pw.println("  ],");
 
-                // Route cost and link count
-                pw.printf(Locale.US, "  \"routeCost\": %.4f,%n", chResult.routeCost);
-                pw.printf("  \"routeLinks\": %d,%n", chResult.pathLinks.size());
+                // Route cost and link count (null when no path found)
+                if (Double.isFinite(chResult.routeCost) && !chResult.pathLinks.isEmpty()) {
+                    pw.printf(Locale.US, "  \"routeCost\": %.4f,%n", chResult.routeCost);
+                    pw.printf("  \"routeLinks\": %d,%n", chResult.pathLinks.size());
+                } else {
+                    pw.println("  \"routeCost\": null,");
+                    pw.println("  \"routeLinks\": 0,");
+                }
 
                 // Shortcut tree (for first CH edge only if available)
                 pw.print("  \"shortcutTree\": ");
