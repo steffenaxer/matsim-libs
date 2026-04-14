@@ -1,6 +1,6 @@
 # CH Router Visualization
 
-Interactive D3.js visualization of the Contraction Hierarchies (CH) routing algorithm vs Dijkstra on the Berlin road network.
+Interactive Leaflet.js and canvas visualization of the Contraction Hierarchies (CH) routing algorithm vs Dijkstra on the Berlin road network.
 
 Created by Steffen Axer ([iteratively.io](https://iteratively.io)) to demonstrate CH routing efficiency for LinkedIn.
 
@@ -48,35 +48,36 @@ Most browsers block `fetch()` from `file://` URLs. Use a local server as above, 
 
 ## Visualization Features
 
-- **Split-screen** Dijkstra vs CH comparison (synchronized animation)
+- **Split-screen** Dijkstra vs CH comparison (synchronized pan/zoom via Leaflet maps)
+- **OSM tile background** — dark-themed OpenStreetMap tiles with WGS84 coordinates
 - **Play / Pause / Step** controls with speed slider (1×–50× events per frame)
-- **Progress bar** with click-to-seek
-- **2.5D mode** — nodes lifted by their CH contraction level, showing the hierarchy
+- **Step slider** — drag to seek forward/backward through events; forward (▸) and backward (◂) step buttons
+- **2.5D mode** — CSS perspective tilt + nodes lifted by CH level, showing the hierarchy
 - **Meeting point** golden glow when the bidirectional CH search converges
 - **Stall-on-demand** visualization (gray flash for pruned nodes)
 - **Final overlay** showing search space savings (e.g. "97% less search space")
 - **Cinema mode** — hides controls, auto-plays for screen recording
 - **Video export** — native `canvas.captureStream(60fps)` + `MediaRecorder` → downloads `ch-router-berlin.webm`
-- **4 pre-computed OD pairs** selectable via dropdown
+- **4 pre-computed OD pairs** selectable via dropdown (long cross-city routes)
 
 ## Color Scheme
 
 | Element | Color |
 |---|---|
-| Background | `#0d1117` |
-| Network edges | `#1e2937` |
-| CH forward search | `#58a6ff` (blue) |
-| CH backward search | `#f78166` (orange) |
-| Dijkstra settled | `#da3633` (red) |
-| Final path | `#3fb950` (green) |
-| Meeting point | `#d29922` (gold) |
-| Stalled nodes | `#8b949e` (gray) |
+| Background | `#0c0e14` |
+| Network edges | `rgba(255,255,255,0.09)` |
+| CH forward search | `#38bdf8` (sky blue) |
+| CH backward search | `#f472b6` (pink) |
+| Dijkstra settled | `#ef4444` (red) |
+| Final path | `#34d399` (emerald) |
+| Meeting point | `#fbbf24` (amber) |
+| Stalled nodes | `#64748b` (slate) |
 
 ## OD Pairs
 
 | Route | ~Dijkstra settled | ~CH settled | Savings |
 |---|---|---|---|
-| Kreuzberg → Charlottenburg | ~3,000–5,000 | ~80–150 | ~97% |
-| Mitte → Neukölln | ~2,000–3,000 | ~60–120 | ~96% |
-| Spandau → Lichtenberg | ~6,000–8,000 | ~150–250 | ~97% |
-| Prenzlauer Berg → Tempelhof | ~3,000–5,000 | ~100–180 | ~96% |
+| Spandau → Marzahn (West-East) | ~8,000–12,000 | ~200–350 | ~97% |
+| Frohnau → Lichtenrade (North-South) | ~8,000–12,000 | ~200–350 | ~97% |
+| Wannsee → Karow (SW-NE Diagonal) | ~10,000–15,000 | ~250–400 | ~97% |
+| Tegel → Adlershof (NW-SE Diagonal) | ~8,000–12,000 | ~200–350 | ~97% |
