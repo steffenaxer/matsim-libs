@@ -264,7 +264,7 @@ canvas.main-canvas {
 <div id="loading">
   <div class="spinner"></div>
   <h2>Loading CH Router Visualization</h2>
-  <p id="loading-msg">Fetching <code>ch-query-data.json</code>…<br>
+  <p id="loading-msg">Fetching <code>ch-query-data.json</code>...<br>
   Run <code>CHQueryExporter</code> to generate the data file.</p>
 </div>
 
@@ -707,7 +707,7 @@ function updateCounters() {
 const phaseMessages = {
   dij: [
     { trigger: 0,    msg: '→ Dijkstra expands <strong>all</strong> reachable nodes in order of cost' },
-    { trigger: 0.5,  msg: '→ The search "cloud" grows radially from the source…' },
+    { trigger: 0.5,  msg: '→ The search "cloud" grows radially from the source...' },
     { trigger: 0.9,  msg: '→ Approaching destination — almost the entire network was scanned' },
   ],
   ch: [
@@ -718,19 +718,16 @@ const phaseMessages = {
   ]
 };
 
-let lastInfoTriggerDij = -1;
-let lastInfoTriggerCH  = -1;
-
 function updateInfoBoxes() {
   if (!query) return;
   const dijFrac = query.dijkstraEvents.length ? dijStep / query.dijkstraEvents.length : 0;
   const chFrac  = query.chEvents.length      ? chStep  / query.chEvents.length      : 0;
 
-  updateInfoBox('info-dij', phaseMessages.dij, dijFrac, 'lastDijTrig');
-  updateInfoBox('info-ch',  phaseMessages.ch,  chFrac,  'lastCHTrig');
+  updateInfoBox('info-dij', phaseMessages.dij, dijFrac);
+  updateInfoBox('info-ch',  phaseMessages.ch,  chFrac);
 }
 
-function updateInfoBox(id, messages, frac, trigKey) {
+function updateInfoBox(id, messages, frac) {
   const box = document.getElementById(id);
   for (let i = messages.length - 1; i >= 0; i--) {
     if (frac >= messages[i].trigger) {
@@ -749,7 +746,6 @@ function updateInfoBox(id, messages, frac, trigKey) {
 // ═══════════════════════════════════════════════════════════════════════════
 // Animation loop
 // ═══════════════════════════════════════════════════════════════════════════
-let lastFrameTime = 0;
 function animFrame(ts) {
   if (!playing) { animHandle = null; return; }
   animHandle = requestAnimationFrame(animFrame);
