@@ -145,9 +145,12 @@ body {
   position: relative;
 }
 .map-wrap .leaflet-container {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   background: var(--bg);
+  z-index: 1;
 }
 
 /* Leaflet overrides (tiles are natively dark — no filter needed) */
@@ -173,7 +176,7 @@ body {
   opacity: 0;
   transition: opacity 0.4s ease, transform 0.4s ease;
   max-width: 280px;
-  z-index: 6;
+  z-index: 1001;
 }
 .info-box.visible { opacity: 1; }
 .info-box strong { color: var(--text); }
@@ -326,7 +329,7 @@ body {
   color: rgba(255,255,255,0.15);
   pointer-events: none;
   letter-spacing: 0.05em;
-  z-index: 6;
+  z-index: 1001;
 }
 
 /* ── Loading state ────────────────────────────────────────── */
@@ -569,7 +572,7 @@ const chCtx     = chCanvas.getContext('2d');
     c.style.width = '100%';
     c.style.height = '100%';
     c.style.pointerEvents = 'none';
-    c.style.zIndex = '2';
+    c.style.zIndex = '1000';  // must be above Leaflet's internal z-indices (200-800)
   }
 })();
 
