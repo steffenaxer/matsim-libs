@@ -102,6 +102,7 @@ body {
   flex-direction: column;
   position: relative;
   min-width: 0;
+  overflow: hidden;  /* prevent 2.5D rotation from bleeding into the other panel */
 }
 
 .panel-header {
@@ -149,8 +150,7 @@ body {
   background: var(--bg);
 }
 
-/* Leaflet dark mode overrides */
-.leaflet-tile-pane { filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7); }
+/* Leaflet overrides (tiles are natively dark — no filter needed) */
 .leaflet-control-attribution { display: none !important; }
 .leaflet-control-zoom { display: none !important; }
 
@@ -533,8 +533,9 @@ function initMaps() {
   mapDij = L.map('map-dij', opts);
   mapCH  = L.map('map-ch', opts);
 
-  const tileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-  const tileOpts = { attribution: '', maxZoom: 19 };
+  // CartoDB Dark Matter — natively dark tiles, no CSS filter hack needed
+  const tileUrl = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  const tileOpts = { attribution: '', maxZoom: 20, subdomains: 'abcd' };
   L.tileLayer(tileUrl, tileOpts).addTo(mapDij);
   L.tileLayer(tileUrl, tileOpts).addTo(mapCH);
 
