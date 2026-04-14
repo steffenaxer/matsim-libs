@@ -1,0 +1,1432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CH vs SpeedyALT Visualization — iteratively.io</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0c0e14;
+  --surface:   rgba(18, 21, 30, 0.85);
+  --surface-2: rgba(25, 29, 42, 0.75);
+  --border:    rgba(255,255,255,0.07);
+  --text:      #e2e8f0;
+  --text-dim:  #8892a4;
+  --accent:    #6366f1;
+  --accent-2:  #818cf8;
+  --fwd:       #38bdf8;
+  --bwd:       #f472b6;
+  --dij:       #ef4444;
+  --path:      #34d399;
+  --meeting:   #fbbf24;
+  --stall:     #64748b;
+  --start:     #34d399;
+  --end:       #fb923c;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Header ──────────────────────────────────────────────── */
+#header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: var(--surface);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  height: 52px;
+  z-index: 10;
+}
+#header h1 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+#header .subtitle {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+#od-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+#od-selector select {
+  background: #1e2233;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+#od-selector select option {
+  background: #1e2233;
+  color: var(--text);
+}
+#od-selector select:hover { border-color: var(--accent); }
+#od-selector select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.15); }
+
+/* ── Map area ────────────────────────────────────────────── */
+#canvas-row {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  min-width: 0;
+  overflow: hidden;  /* prevent 2.5D rotation from bleeding into the other panel */
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  height: 36px;
+  background: var(--surface);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  z-index: 5;
+}
+.panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.panel-counter {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.panel-alt      .panel-title { color: var(--dij); }
+.panel-ch       .panel-title { color: var(--fwd); }
+
+.divider {
+  width: 1px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.map-wrap {
+  flex: 1;
+  position: relative;
+}
+.map-wrap .leaflet-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  z-index: 1;
+}
+
+/* Leaflet overrides (tiles are natively dark — no filter needed) */
+.leaflet-control-attribution { display: none !important; }
+.leaflet-control-zoom { display: none !important; }
+
+/* ── Overlays ─────────────────────────────────────────────── */
+.info-box {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+  max-width: 280px;
+  z-index: 1001;
+}
+.info-box.visible { opacity: 1; }
+.info-box strong { color: var(--text); }
+
+#final-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12,14,20,0.88);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 100;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.5s ease;
+}
+#final-overlay.visible { opacity: 1; pointer-events: auto; }
+#final-card {
+  background: #1a1d2b;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 16px;
+  padding: 36px 48px;
+  text-align: center;
+  max-width: 520px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+#final-card h2 { font-size: 18px; font-weight: 600; color: #fff; margin-bottom: 8px; }
+#final-card .saving {
+  font-size: 40px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--path), var(--fwd));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  color: transparent;
+  margin: 18px 0;
+}
+#final-card .details { font-size: 13px; color: #cbd5e1; line-height: 1.8; }
+#final-card .details span { color: #fff; font-weight: 500; }
+
+/* ── Controls ─────────────────────────────────────────────── */
+#controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+  background: var(--surface);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  height: 56px;
+  transition: opacity 0.3s ease;
+  z-index: 10;
+}
+#controls.cinema-mode { opacity: 0; pointer-events: none; }
+
+.btn {
+  padding: 6px 14px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.15); }
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent-2);
+  color: #fff;
+}
+.btn.primary:hover { background: var(--accent-2); }
+.btn.danger { background: #dc2626; border-color: #ef4444; color: #fff; }
+.btn.danger:hover { background: #ef4444; }
+.btn.record-active { background: #dc2626; border-color: #ef4444; animation: pulse-rec 1.2s infinite; }
+
+@keyframes pulse-rec {
+  0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }
+  50%     { box-shadow: 0 0 0 6px rgba(239,68,68,0); }
+}
+
+/* ── Step slider ────────────────────────────────────────── */
+.slider-group {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+#step-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.08);
+  outline: none;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+#step-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--accent-2);
+  cursor: pointer;
+  box-shadow: 0 0 8px rgba(99,102,241,0.4);
+  transition: transform 0.15s ease;
+}
+#step-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
+#step-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--accent-2);
+  cursor: pointer;
+}
+#step-counter {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 56px;
+  text-align: right;
+  font-weight: 500;
+}
+
+.speed-label { font-size: 11px; color: var(--text-dim); font-weight: 500; }
+#speed-slider {
+  width: 72px;
+  accent-color: var(--accent);
+}
+
+/* ── Watermark ────────────────────────────────────────────── */
+.watermark {
+  position: absolute;
+  bottom: 8px;
+  right: 12px;
+  font-size: 10px;
+  color: rgba(255,255,255,0.15);
+  pointer-events: none;
+  letter-spacing: 0.05em;
+  z-index: 1001;
+}
+
+/* ── Loading state ────────────────────────────────────────── */
+#loading {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  z-index: 200;
+  gap: 18px;
+}
+#loading h2 { font-size: 16px; font-weight: 600; color: var(--text); }
+#loading p { font-size: 12px; color: var(--text-dim); text-align: center; max-width: 380px; line-height: 1.7; }
+.spinner {
+  width: 32px; height: 32px;
+  border: 3px solid rgba(255,255,255,0.08);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Toggle ────────────────────────────────────────────── */
+.toggle-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.toggle-wrap input[type=checkbox] {
+  accent-color: var(--accent);
+  cursor: pointer;
+  width: 15px;
+  height: 15px;
+}
+
+/* ── Close button ────────────────────────────────────────── */
+#final-close {
+  margin-top: 20px;
+  padding: 8px 28px;
+}
+</style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loading">
+  <div class="spinner"></div>
+  <h2>Loading CH Router Visualization</h2>
+  <p id="loading-msg">Fetching <code>ch-query-data.json</code> ...<br>
+  Run <code>CHQueryExporter</code> to generate the data file.</p>
+</div>
+
+<!-- Header -->
+<div id="header">
+  <div>
+    <h1>Contraction Hierarchies vs SpeedyALT</h1>
+    <div class="subtitle">Berlin Network — Search Space Comparison</div>
+  </div>
+  <div id="od-selector">
+    <span>Route:</span>
+    <select id="od-select"></select>
+  </div>
+</div>
+
+<!-- Map row -->
+<div id="canvas-row">
+  <!-- Left: SpeedyALT -->
+  <div class="panel panel-alt" id="panel-left">
+    <div class="panel-header">
+      <span class="panel-title">SpeedyALT</span>
+      <span class="panel-counter" id="alt-counter">Settled: 0</span>
+    </div>
+    <div class="map-wrap">
+      <div id="map-dij"></div>
+      <canvas id="canvas-dij"></canvas>
+      <div class="info-box" id="info-alt"></div>
+      <div class="watermark">iteratively.io</div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Right: CH -->
+  <div class="panel panel-ch" id="panel-right">
+    <div class="panel-header">
+      <span class="panel-title">Contraction Hierarchies</span>
+      <span class="panel-counter" id="ch-counter">Fwd: 0 / Bwd: 0</span>
+    </div>
+    <div class="map-wrap">
+      <div id="map-ch"></div>
+      <canvas id="canvas-ch"></canvas>
+      <div class="info-box" id="info-ch"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Controls -->
+<div id="controls">
+  <button class="btn primary" id="btn-play">▶ Play</button>
+  <button class="btn" id="btn-step-back" title="Step backward (←)">◂</button>
+  <button class="btn" id="btn-step-fwd" title="Step forward (→)">▸</button>
+  <button class="btn" id="btn-reset">↺</button>
+
+  <div class="slider-group">
+    <input type="range" id="step-slider" min="0" max="1" value="0" title="Drag to seek">
+    <span id="step-counter">0 / 0</span>
+  </div>
+
+  <span class="speed-label">Speed</span>
+  <input type="range" id="speed-slider" min="1" max="50" value="10" title="Events per frame">
+  <span id="speed-val" class="speed-label">10×</span>
+
+  <label class="toggle-wrap">
+    <input type="checkbox" id="toggle-2-5d"> 2.5D
+  </label>
+  <button class="btn" id="btn-cinema">🎬</button>
+  <button class="btn danger" id="btn-record">⏺</button>
+</div>
+
+<!-- Final comparison overlay -->
+<div id="final-overlay">
+  <div id="final-card">
+    <h2>Search Space Comparison</h2>
+    <div class="saving" id="saving-pct">-</div>
+    <div class="details">
+      SpeedyALT settled: <span id="alt-total">-</span> nodes<br>
+      CH settled: <span id="ch-total">-</span> nodes<br>
+      <span style="color:var(--path);margin-top:8px;display:block;font-weight:600">CH is <span id="ch-times">-</span>× more efficient</span>
+    </div>
+    <div class="details" style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.08);">
+      Route: <span id="route-links">-</span> links · Cost: <span id="route-cost">-</span>
+    </div>
+    <button id="final-close" class="btn">Close</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// Modern colour palette (CSS custom properties mirrored here for canvas)
+// ═══════════════════════════════════════════════════════════════════════════
+const C = {
+  bg:       '#0c0e14',
+  net:      'rgba(255,255,255,0.09)',
+  fwd:      '#38bdf8',
+  bwd:      '#f472b6',
+  dij:      '#ef4444',
+  path:     '#34d399',
+  meeting:  '#fbbf24',
+  stall:    '#64748b',
+  start:    '#34d399',
+  end:      '#fb923c',
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════════════════
+let data        = null;
+let queryIdx    = 0;
+let query       = null;
+
+let playing     = false;
+let cinemaMode  = false;
+let recording   = false;
+let mediaRec    = null;
+let recChunks   = [];
+
+let chStep      = 0;
+let altStep     = 0;
+let phase       = 0;       // 0=search, 1=path reveal, 2=final overlay
+let animHandle  = null;
+let pathRevealStart  = 0;  // timestamp when route path first appears
+let finalOverlayStart = 0; // timestamp when final overlay appears
+
+// History for backward stepping: array of {type, idx} recording processing order
+let stepHistory = [];
+
+const settledAlt  = new Map();
+const settledFwd  = new Map();
+const settledBwd  = new Map();
+let   meetingNode = -1;
+let   pathDash    = 0;
+
+// 2.5D state
+let is2_5D = false;
+const TILT_CSS = 'perspective(1200px) rotateX(35deg) scale(0.92)';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Leaflet maps (WGS84 tile background)
+// ═══════════════════════════════════════════════════════════════════════════
+let mapAlt = null;
+let mapCH  = null;
+let syncing = false;  // guard against recursive sync
+
+function initMaps() {
+  const opts = {
+    zoomControl: false,
+    attributionControl: false,
+    zoomSnap: 0.25,
+    zoomDelta: 0.5,
+    maxZoom: 18,
+    minZoom: 8,
+  };
+  mapAlt = L.map('map-dij', opts);
+  mapCH  = L.map('map-ch', opts);
+
+  // CartoDB Dark Matter — natively dark tiles, no CSS filter hack needed
+  const tileUrl = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  const tileOpts = { attribution: '', maxZoom: 20, subdomains: 'abcd', crossOrigin: 'anonymous' };
+  L.tileLayer(tileUrl, tileOpts).addTo(mapAlt);
+  L.tileLayer(tileUrl, tileOpts).addTo(mapCH);
+
+  // Synchronized pan/zoom
+  function syncMap(source, target) {
+    if (syncing) return;
+    syncing = true;
+    target.setView(source.getCenter(), source.getZoom(), { animate: false });
+    syncing = false;
+    repositionCanvases();
+  }
+  mapAlt.on('move zoom', () => syncMap(mapAlt, mapCH));
+  mapCH.on('move zoom',  () => syncMap(mapCH, mapAlt));
+  mapAlt.on('moveend zoomend', () => { repositionCanvases(); redrawAll(); });
+  mapCH.on('moveend zoomend',  () => { repositionCanvases(); redrawAll(); });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Canvas overlays on top of Leaflet
+// ═══════════════════════════════════════════════════════════════════════════
+const altCanvas = document.getElementById('canvas-dij');
+const chCanvas  = document.getElementById('canvas-ch');
+const altCtx    = altCanvas.getContext('2d');
+const chCtx     = chCanvas.getContext('2d');
+
+// Make canvases overlay the Leaflet maps
+(function styleCanvases() {
+  for (const c of [altCanvas, chCanvas]) {
+    c.style.position = 'absolute';
+    c.style.inset = '0';
+    c.style.width = '100%';
+    c.style.height = '100%';
+    c.style.pointerEvents = 'none';
+    c.style.zIndex = '1000';  // must be above Leaflet's internal z-indices (200-800)
+  }
+})();
+
+let compCanvas = null;
+let compCtx    = null;
+
+function repositionCanvases() {
+  const mapWrapDij = altCanvas.parentElement;
+  const mapWrapCH  = chCanvas.parentElement;
+  const rD = mapWrapDij.getBoundingClientRect();
+  const rC = mapWrapCH.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  altCanvas.width  = Math.floor(rD.width * dpr);
+  altCanvas.height = Math.floor(rD.height * dpr);
+  chCanvas.width   = Math.floor(rC.width * dpr);
+  chCanvas.height  = Math.floor(rC.height * dpr);
+  altCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  chCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Projection: WGS84 lat/lon → pixel via Leaflet
+// ═══════════════════════════════════════════════════════════════════════════
+function projectAlt(lon, lat) {
+  const pt = mapAlt.latLngToContainerPoint([lat, lon]);
+  return [pt.x, pt.y];
+}
+function projectCH(lon, lat) {
+  const pt = mapCH.latLngToContainerPoint([lat, lon]);
+  return [pt.x, pt.y];
+}
+
+function nodeXY_alt(idx) {
+  const n = data.nodes[idx];
+  return projectAlt(n.lon, n.lat);
+}
+function nodeXY_ch(idx) {
+  const n = data.nodes[idx];
+  return projectCH(n.lon, n.lat);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Fit maps to query route (start + end + path nodes)
+// ═══════════════════════════════════════════════════════════════════════════
+function fitToQuery() {
+  if (!data || !query) return;
+  const sn = data.nodes[query.startNode];
+  const en = data.nodes[query.endNode];
+  const bounds = L.latLngBounds([sn.lat, sn.lon], [en.lat, en.lon]);
+  // Include path nodes for accurate route extent
+  if (query.path && query.path.length > 0) {
+    for (const nIdx of query.path) {
+      const n = data.nodes[nIdx];
+      bounds.extend([n.lat, n.lon]);
+    }
+  }
+  // Generous padding so the search space expansion is visible
+  mapAlt.fitBounds(bounds.pad(0.5));
+  // CH map syncs automatically
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Draw: network edges (on every frame — lightweight for typical networks)
+// ═══════════════════════════════════════════════════════════════════════════
+function drawNetworkEdges(ctx, nodeXY) {
+  ctx.strokeStyle = C.net;
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  for (const e of data.edges) {
+    const [x1,y1] = nodeXY(e.from);
+    const [x2,y2] = nodeXY(e.to);
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+  }
+  ctx.stroke();
+}
+
+function drawODMarkers(ctx, nodeXY) {
+  if (!query) return;
+  const [sx,sy] = nodeXY(query.startNode);
+  const [ex,ey] = nodeXY(query.endNode);
+  // Start
+  ctx.fillStyle = C.start;
+  ctx.beginPath(); ctx.arc(sx, sy, 6, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(sx, sy, 6, 0, Math.PI * 2); ctx.stroke();
+  // End
+  ctx.fillStyle = C.end;
+  ctx.beginPath(); ctx.arc(ex, ey, 6, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#fff';
+  ctx.beginPath(); ctx.arc(ex, ey, 6, 0, Math.PI * 2); ctx.stroke();
+  // Labels
+  ctx.font = 'bold 10px Inter, system-ui';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('S', sx + 9, sy + 4);
+  ctx.fillText('E', ex + 9, ey + 4);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Full redraw
+// ═══════════════════════════════════════════════════════════════════════════
+function redrawAll() {
+  drawAltCanvas();
+  drawCHCanvas();
+  updateCounters();
+}
+
+function drawAltCanvas() {
+  const W = altCanvas.width / (window.devicePixelRatio || 1);
+  const H = altCanvas.height / (window.devicePixelRatio || 1);
+  altCtx.clearRect(0, 0, W, H);
+  if (!data) return;
+
+  drawNetworkEdges(altCtx, nodeXY_alt);
+
+  // Settled edges
+  altCtx.strokeStyle = C.dij + '55';
+  altCtx.lineWidth = 0.8;
+  altCtx.beginPath();
+  for (const [node, st] of settledAlt) {
+    if (st.parent < 0) continue;
+    const [x1,y1] = nodeXY_alt(node);
+    const [x2,y2] = nodeXY_alt(st.parent);
+    altCtx.moveTo(x1,y1); altCtx.lineTo(x2,y2);
+  }
+  altCtx.stroke();
+
+  // Settled nodes
+  for (const [node] of settledAlt) {
+    const [x,y] = nodeXY_alt(node);
+    altCtx.beginPath();
+    altCtx.arc(x, y, 2, 0, Math.PI * 2);
+    altCtx.fillStyle = C.dij;
+    altCtx.fill();
+  }
+
+  // Path
+  if (phase >= 1 && query.path && query.path.length > 1) {
+    drawAnimatedPath(altCtx, query.path, nodeXY_alt);
+  }
+
+  drawODMarkers(altCtx, nodeXY_alt);
+
+  if (is2_5D) apply2_5D(altCtx, settledAlt, 'dij', nodeXY_alt);
+}
+
+function drawCHCanvas() {
+  const W = chCanvas.width / (window.devicePixelRatio || 1);
+  const H = chCanvas.height / (window.devicePixelRatio || 1);
+  chCtx.clearRect(0, 0, W, H);
+  if (!data) return;
+
+  drawNetworkEdges(chCtx, nodeXY_ch);
+
+  // Forward edges
+  chCtx.strokeStyle = C.fwd + '55';
+  chCtx.lineWidth = 0.8;
+  chCtx.beginPath();
+  for (const [node, st] of settledFwd) {
+    if (st.parent < 0) continue;
+    const [x1,y1] = nodeXY_ch(node);
+    const [x2,y2] = nodeXY_ch(st.parent);
+    chCtx.moveTo(x1,y1); chCtx.lineTo(x2,y2);
+  }
+  chCtx.stroke();
+
+  // Backward edges
+  chCtx.strokeStyle = C.bwd + '55';
+  chCtx.beginPath();
+  for (const [node, st] of settledBwd) {
+    if (st.parent < 0) continue;
+    const [x1,y1] = nodeXY_ch(node);
+    const [x2,y2] = nodeXY_ch(st.parent);
+    chCtx.moveTo(x1,y1); chCtx.lineTo(x2,y2);
+  }
+  chCtx.stroke();
+
+  // Forward nodes
+  for (const [node, st] of settledFwd) {
+    const [x,y] = nodeXY_ch(node);
+    const lv = data.nodes[node].level;
+    const r = st.stalled ? 1.5 : Math.min(1.5 + lv / 2000, 4);
+    chCtx.beginPath();
+    chCtx.arc(x, y, r, 0, Math.PI * 2);
+    chCtx.fillStyle = st.stalled ? C.stall : C.fwd;
+    chCtx.fill();
+  }
+
+  // Backward nodes
+  for (const [node, st] of settledBwd) {
+    const [x,y] = nodeXY_ch(node);
+    const lv = data.nodes[node].level;
+    const r = st.stalled ? 1.5 : Math.min(1.5 + lv / 2000, 4);
+    chCtx.beginPath();
+    chCtx.arc(x, y, r, 0, Math.PI * 2);
+    chCtx.fillStyle = st.stalled ? C.stall : C.bwd;
+    chCtx.fill();
+  }
+
+  // Meeting node glow
+  if (meetingNode >= 0) {
+    const [x,y] = nodeXY_ch(meetingNode);
+    const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 200);
+    const r = 6 + pulse * 4;
+    const grd = chCtx.createRadialGradient(x,y,1,x,y,r);
+    grd.addColorStop(0, C.meeting);
+    grd.addColorStop(1, C.meeting + '00');
+    chCtx.beginPath();
+    chCtx.arc(x, y, r, 0, Math.PI * 2);
+    chCtx.fillStyle = grd;
+    chCtx.fill();
+    chCtx.beginPath();
+    chCtx.arc(x, y, 4, 0, Math.PI * 2);
+    chCtx.fillStyle = C.meeting;
+    chCtx.fill();
+  }
+
+  // Path
+  if (phase >= 1 && query.path && query.path.length > 1) {
+    drawAnimatedPath(chCtx, query.path, nodeXY_ch);
+  }
+
+  drawODMarkers(chCtx, nodeXY_ch);
+
+  if (is2_5D) apply2_5D(chCtx, settledFwd, 'ch-fwd', nodeXY_ch);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Animated dashed path
+// ═══════════════════════════════════════════════════════════════════════════
+function drawAnimatedPath(ctx, pathNodes, nodeXY) {
+  if (pathNodes.length < 2) return;
+  pathDash = (pathDash + 0.3) % 20;
+  ctx.save();
+  ctx.setLineDash([10, 10]);
+  ctx.lineDashOffset = -pathDash;
+  ctx.strokeStyle = C.path;
+  ctx.lineWidth = 3;
+  ctx.shadowColor = C.path;
+  ctx.shadowBlur = 10;
+  ctx.beginPath();
+  const [x0,y0] = nodeXY(pathNodes[0]);
+  ctx.moveTo(x0, y0);
+  for (let i = 1; i < pathNodes.length; i++) {
+    const [xi,yi] = nodeXY(pathNodes[i]);
+    ctx.lineTo(xi, yi);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2.5D effect
+// ═══════════════════════════════════════════════════════════════════════════
+function apply2_5D(ctx, settled, type, nodeXY) {
+  if (!data) return;
+  const maxLevel = data.nodes.length;
+  for (const [node] of settled) {
+    const lv = data.nodes[node].level;
+    const [x,y] = nodeXY(node);
+    const lift = (lv / maxLevel) * 40;
+    ctx.beginPath();
+    ctx.arc(x, y - lift, 2, 0, Math.PI * 2);
+    ctx.fillStyle = type === 'ch-fwd' ? C.fwd + 'aa' : C.dij + 'aa';
+    ctx.fill();
+    ctx.strokeStyle = type === 'ch-fwd' ? C.fwd + '33' : C.dij + '33';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y - lift);
+    ctx.stroke();
+  }
+}
+
+function toggle2_5D(on) {
+  is2_5D = on;
+  const wraps = document.querySelectorAll('.map-wrap');
+  for (const w of wraps) {
+    w.style.transition = 'transform 0.5s ease';
+    w.style.transform = on ? TILT_CSS : '';
+  }
+  redrawAll();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Counters & slider
+// ═══════════════════════════════════════════════════════════════════════════
+const stepSlider = document.getElementById('step-slider');
+
+function totalEvents() {
+  return query ? query.chEvents.length + (query.speedyALTEvents || query.dijkstraEvents).length : 0;
+}
+function currentTotal() {
+  return chStep + altStep;
+}
+
+function updateCounters() {
+  if (!query) return;
+  const total = (query.speedyALTEvents || query.dijkstraEvents).length;
+  document.getElementById('alt-counter').textContent =
+      `Settled: ${settledAlt.size} (${total ? Math.round(settledAlt.size/total*100) : 0}%)`;
+
+  document.getElementById('ch-counter').textContent =
+      `Fwd: ${settledFwd.size} / Bwd: ${settledBwd.size}`;
+
+  const te = totalEvents();
+  const ct = currentTotal();
+  stepSlider.max = te;
+  stepSlider.value = ct;
+  document.getElementById('step-counter').textContent = `${ct} / ${te}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase info boxes
+// ═══════════════════════════════════════════════════════════════════════════
+const phaseMessages = {
+  alt: [
+    { trigger: 0,    msg: '→ SpeedyALT uses <strong>landmarks</strong> to estimate lower bounds via triangle inequality' },
+    { trigger: 0.3,  msg: '→ ALT heuristic <strong>focuses</strong> the search toward the destination' },
+    { trigger: 0.7,  msg: '→ Fewer nodes explored than Dijkstra — but still many more than CH' },
+  ],
+  ch: [
+    { trigger: 0,    msg: '→ CH forward search expands <strong>upward</strong> in the hierarchy' },
+    { trigger: 0.2,  msg: '→ Backward search expands <strong>downward</strong> toward source' },
+    { trigger: 0.6,  msg: '→ Stalled nodes (gray) are pruned — cannot be on a shortest path' },
+    { trigger: 0.9,  msg: '→ <strong>Meeting point</strong> found — bidirectional paths merge' },
+  ]
+};
+
+function updateInfoBoxes() {
+  if (!query) return;
+  const dijFrac = (query.speedyALTEvents || query.dijkstraEvents).length ? altStep / (query.speedyALTEvents || query.dijkstraEvents).length : 0;
+  const chFrac  = query.chEvents.length      ? chStep  / query.chEvents.length      : 0;
+  updateInfoBox('info-alt', phaseMessages.alt, dijFrac);
+  updateInfoBox('info-ch',  phaseMessages.ch,  chFrac);
+}
+
+function updateInfoBox(id, messages, frac) {
+  const box = document.getElementById(id);
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (frac >= messages[i].trigger) {
+      if (box._lastMsg !== messages[i].msg) {
+        box._lastMsg = messages[i].msg;
+        box.innerHTML = messages[i].msg;
+        box.classList.add('visible');
+        clearTimeout(box._hideTimer);
+        box._hideTimer = setTimeout(() => box.classList.remove('visible'), 3500);
+      }
+      break;
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Event processing
+// ═══════════════════════════════════════════════════════════════════════════
+function processCHEvent(ev) {
+  if (ev.dir === 'fwd') {
+    settledFwd.set(ev.node, { cost: ev.cost, parent: ev.parent, stalled: ev.stalled });
+  } else {
+    settledBwd.set(ev.node, { cost: ev.cost, parent: ev.parent, stalled: ev.stalled });
+  }
+  if (ev.meeting) meetingNode = ev.node;
+}
+
+function processAltEvent(ev) {
+  settledAlt.set(ev.node, { cost: ev.cost, parent: ev.parent ?? -1 });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Step forward one event (interleaved CH/SpeedyALT)
+// ═══════════════════════════════════════════════════════════════════════════
+function stepForward() {
+  if (!query) return false;
+  const chEv  = query.chEvents;
+  const dijEv = query.speedyALTEvents || query.dijkstraEvents;
+  if (chStep >= chEv.length && altStep >= dijEv.length) return false;
+
+  const chR  = chEv.length  ? chStep  / chEv.length  : 1;
+  const dijR = dijEv.length ? altStep / dijEv.length : 1;
+
+  if (chStep < chEv.length && chR <= dijR) {
+    processCHEvent(chEv[chStep]);
+    stepHistory.push({ type: 'ch', idx: chStep });
+    chStep++;
+  } else if (altStep < dijEv.length) {
+    processAltEvent(dijEv[altStep]);
+    stepHistory.push({ type: 'dij', idx: altStep });
+    altStep++;
+  } else if (chStep < chEv.length) {
+    processCHEvent(chEv[chStep]);
+    stepHistory.push({ type: 'ch', idx: chStep });
+    chStep++;
+  }
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Step backward: replay from scratch up to (currentTotal - 1)
+// ═══════════════════════════════════════════════════════════════════════════
+function stepBackward() {
+  const target = currentTotal() - 1;
+  if (target < 0) return;
+  seekTo(target);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Seek to a specific total step count
+// ═══════════════════════════════════════════════════════════════════════════
+function seekTo(targetTotal) {
+  // Reset state without touching maps
+  chStep = altStep = 0;
+  phase  = 0;
+  meetingNode = -1;
+  pathDash    = 0;
+  pathRevealStart   = 0;
+  finalOverlayStart = 0;
+  settledAlt.clear();
+  settledFwd.clear();
+  settledBwd.clear();
+  stepHistory = [];
+  document.getElementById('final-overlay').classList.remove('visible');
+
+  if (!query) return;
+  let t = 0;
+  while (t < targetTotal) {
+    if (!stepForward()) break;
+    t++;
+  }
+
+  if (chStep >= query.chEvents.length && altStep >= (query.speedyALTEvents || query.dijkstraEvents).length) {
+    phase = 1;
+  }
+
+  redrawAll();
+  updateCounters();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Animation loop
+// ═══════════════════════════════════════════════════════════════════════════
+function animFrame() {
+  if (!playing) { animHandle = null; return; }
+  animHandle = requestAnimationFrame(animFrame);
+
+  const speed = parseInt(document.getElementById('speed-slider').value, 10);
+  let stepsLeft = speed;
+
+  while (stepsLeft > 0) {
+    if (!stepForward()) break;
+    stepsLeft--;
+  }
+
+  if (chStep >= query.chEvents.length && altStep >= (query.speedyALTEvents || query.dijkstraEvents).length && phase === 0) {
+    phase = 1;  // Path now renders on both canvases
+    // Continue animating for ~2 seconds so the route is visible before showing final stats
+    pathRevealStart = Date.now();
+  }
+
+  // After 2 seconds of showing the path, display final overlay
+  if (phase === 1 && pathRevealStart > 0 && Date.now() - pathRevealStart > 2000) {
+    phase = 2;
+    showFinalOverlay();
+    // Keep recording for 3 more seconds to capture the final overlay
+    if (recording) {
+      finalOverlayStart = Date.now();
+    } else {
+      stopPlayback();
+    }
+  }
+
+  // Stop recording 3s after final overlay appears
+  if (recording && phase === 2 && finalOverlayStart > 0 && Date.now() - finalOverlayStart > 3000) {
+    stopRecording();
+    stopPlayback();
+  }
+
+  redrawAll();
+  updateCounters();
+  updateInfoBoxes();
+  bumpRecordFrame();
+}
+
+function showFinalOverlay() {
+  const dijN  = settledAlt.size;
+  const chN   = settledFwd.size + settledBwd.size;
+  const pct   = dijN > 0 ? Math.round((1 - chN / dijN) * 100) : 0;
+  const times = dijN > 0 ? (dijN / Math.max(1, chN)).toFixed(1) : '-';
+  document.getElementById('saving-pct').textContent  = pct + '% less search space';
+  document.getElementById('alt-total').textContent   = dijN.toLocaleString();
+  document.getElementById('ch-total').textContent    = chN.toLocaleString();
+  document.getElementById('ch-times').textContent    = times;
+  // Route result info
+  // Route result info (routeLinks/routeCost added in latest exporter; fall back to pathLinks for older JSON)
+  const links = query.routeLinks ?? (query.pathLinks ? query.pathLinks.length : '-');
+  const cost  = query.routeCost != null ? query.routeCost.toFixed(1) + 's' : '-';
+  document.getElementById('route-links').textContent = links.toLocaleString ? links.toLocaleString() : links;
+  document.getElementById('route-cost').textContent  = cost;
+  document.getElementById('final-overlay').classList.add('visible');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Playback controls
+// ═══════════════════════════════════════════════════════════════════════════
+function startPlayback() {
+  playing = true;
+  document.getElementById('btn-play').textContent = '⏸';
+  if (!animHandle) animHandle = requestAnimationFrame(animFrame);
+}
+
+function stopPlayback() {
+  playing = false;
+  document.getElementById('btn-play').textContent = '▶';
+}
+
+function resetVisualization() {
+  stopPlayback();
+  seekTo(0);
+}
+
+// ── Button listeners ──
+document.getElementById('btn-play').addEventListener('click', () => {
+  if (playing) stopPlayback(); else startPlayback();
+});
+
+document.getElementById('btn-step-fwd').addEventListener('click', () => {
+  if (!query) return;
+  stepForward();
+  redrawAll(); updateCounters();
+});
+
+document.getElementById('btn-step-back').addEventListener('click', () => {
+  if (!query) return;
+  stepBackward();
+  redrawAll(); updateCounters();
+});
+
+document.getElementById('btn-reset').addEventListener('click', resetVisualization);
+
+document.getElementById('speed-slider').addEventListener('input', function() {
+  document.getElementById('speed-val').textContent = this.value + '×';
+});
+
+document.getElementById('toggle-2-5d').addEventListener('change', function() {
+  toggle2_5D(this.checked);
+});
+
+document.getElementById('final-close').addEventListener('click', () => {
+  document.getElementById('final-overlay').classList.remove('visible');
+});
+
+// ── Step slider seek ──
+stepSlider.addEventListener('input', function() {
+  if (playing) stopPlayback();
+  seekTo(parseInt(this.value, 10));
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Cinema mode
+// ═══════════════════════════════════════════════════════════════════════════
+document.getElementById('btn-cinema').addEventListener('click', () => {
+  cinemaMode = !cinemaMode;
+  const c = document.getElementById('controls');
+  if (cinemaMode) {
+    c.classList.add('cinema-mode');
+    resetVisualization();
+    startPlayback();
+  } else {
+    c.classList.remove('cinema-mode');
+    stopPlayback();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Video recording — composites map tiles + canvas overlays + labels
+// ═══════════════════════════════════════════════════════════════════════════
+function setupCompositeCanvas() {
+  const mapWrapDij = altCanvas.parentElement;
+  const rD = mapWrapDij.getBoundingClientRect();
+  const W = Math.floor(rD.width);
+  const H = Math.floor(rD.height);
+  compCanvas = document.createElement('canvas');
+  compCanvas.width  = W * 2 + 1;  // both panels side by side + 1px divider
+  compCanvas.height = H;
+  compCtx = compCanvas.getContext('2d');
+}
+
+function drawMapTilesToCanvas(ctx, map, offsetX, offsetY, clipW, clipH) {
+  const tilePane = map.getPanes().tilePane;
+  const container = map.getContainer();
+  const containerRect = container.getBoundingClientRect();
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(offsetX, offsetY, clipW, clipH);
+  ctx.clip();
+  const tiles = tilePane.querySelectorAll('img');
+  for (const tile of tiles) {
+    if (!tile.complete || tile.naturalWidth === 0) continue;
+    const tileRect = tile.getBoundingClientRect();
+    const x = offsetX + (tileRect.left - containerRect.left);
+    const y = offsetY + (tileRect.top - containerRect.top);
+    try {
+      ctx.drawImage(tile, x, y, tileRect.width, tileRect.height);
+    } catch (e) { /* CORS fallback: tiles simply not drawn */ }
+  }
+  ctx.restore();
+}
+
+function drawFinalOverlayToCanvas(ctx, W, H) {
+  ctx.fillStyle = 'rgba(12, 14, 20, 0.88)';
+  ctx.fillRect(0, 0, W, H);
+  const cardW = 440, cardH = 280, r = 16;
+  const cx = (W - cardW) / 2, cy = (H - cardH) / 2;
+  ctx.fillStyle = '#1a1d2b';
+  ctx.beginPath();
+  ctx.moveTo(cx + r, cy);
+  ctx.arcTo(cx + cardW, cy, cx + cardW, cy + cardH, r);
+  ctx.arcTo(cx + cardW, cy + cardH, cx, cy + cardH, r);
+  ctx.arcTo(cx, cy + cardH, cx, cy, r);
+  ctx.arcTo(cx, cy, cx + cardW, cy, r);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.font = '600 18px Inter, system-ui';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('Search Space Comparison', W / 2, cy + 40);
+  ctx.font = '700 36px Inter, system-ui';
+  ctx.fillStyle = '#34d399';
+  ctx.fillText(document.getElementById('saving-pct').textContent, W / 2, cy + 95);
+  ctx.font = '500 13px Inter, system-ui';
+  ctx.fillStyle = '#cbd5e1';
+  ctx.fillText('SpeedyALT settled: ' + document.getElementById('alt-total').textContent + ' nodes', W / 2, cy + 130);
+  ctx.fillText('CH settled: ' + document.getElementById('ch-total').textContent + ' nodes', W / 2, cy + 150);
+  ctx.fillStyle = '#34d399';
+  ctx.font = '600 13px Inter, system-ui';
+  ctx.fillText('CH is ' + document.getElementById('ch-times').textContent + '\u00d7 more efficient', W / 2, cy + 180);
+  // Route result info
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx + 40, cy + 200);
+  ctx.lineTo(cx + cardW - 40, cy + 200);
+  ctx.stroke();
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = '500 12px Inter, system-ui';
+  const routeLinks = document.getElementById('route-links').textContent;
+  const routeCost  = document.getElementById('route-cost').textContent;
+  ctx.fillText('Route: ' + routeLinks + ' links \u00b7 Cost: ' + routeCost, W / 2, cy + 225);
+  ctx.textAlign = 'start';
+}
+
+function drawInfoBoxToCanvas(ctx, boxId, offsetX, panelW, panelH) {
+  const box = document.getElementById(boxId);
+  if (!box || !box.classList.contains('visible')) return;
+  const text = box.textContent.trim();
+  if (!text) return;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur = 8;
+  // Measure text to draw a pill-shaped background
+  ctx.font = '500 12px Inter, system-ui';
+  const tw = ctx.measureText(text).width;
+  const bw = tw + 36, bh = 32;
+  const bx = offsetX + (panelW - bw) / 2;
+  const by = panelH - 24 - bh;
+  ctx.fillStyle = 'rgba(18, 21, 30, 0.92)';
+  ctx.beginPath();
+  const r = 10;
+  ctx.moveTo(bx + r, by);
+  ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
+  ctx.arcTo(bx + bw, by + bh, bx, by + bh, r);
+  ctx.arcTo(bx, by + bh, bx, by, r);
+  ctx.arcTo(bx, by, bx + bw, by, r);
+  ctx.fill();
+  ctx.fillStyle = '#cbd5e1';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, offsetX + panelW / 2, by + bh / 2 + 4);
+  ctx.textAlign = 'start';
+  ctx.restore();
+}
+
+function bumpRecordFrame() {
+  if (!recording || !compCtx) return;
+  const mapWrapDij = altCanvas.parentElement;
+  const rD = mapWrapDij.getBoundingClientRect();
+  const W = Math.floor(rD.width);
+  const H = Math.floor(rD.height);
+  const dpr = window.devicePixelRatio || 1;
+
+  // Background
+  compCtx.fillStyle = C.bg;
+  compCtx.fillRect(0, 0, compCanvas.width, compCanvas.height);
+
+  // Map tiles
+  drawMapTilesToCanvas(compCtx, mapAlt, 0, 0, W, H);
+  drawMapTilesToCanvas(compCtx, mapCH, W + 1, 0, W, H);
+
+  // Canvas overlays (network + search + path)
+  compCtx.drawImage(altCanvas, 0, 0, altCanvas.width, altCanvas.height, 0, 0, W, H);
+  compCtx.drawImage(chCanvas, 0, 0, chCanvas.width, chCanvas.height, W + 1, 0, W, H);
+
+  // Divider
+  compCtx.fillStyle = 'rgba(255,255,255,0.15)';
+  compCtx.fillRect(W, 0, 1, H);
+
+  // Panel labels
+  compCtx.save();
+  compCtx.shadowColor = 'rgba(0,0,0,0.8)';
+  compCtx.shadowBlur = 6;
+  compCtx.font = 'bold 14px Inter, system-ui';
+  compCtx.fillStyle = C.dij;
+  compCtx.fillText('SpeedyALT', 12, 24);
+  compCtx.fillStyle = '#8892a4';
+  compCtx.font = '500 12px Inter, system-ui';
+  compCtx.fillText(document.getElementById('alt-counter').textContent, 12, 42);
+  compCtx.font = 'bold 14px Inter, system-ui';
+  compCtx.fillStyle = C.fwd;
+  compCtx.fillText('Contraction Hierarchies', W + 13, 24);
+  compCtx.fillStyle = '#8892a4';
+  compCtx.font = '500 12px Inter, system-ui';
+  compCtx.fillText(document.getElementById('ch-counter').textContent, W + 13, 42);
+  compCtx.restore();
+
+  // Info-box overlays (explanatory text at bottom of each panel)
+  drawInfoBoxToCanvas(compCtx, 'info-alt', 0, W, H);
+  drawInfoBoxToCanvas(compCtx, 'info-ch', W + 1, W, H);
+
+  // Final overlay if visible
+  if (document.getElementById('final-overlay').classList.contains('visible')) {
+    drawFinalOverlayToCanvas(compCtx, compCanvas.width, compCanvas.height);
+  }
+}
+
+document.getElementById('btn-record').addEventListener('click', () => {
+  if (recording) { stopRecording(); return; }
+  startRecording();
+});
+
+function startRecording() {
+  setupCompositeCanvas();
+  const stream = compCanvas.captureStream(60);
+  const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9' : 'video/webm';
+  mediaRec  = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+  recChunks = [];
+  mediaRec.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
+  mediaRec.onstop = () => {
+    const blob = new Blob(recChunks, { type: mime });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'ch-router-berlin.webm'; a.click();
+    URL.revokeObjectURL(url);
+  };
+  mediaRec.start(100);
+  recording = true;
+  const btn = document.getElementById('btn-record');
+  btn.textContent = '⏹';
+  btn.classList.add('record-active');
+  resetVisualization();
+  startPlayback();
+}
+
+function stopRecording() {
+  if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
+  recording = false;
+  const btn = document.getElementById('btn-record');
+  btn.textContent = '⏺';
+  btn.classList.remove('record-active');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OD selector
+// ═══════════════════════════════════════════════════════════════════════════
+document.getElementById('od-select').addEventListener('change', function() {
+  queryIdx = parseInt(this.value, 10);
+  query = data.queries[queryIdx];
+  fitToQuery();
+  resetVisualization();
+});
+
+function populateODSelector(odPairs) {
+  const sel = document.getElementById('od-select');
+  sel.innerHTML = '';
+  odPairs.forEach((od, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = od.name;
+    sel.appendChild(opt);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Data loading
+// ═══════════════════════════════════════════════════════════════════════════
+function loadData(json) {
+  data  = json;
+  query = data.queries[0];
+  queryIdx = 0;
+
+  populateODSelector(data.odPairs);
+  initMaps();
+
+  // Small delay to let Leaflet measure container
+  requestAnimationFrame(() => {
+    mapAlt.invalidateSize();
+    mapCH.invalidateSize();
+    fitToQuery();
+    repositionCanvases();
+    resetVisualization();
+    document.getElementById('loading').style.display = 'none';
+  });
+}
+
+fetch('ch-query-data.json')
+  .then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then(json => loadData(json))
+  .catch(err => {
+    const msg = document.getElementById('loading-msg');
+    msg.innerHTML = `
+      <strong style="color:#ef4444">Could not load ch-query-data.json</strong><br><br>
+      Run the Java exporter first:<br>
+      <code style="font-size:11px;background:rgba(255,255,255,0.06);padding:2px 8px;border-radius:6px">
+        cd matsim-libs &amp;&amp; mvn exec:java -pl matsim \\<br>
+        &nbsp;&nbsp;-Dexec.mainClass=org.matsim.core.router.speedy.CHQueryExporter
+      </code><br><br>
+      Then open this HTML file from <code>matsim/tools/ch-viz/</code> via a local web server.
+    `;
+    console.error('Failed to load ch-query-data.json:', err);
+  });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Keyboard shortcuts
+// ═══════════════════════════════════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (e.key === ' ') { e.preventDefault(); document.getElementById('btn-play').click(); }
+  if (e.key === 'r') resetVisualization();
+  if (e.key === 'ArrowRight') document.getElementById('btn-step-fwd').click();
+  if (e.key === 'ArrowLeft')  document.getElementById('btn-step-back').click();
+});
+</script>
+</body>
+</html>
