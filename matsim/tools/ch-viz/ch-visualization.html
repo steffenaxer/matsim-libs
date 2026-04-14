@@ -206,7 +206,7 @@ body {
   border-radius: 16px;
   padding: 36px 48px;
   text-align: center;
-  max-width: 480px;
+  max-width: 520px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
 }
 #final-card h2 { font-size: 18px; font-weight: 600; color: #fff; margin-bottom: 8px; }
@@ -468,6 +468,9 @@ body {
       SpeedyALT settled: <span id="alt-total">-</span> nodes<br>
       CH settled: <span id="ch-total">-</span> nodes<br>
       <span style="color:var(--path);margin-top:8px;display:block;font-weight:600">CH is <span id="ch-times">-</span>× more efficient</span>
+    </div>
+    <div class="details" style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.08);">
+      Route: <span id="route-links">-</span> links · Cost: <span id="route-cost">-</span>
     </div>
     <button id="final-close" class="btn">Close</button>
   </div>
@@ -897,9 +900,9 @@ function updateCounters() {
 // ═══════════════════════════════════════════════════════════════════════════
 const phaseMessages = {
   alt: [
-    { trigger: 0,    msg: '→ SpeedyALT uses <strong>landmarks</strong> to estimate distance — A* with ALT heuristic' },
-    { trigger: 0.5,  msg: '→ The search cloud grows radially from the source...' },
-    { trigger: 0.9,  msg: '→ Approaching destination — almost the entire network was scanned' },
+    { trigger: 0,    msg: '→ SpeedyALT uses <strong>landmarks</strong> to estimate lower bounds via triangle inequality' },
+    { trigger: 0.3,  msg: '→ ALT heuristic <strong>focuses</strong> the search toward the destination' },
+    { trigger: 0.7,  msg: '→ Fewer nodes explored than Dijkstra — but still many more than CH' },
   ],
   ch: [
     { trigger: 0,    msg: '→ CH forward search expands <strong>upward</strong> in the hierarchy' },
@@ -1072,6 +1075,11 @@ function showFinalOverlay() {
   document.getElementById('alt-total').textContent   = dijN.toLocaleString();
   document.getElementById('ch-total').textContent    = chN.toLocaleString();
   document.getElementById('ch-times').textContent    = times;
+  // Route result info
+  const links = query.routeLinks ?? (query.pathLinks ? query.pathLinks.length : '-');
+  const cost  = query.routeCost != null ? query.routeCost.toFixed(1) + 's' : '-';
+  document.getElementById('route-links').textContent = links.toLocaleString ? links.toLocaleString() : links;
+  document.getElementById('route-cost').textContent  = cost;
   document.getElementById('final-overlay').classList.add('visible');
 }
 
@@ -1185,7 +1193,7 @@ function drawMapTilesToCanvas(ctx, map, offsetX, offsetY, clipW, clipH) {
 function drawFinalOverlayToCanvas(ctx, W, H) {
   ctx.fillStyle = 'rgba(12, 14, 20, 0.88)';
   ctx.fillRect(0, 0, W, H);
-  const cardW = 400, cardH = 220, r = 16;
+  const cardW = 440, cardH = 280, r = 16;
   const cx = (W - cardW) / 2, cy = (H - cardH) / 2;
   ctx.fillStyle = '#1a1d2b';
   ctx.beginPath();
@@ -1212,6 +1220,18 @@ function drawFinalOverlayToCanvas(ctx, W, H) {
   ctx.fillStyle = '#34d399';
   ctx.font = '600 13px Inter, system-ui';
   ctx.fillText('CH is ' + document.getElementById('ch-times').textContent + '\u00d7 more efficient', W / 2, cy + 180);
+  // Route result info
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx + 40, cy + 200);
+  ctx.lineTo(cx + cardW - 40, cy + 200);
+  ctx.stroke();
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = '500 12px Inter, system-ui';
+  const routeLinks = document.getElementById('route-links').textContent;
+  const routeCost  = document.getElementById('route-cost').textContent;
+  ctx.fillText('Route: ' + routeLinks + ' links \u00b7 Cost: ' + routeCost, W / 2, cy + 225);
   ctx.textAlign = 'start';
 }
 

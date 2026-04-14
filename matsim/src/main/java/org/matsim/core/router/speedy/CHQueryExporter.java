@@ -59,6 +59,8 @@ import java.util.Locale;
  *       "speedyALTEvents":[ { "step":0, "node":42, "cost":0.0, "parent":-1 }, ... ],
  *       "path":          [ nodeIdx, ... ],
  *       "pathLinks":     [ { "from": nodeIdx, "to": nodeIdx }, ... ],
+ *       "routeCost":     1234.5678,
+ *       "routeLinks":    42,
  *       "shortcutTree":  { "gIdx":5, "isShortcut":true, "children":[...] }
  *     }, ...
  *   ]
@@ -270,6 +272,10 @@ public class CHQueryExporter {
                             pi < pathLinks.size() - 1 ? "," : "");
                 }
                 pw.println("  ],");
+
+                // Route cost and link count
+                pw.printf(Locale.US, "  \"routeCost\": %.4f,%n", chResult.routeCost);
+                pw.printf("  \"routeLinks\": %d,%n", chResult.pathLinks.size());
 
                 // Shortcut tree (for first CH edge only if available)
                 pw.print("  \"shortcutTree\": ");
@@ -495,7 +501,7 @@ public class CHQueryExporter {
             }
         }
 
-        return new CHQueryResult(events, pathNodes, pathLinks, rootEdgeGIdx);
+        return new CHQueryResult(events, pathNodes, pathLinks, rootEdgeGIdx, bestCost);
     }
 
     private static void unpackEdgeToPath(CHGraph chGraph, SpeedyGraph baseGraph,
@@ -652,13 +658,15 @@ public class CHQueryExporter {
         final List<Integer>   pathNodes;
         final List<int[]>     pathLinks;
         final int             rootEdgeGIdx;
+        final double          routeCost;
 
         CHQueryResult(List<CHEvent> events, List<Integer> pathNodes,
-                      List<int[]> pathLinks, int rootEdgeGIdx) {
+                      List<int[]> pathLinks, int rootEdgeGIdx, double routeCost) {
             this.events       = events;
             this.pathNodes    = pathNodes;
             this.pathLinks    = pathLinks;
             this.rootEdgeGIdx = rootEdgeGIdx;
+            this.routeCost    = routeCost;
         }
     }
 
