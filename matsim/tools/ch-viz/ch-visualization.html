@@ -76,7 +76,7 @@ body {
   color: var(--text-dim);
 }
 #od-selector select {
-  background: rgba(255,255,255,0.06);
+  background: #1e2233;
   border: 1px solid var(--border);
   color: var(--text);
   padding: 6px 12px;
@@ -85,6 +85,10 @@ body {
   font-family: inherit;
   cursor: pointer;
   transition: border-color 0.2s;
+}
+#od-selector select option {
+  background: #1e2233;
+  color: var(--text);
 }
 #od-selector select:hover { border-color: var(--accent); }
 #od-selector select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.15); }
@@ -197,16 +201,15 @@ body {
 }
 #final-overlay.visible { opacity: 1; pointer-events: auto; }
 #final-card {
-  background: var(--surface);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid var(--border);
+  background: #1a1d2b;
+  border: 1px solid rgba(255,255,255,0.12);
   border-radius: 16px;
   padding: 36px 48px;
   text-align: center;
   max-width: 480px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
 }
-#final-card h2 { font-size: 18px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+#final-card h2 { font-size: 18px; font-weight: 600; color: #fff; margin-bottom: 8px; }
 #final-card .saving {
   font-size: 40px;
   font-weight: 700;
@@ -214,10 +217,11 @@ body {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  color: transparent;
   margin: 18px 0;
 }
-#final-card .details { font-size: 13px; color: var(--text-dim); line-height: 1.8; }
-#final-card .details span { color: var(--text); font-weight: 500; }
+#final-card .details { font-size: 13px; color: #cbd5e1; line-height: 1.8; }
+#final-card .details span { color: #fff; font-weight: 500; }
 
 /* ── Controls ─────────────────────────────────────────────── */
 #controls {
@@ -538,7 +542,7 @@ function initMaps() {
 
   // CartoDB Dark Matter — natively dark tiles, no CSS filter hack needed
   const tileUrl = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-  const tileOpts = { attribution: '', maxZoom: 20, subdomains: 'abcd' };
+  const tileOpts = { attribution: '', maxZoom: 20, subdomains: 'abcd', crossOrigin: 'anonymous' };
   L.tileLayer(tileUrl, tileOpts).addTo(mapDij);
   L.tileLayer(tileUrl, tileOpts).addTo(mapCH);
 
@@ -615,20 +619,23 @@ function nodeXY_ch(idx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Fit maps to data bounds
+// Fit maps to query route (start + end + path nodes)
 // ═══════════════════════════════════════════════════════════════════════════
-function fitMapsToBounds() {
-  if (!data || !data.nodes.length) return;
-  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-  for (const n of data.nodes) {
-    if (n.lat < minLat) minLat = n.lat;
-    if (n.lat > maxLat) maxLat = n.lat;
-    if (n.lon < minLon) minLon = n.lon;
-    if (n.lon > maxLon) maxLon = n.lon;
+function fitToQuery() {
+  if (!data || !query) return;
+  const sn = data.nodes[query.startNode];
+  const en = data.nodes[query.endNode];
+  const bounds = L.latLngBounds([sn.lat, sn.lon], [en.lat, en.lon]);
+  // Include path nodes for accurate route extent
+  if (query.path && query.path.length > 0) {
+    for (const nIdx of query.path) {
+      const n = data.nodes[nIdx];
+      bounds.extend([n.lat, n.lon]);
+    }
   }
-  const bounds = L.latLngBounds([minLat, minLon], [maxLat, maxLon]);
-  mapDij.fitBounds(bounds.pad(0.08));
-  // CH map will sync automatically
+  // Generous padding so the search space expansion is visible
+  mapDij.fitBounds(bounds.pad(0.5));
+  // CH map syncs automatically
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1120,23 +1127,119 @@ document.getElementById('btn-cinema').addEventListener('click', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Video recording
+// Video recording — composites map tiles + canvas overlays + labels
 // ═══════════════════════════════════════════════════════════════════════════
 function setupCompositeCanvas() {
-  const dpr = window.devicePixelRatio || 1;
-  const W = dijCanvas.width / dpr, H = dijCanvas.height / dpr;
+  const mapWrapDij = dijCanvas.parentElement;
+  const rD = mapWrapDij.getBoundingClientRect();
+  const W = Math.floor(rD.width);
+  const H = Math.floor(rD.height);
   compCanvas = document.createElement('canvas');
-  compCanvas.width  = W * 2;
+  compCanvas.width  = W * 2 + 1;  // both panels side by side + 1px divider
   compCanvas.height = H;
   compCtx = compCanvas.getContext('2d');
 }
 
+function drawMapTilesToCanvas(ctx, map, offsetX, offsetY, clipW, clipH) {
+  const tilePane = map.getPanes().tilePane;
+  const container = map.getContainer();
+  const containerRect = container.getBoundingClientRect();
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(offsetX, offsetY, clipW, clipH);
+  ctx.clip();
+  const tiles = tilePane.querySelectorAll('img');
+  for (const tile of tiles) {
+    if (!tile.complete || tile.naturalWidth === 0) continue;
+    const tileRect = tile.getBoundingClientRect();
+    const x = offsetX + (tileRect.left - containerRect.left);
+    const y = offsetY + (tileRect.top - containerRect.top);
+    try {
+      ctx.drawImage(tile, x, y, tileRect.width, tileRect.height);
+    } catch (e) { /* CORS fallback: tiles simply not drawn */ }
+  }
+  ctx.restore();
+}
+
+function drawFinalOverlayToCanvas(ctx, W, H) {
+  ctx.fillStyle = 'rgba(12, 14, 20, 0.88)';
+  ctx.fillRect(0, 0, W, H);
+  const cardW = 400, cardH = 220, r = 16;
+  const cx = (W - cardW) / 2, cy = (H - cardH) / 2;
+  ctx.fillStyle = '#1a1d2b';
+  ctx.beginPath();
+  ctx.moveTo(cx + r, cy);
+  ctx.arcTo(cx + cardW, cy, cx + cardW, cy + cardH, r);
+  ctx.arcTo(cx + cardW, cy + cardH, cx, cy + cardH, r);
+  ctx.arcTo(cx, cy + cardH, cx, cy, r);
+  ctx.arcTo(cx, cy, cx + cardW, cy, r);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.font = '600 18px Inter, system-ui';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('Search Space Comparison', W / 2, cy + 40);
+  ctx.font = '700 36px Inter, system-ui';
+  ctx.fillStyle = '#34d399';
+  ctx.fillText(document.getElementById('saving-pct').textContent, W / 2, cy + 95);
+  ctx.font = '500 13px Inter, system-ui';
+  ctx.fillStyle = '#cbd5e1';
+  ctx.fillText('Dijkstra settled: ' + document.getElementById('dij-total').textContent + ' nodes', W / 2, cy + 130);
+  ctx.fillText('CH settled: ' + document.getElementById('ch-total').textContent + ' nodes', W / 2, cy + 150);
+  ctx.fillStyle = '#34d399';
+  ctx.font = '600 13px Inter, system-ui';
+  ctx.fillText('CH is ' + document.getElementById('ch-times').textContent + '\u00d7 more efficient', W / 2, cy + 180);
+  ctx.textAlign = 'start';
+}
+
 function bumpRecordFrame() {
   if (!recording || !compCtx) return;
+  const mapWrapDij = dijCanvas.parentElement;
+  const rD = mapWrapDij.getBoundingClientRect();
+  const W = Math.floor(rD.width);
+  const H = Math.floor(rD.height);
   const dpr = window.devicePixelRatio || 1;
-  const W = dijCanvas.width / dpr, H = dijCanvas.height / dpr;
-  compCtx.drawImage(dijCanvas, 0, 0, W, H);
-  compCtx.drawImage(chCanvas, W, 0, W, H);
+
+  // Background
+  compCtx.fillStyle = C.bg;
+  compCtx.fillRect(0, 0, compCanvas.width, compCanvas.height);
+
+  // Map tiles
+  drawMapTilesToCanvas(compCtx, mapDij, 0, 0, W, H);
+  drawMapTilesToCanvas(compCtx, mapCH, W + 1, 0, W, H);
+
+  // Canvas overlays (network + search + path)
+  compCtx.drawImage(dijCanvas, 0, 0, dijCanvas.width, dijCanvas.height, 0, 0, W, H);
+  compCtx.drawImage(chCanvas, 0, 0, chCanvas.width, chCanvas.height, W + 1, 0, W, H);
+
+  // Divider
+  compCtx.fillStyle = 'rgba(255,255,255,0.15)';
+  compCtx.fillRect(W, 0, 1, H);
+
+  // Panel labels
+  compCtx.save();
+  compCtx.shadowColor = 'rgba(0,0,0,0.8)';
+  compCtx.shadowBlur = 6;
+  compCtx.font = 'bold 14px Inter, system-ui';
+  compCtx.fillStyle = C.dij;
+  compCtx.fillText('Dijkstra', 12, 24);
+  compCtx.fillStyle = '#8892a4';
+  compCtx.font = '500 12px Inter, system-ui';
+  compCtx.fillText(document.getElementById('dij-counter').textContent, 12, 42);
+  compCtx.font = 'bold 14px Inter, system-ui';
+  compCtx.fillStyle = C.fwd;
+  compCtx.fillText('Contraction Hierarchies', W + 13, 24);
+  compCtx.fillStyle = '#8892a4';
+  compCtx.font = '500 12px Inter, system-ui';
+  compCtx.fillText(document.getElementById('ch-counter').textContent, W + 13, 42);
+  compCtx.restore();
+
+  // Final overlay if visible
+  if (document.getElementById('final-overlay').classList.contains('visible')) {
+    drawFinalOverlayToCanvas(compCtx, compCanvas.width, compCanvas.height);
+  }
 }
 
 document.getElementById('btn-record').addEventListener('click', () => {
@@ -1182,6 +1285,7 @@ function stopRecording() {
 document.getElementById('od-select').addEventListener('change', function() {
   queryIdx = parseInt(this.value, 10);
   query = data.queries[queryIdx];
+  fitToQuery();
   resetVisualization();
 });
 
@@ -1211,7 +1315,7 @@ function loadData(json) {
   requestAnimationFrame(() => {
     mapDij.invalidateSize();
     mapCH.invalidateSize();
-    fitMapsToBounds();
+    fitToQuery();
     repositionCanvases();
     resetVisualization();
     document.getElementById('loading').style.display = 'none';
