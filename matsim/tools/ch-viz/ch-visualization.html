@@ -1040,7 +1040,7 @@ function animFrame() {
   }
 
   // After 2 seconds of showing the path, display final overlay
-  if (phase === 1 && pathRevealStart > 0 && Date.now() - pathRevealStart > 2000 && phase < 2) {
+  if (phase === 1 && pathRevealStart > 0 && Date.now() - pathRevealStart > 2000) {
     phase = 2;
     showFinalOverlay();
     // Keep recording for 3 more seconds to capture the final overlay

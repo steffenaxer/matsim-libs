@@ -592,15 +592,23 @@ public class CHQueryExporter {
     }
 
     /**
-     * ALT lower-bound estimation: max over all landmarks of (SL-TL) and (LT-LS).
+     * ALT lower-bound estimation: max over all landmarks L of (SL−TL) and (LT−LS),
+     * where S=source, T=target.
+     * <ul>
+     *   <li>sl = cost(source → landmark L)</li>
+     *   <li>ls = cost(landmark L → source)</li>
+     *   <li>tl = cost(target → landmark L)</li>
+     *   <li>lt = cost(landmark L → target)</li>
+     * </ul>
+     * By the triangle inequality: ST ≥ SL−TL and ST ≥ LT−LS.
      */
     private static double estimateMinCost(SpeedyALTData altData, int nodeIdx, int destinationIdx) {
         double best = 0;
         for (int i = 0, nL = altData.getLandmarksCount(); i < nL; i++) {
-            double sl = altData.getTravelCostToLandmark(nodeIdx, i);
-            double ls = altData.getTravelCostFromLandmark(nodeIdx, i);
-            double tl = altData.getTravelCostToLandmark(destinationIdx, i);
-            double lt = altData.getTravelCostFromLandmark(destinationIdx, i);
+            double sl = altData.getTravelCostToLandmark(nodeIdx, i);       // source → L
+            double ls = altData.getTravelCostFromLandmark(nodeIdx, i);     // L → source
+            double tl = altData.getTravelCostToLandmark(destinationIdx, i); // target → L
+            double lt = altData.getTravelCostFromLandmark(destinationIdx, i); // L → target
             double estimate = Math.max(sl - tl, lt - ls);
             if (estimate > best) best = estimate;
         }
