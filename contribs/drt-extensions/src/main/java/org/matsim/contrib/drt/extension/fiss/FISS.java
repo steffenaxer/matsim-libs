@@ -34,7 +34,6 @@ import org.matsim.core.mobsim.qsim.interfaces.MobsimEngine;
 import org.matsim.core.mobsim.qsim.pt.TransitDriverAgent;
 import org.matsim.core.mobsim.qsim.qnetsimengine.NetworkModeDepartureHandler;
 import org.matsim.core.population.routes.NetworkRoute;
-import org.matsim.core.population.routes.RouteUtils;
 import org.matsim.core.router.util.TravelTime;
 import org.matsim.vehicles.Vehicle;
 import org.matsim.vehicles.VehicleType;
@@ -116,8 +115,7 @@ public class FISS implements NetworkModeDepartureHandler, DistributedDepartureHa
 			Person person = planAgent.getCurrentPlan().getPerson();
 			Vehicle vehicle = this.scenario.getVehicles().getVehicles().get(networkRoute.getVehicleId());
 
-			double newTravelTime = RouteUtils.calcTravelTimeExcludingStartEndLink(networkRoute, now, person, vehicle, network, travelTime);
-			// yyyy This travel time _should_ include start and end link.  Also in regular teleportation!  kai, jan'25
+			double newTravelTime = calcQSimTravelTime(networkRoute, now, person, vehicle);
 			LOG.debug("New travelTime: {}, was {}", newTravelTime, networkRoute.getTravelTime().orElseGet(() -> Double.NaN));
 
 			networkRoute.setTravelTime(newTravelTime);
@@ -175,6 +173,63 @@ public class FISS implements NetworkModeDepartureHandler, DistributedDepartureHa
 			VehicleType vehicleType = scenario.getVehicles().getVehicleTypes().get(Id.create(sampledQsimModes, VehicleType.class));
 			vehicleType.setPcuEquivalents(vehicleType.getPcuEquivalents() * fissConfigGroup.getSampleFactor());
 		}
+	}
+
+	/**
+	 * Calculates travel time to match QSim physical simulation timing:
+	 * <ul>
+	 * <li>Departure link is NOT traversed (vehicle goes from parking straight
+	 * to the link's buffer via {@code addFromWait}).</li>
+	 * <li>Each intermediate link is fully traversed.</li>
+	 * <li>Arrival link IS fully traversed (agent arrives when the vehicle
+	 * reaches the buffer at the downstream end).</li>
+	 * <li>Each link-to-link transition crosses a node, costing one QSim time
+	 * step.</li>
+	 * <li>Per-link travel time is lower-bounded by the vehicle type's max
+	 * speed (matching {@code DefaultLinkSpeedCalculator}).</li>
+	 * </ul>
+	 */
+	private double calcQSimTravelTime(NetworkRoute networkRoute, double now, Person person, Vehicle vehicle) {
+		boolean zeroLengthRoute = networkRoute.getStartLinkId().equals(networkRoute.getEndLinkId())
+				&& networkRoute.getLinkIds().isEmpty();
+		if (zeroLengthRoute) {
+			return 0;
+		}
+		double vehicleMaxSpeed = vehicle != null ? vehicle.getType().getMaximumVelocity() : Double.POSITIVE_INFINITY;
+		double timeStepSize = qsimConfig.getTimeStepSize();
+
+		double totalTT = 0;
+		// Intermediate links
+		for (Id<Link> linkId : networkRoute.getLinkIds()) {
+			Link link = network.getLinks().get(linkId);
+			double linkTT = travelTime.getLinkTravelTime(link, now + totalTT, person, vehicle);
+			totalTT += applyVehicleSpeedFloor(link, linkTT, vehicleMaxSpeed, timeStepSize);
+		}
+		// Arrival link
+		Link endLink = network.getLinks().get(networkRoute.getEndLinkId());
+		double arrivalLinkTT = travelTime.getLinkTravelTime(endLink, now + totalTT, person, vehicle);
+		totalTT += applyVehicleSpeedFloor(endLink, arrivalLinkTT, vehicleMaxSpeed, timeStepSize);
+		// Node transitions: one per link boundary crossed
+		int numNodeTransitions = networkRoute.getLinkIds().size() + 1;
+		totalTT += numNodeTransitions * timeStepSize;
+		return totalTT;
+	}
+
+	/**
+	 * Ensures a link travel time is not shorter than what the vehicle's max
+	 * speed allows, and floors the result to the QSim time step size. The
+	 * {@link TravelTime} object may return congested times (longer than
+	 * free-speed) which are kept as-is, but if the link's free-speed exceeds
+	 * the vehicle's max speed the travel time must be at least
+	 * {@code link.length / vehicleMaxSpeed}. The result is always floored to
+	 * match QSim's discrete time-step behaviour in
+	 * {@code QueueWithBuffer.addFromUpstream}.
+	 */
+	private static double applyVehicleSpeedFloor(Link link, double linkTT,
+			double vehicleMaxSpeed, double timeStepSize) {
+		double minTT = link.getLength() / vehicleMaxSpeed;
+		double effectiveTT = Math.max(linkTT, minTT);
+		return timeStepSize * Math.floor(effectiveTT / timeStepSize);
 	}
 
 	@Override
